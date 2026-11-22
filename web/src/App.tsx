@@ -5,6 +5,7 @@ import {
   Burger,
   Button,
   Card,
+  Code,
   Group,
   NavLink,
   Paper,
@@ -417,7 +418,6 @@ export function App() {
                       { value: 'fdb_lookup', label: 'FDB / MAC / IP Lookup (Cross-Vendor)' },
                       { value: 'ping', label: 'Device Ping' },
                       { value: 'traceroute', label: 'Device Traceroute' },
-                      { value: 'cable_test', label: 'Cable Test' },
                     ]}
                   />
                   {diagKind !== 'fdb_lookup' && (
@@ -425,11 +425,13 @@ export function App() {
                       label="Device"
                       value={diagDeviceId}
                       onChange={(v) => setDiagDeviceId(v ?? '')}
-                      data={devices.map((d) => ({ value: d.id, label: `${d.name} (${d.driver})` }))}
+                      data={devices
+                        .filter((d) => d.capabilities.includes(`cap:diag_${diagKind}`))
+                        .map((d) => ({ value: d.id, label: `${d.name} (${d.driver})` }))}
                     />
                   )}
                   <TextInput
-                    label="Target (MAC, IP, hostname, or port)"
+                    label={diagKind === 'fdb_lookup' ? 'Target (MAC, IP, or hostname)' : 'Target (IP or hostname)'}
                     value={diagTarget}
                     onChange={(e) => setDiagTarget(e.currentTarget.value)}
                     placeholder="e.g. de:ad:be:ef:00:01 or 192.0.2.55"
@@ -444,6 +446,7 @@ export function App() {
                         <Badge size="xs" color={r.ok ? 'green' : 'red'}>{r.ok ? 'OK' : 'FAIL'}</Badge>
                       </Group>
                       <Text size="xs" mt={4}>{r.summary}</Text>
+                      {r.raw_output && <Code block mt={4} fz="xs">{r.raw_output}</Code>}
                     </Paper>
                   ))}
                 </Stack>

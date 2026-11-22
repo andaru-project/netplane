@@ -86,28 +86,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	// closing an idle kept-alive connection cuts mid-request.
 	defer client.CloseIdleConnections()
 
-	ubusURL := strings.TrimRight(cfg.Endpoint, "/")
-	if !strings.HasSuffix(ubusURL, "/ubus") {
-		ubusURL += "/ubus"
-	}
-
+	ubusURL := ubusEndpoint(cfg)
 	login := func() error {
-		var loginRes struct {
-			Session string `json:"ubus_rpc_session"`
-		}
-		sess.sid = ""
-		err := ubusCall(ctx, client, ubusURL, "00000000000000000000000000000000", "session", "login", map[string]any{
-			"username": cfg.ResolvedSecrets["username"],
-			"password": cfg.ResolvedSecrets["password"],
-		}, &loginRes)
-		if err != nil {
-			return fmt.Errorf("openwrt ubus login: %w", err)
-		}
-		if loginRes.Session == "" {
-			return errors.New("openwrt ubus login: empty session")
-		}
-		sess.sid = loginRes.Session
-		return nil
+		sid, err := ubusLogin(ctx, client, ubusURL, cfg)
+		sess.sid = sid
+		return err
 	}
 	// A poll logs in at most once: up front when it holds no session, else when the first
 	// call finds the kept session expired.
@@ -230,7 +213,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		role = model.RoleSwitch
 	}
 
-	caps := []model.Capability{model.CapLinks, model.CapSegments, model.CapFirmwareInfo}
+	caps := []model.Capability{model.CapLinks, model.CapSegments, model.CapFirmwareInfo, model.CapDiagPing, model.CapDiagTraceroute}
 	if len(wirelessStatus) > 0 {
 		caps = append(caps, model.CapWireless)
 	}
@@ -426,8 +409,40 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	return snap, nil
 }
 
+// ubusEndpoint returns the target's /ubus JSON-RPC URL.
+func ubusEndpoint(cfg driver.TargetConfig) string {
+	u := strings.TrimRight(cfg.Endpoint, "/")
+	if !strings.HasSuffix(u, "/ubus") {
+		u += "/ubus"
+	}
+	return u
+}
+
+// ubusLogin opens a new rpcd session and returns its id.
+func ubusLogin(ctx context.Context, client *http.Client, ubusURL string, cfg driver.TargetConfig) (string, error) {
+	var res struct {
+		Session string `json:"ubus_rpc_session"`
+	}
+	err := ubusCall(ctx, client, ubusURL, "00000000000000000000000000000000", "session", "login", map[string]any{
+		"username": cfg.ResolvedSecrets["username"],
+		"password": cfg.ResolvedSecrets["password"],
+	}, &res)
+	if err != nil {
+		return "", fmt.Errorf("openwrt ubus login: %w", err)
+	}
+	if res.Session == "" {
+		return "", errors.New("openwrt ubus login: empty session")
+	}
+	return res.Session, nil
+}
+
 // errAccessDenied is uhttpd refusing a call: an expired or unknown session, or an ACL refusal.
 var errAccessDenied = errors.New("ubus access denied")
+
+// ubusStatusNotFound is UBUS_STATUS_NOT_FOUND: no such object, method or (for file.exec) file.
+const ubusStatusNotFound = 4
+
+var errNotFound = errors.New("ubus not found")
 
 func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method string, params map[string]any, out any) error {
 	payload, _ := json.Marshal(map[string]any{
@@ -470,6 +485,9 @@ func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method
 	}
 	var code int
 	if err := json.Unmarshal(rpcResp.Result[0], &code); err != nil || code != 0 {
+		if code == ubusStatusNotFound {
+			return fmt.Errorf("ubus call %s.%s returned status %d: %w", object, method, code, errNotFound)
+		}
 		return fmt.Errorf("ubus call %s.%s returned status %d", object, method, code)
 	}
 	if out != nil && len(rpcResp.Result) >= 2 {

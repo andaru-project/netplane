@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -57,6 +59,14 @@ func (apiMockDriver) Poll(_ context.Context, cfg driver.TargetConfig) (*driver.S
 }
 
 func (apiMockDriver) RunDiagnostic(_ context.Context, _ driver.TargetConfig, req model.DiagnosticRequest) (*model.DiagnosticResult, error) {
+	switch {
+	case req.Kind == model.DiagCableTest:
+		return nil, fmt.Errorf("%w: mock", driver.ErrDiagnosticUnsupported)
+	case req.Target == "-bad":
+		return nil, fmt.Errorf("%w: mock", driver.ErrDiagnosticRequest)
+	case req.Target == "unreachable":
+		return nil, errors.New("connection refused")
+	}
 	if req.Target == "unsaveable" {
 		return &model.DiagnosticResult{Kind: req.Kind, Structured: make(chan int)}, nil // JSON encoding fails
 	}
@@ -328,6 +338,9 @@ func TestDiagnosticsFdbLookupAndDeviceRPC(t *testing.T) {
 		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"missing","target":"1.1.1.1"}`, http.StatusNotFound},
 		{"POST", "/api/v1/diagnostics", `{"kind":"fdb_lookup","target":"nas"}`, http.StatusOK},
 		{"POST", "/api/v1/diagnostics", `{"kind":"fdb_lookup","target":"00:00:00:00:00:99"}`, http.StatusOK},
+		{"POST", "/api/v1/diagnostics", `{"kind":"cable_test","device_id":"mock:02:51:0a:00:00:01","target":"1"}`, http.StatusNotImplemented},
+		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"mock:02:51:0a:00:00:01","target":"-bad"}`, http.StatusBadRequest},
+		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"mock:02:51:0a:00:00:01","target":"unreachable"}`, http.StatusBadGateway},
 		// A run whose history write fails is reported, not returned as saved.
 		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"mock:02:51:0a:00:00:01","target":"unsaveable"}`, http.StatusInternalServerError},
 	} {

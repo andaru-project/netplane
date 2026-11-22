@@ -89,7 +89,7 @@ Every `Device` advertises an explicit list of `Capability` constants so UI scree
 - **L3 / Routing / Firewall:** `cap:segments`, `cap:zones`, `cap:neighbors` (ARP/NDP), `cap:dhcp`, `cap:gateway`, `cap:routes`, `cap:vpn`, `cap:firewall`, `cap:ha` (CARP/VRRP), `cap:dns`
 - **Wireless:** `cap:wireless`, `cap:wireless_mesh`
 - **Hardware / System:** `cap:sensors`, `cap:firmware_info`
-- **Diagnostics:** `cap:diag_ping`, `cap:diag_traceroute`, `cap:diag_cable_test`, `cap:diag_fdb_lookup`
+- **Diagnostics:** `cap:diag_ping`, `cap:diag_traceroute`, `cap:diag_cable_test`, `cap:diag_fdb_lookup` (a driver advertises the kinds its `RunDiagnostic` implements; the device's account may still lack the permission)
 - **Phase 2 Control:** `cap:config_preview`, `cap:config_apply`, `cap:config_rollback_timer`, `cap:config_backup`
 
 ### 5.2 Core Types

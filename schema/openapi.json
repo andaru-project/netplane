@@ -134,7 +134,7 @@
       },
       "post": {
         "operationId": "runDiagnostic",
-        "summary": "Execute an on-demand diagnostic (fdb_lookup, ping, traceroute, cable_test)",
+        "summary": "Execute an on-demand diagnostic (fdb_lookup; ping and traceroute on OpenWrt; ping on pfSense; no driver runs cable_test yet)",
         "requestBody": {
           "required": true,
           "content": {
@@ -145,8 +145,8 @@
                 "properties": {
                   "kind": { "type": "string", "enum": ["fdb_lookup", "ping", "traceroute", "cable_test"] },
                   "device_id": { "type": "string", "description": "Required for every kind except fdb_lookup" },
-                  "target": { "type": "string", "description": "MAC, IP or hostname for fdb_lookup; the host or port to test for device-side kinds" },
-                  "params": { "type": "object", "additionalProperties": { "type": "string" } }
+                  "target": { "type": "string", "description": "MAC, IP or hostname for fdb_lookup; the IP address or DNS name to ping or trace for device-side kinds" },
+                  "params": { "type": "object", "additionalProperties": { "type": "string" }, "description": "ping: count (1 to 10, default 3)" }
                 }
               }
             }
@@ -156,7 +156,9 @@
           "200": { "description": "DiagnosticResult" },
           "400": { "description": "Invalid diagnostic request" },
           "404": { "description": "Device or target not found" },
-          "500": { "description": "Diagnostic failed or its result could not be saved" }
+          "500": { "description": "The stored state could not be read or the result could not be saved" },
+          "501": { "description": "The device's driver cannot run this kind" },
+          "502": { "description": "The device-side diagnostic failed to run" }
         }
       }
     },
