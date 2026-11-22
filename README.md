@@ -59,6 +59,10 @@ docker run --rm -p 8099:8099 -v netplane-data:/data \
 
 The container reads its configuration from `/config/netplane.yaml`. Secrets the configuration references as `${NAME}` are resolved from environment variables, so pass them with `--env-file` (or `-e NAME=value`); in the Home Assistant Add-on, set them in the add-on's `secrets` option instead.
 
+To install the add-on, add `https://github.com/andrebrait/netplane` under Settings → Add-ons → Add-on store → Repositories, then install netplane. Supervisor pulls the published image `ghcr.io/andrebrait/netplane-{amd64,aarch64}` at the add-on's version.
+
+Releasing: set `version` in `ha-addon/config.yaml`, then push the tag `v<version>`. The [Add-on image](.github/workflows/addon-image.yml) workflow checks that the tag matches and publishes both images. The first publish creates the GHCR packages as private; make each one public once (package settings → Change visibility) so Supervisor can pull it.
+
 Home Assistant Add-on metadata lives in [ha-addon/config.yaml](ha-addon/config.yaml) (`ingress: true`, port `8099`), and the upstreamable Apache-2.0 Home Assistant integration lives in [ha-integration/custom_components/netplane](ha-integration/custom_components/netplane).
 
 ## Licensing

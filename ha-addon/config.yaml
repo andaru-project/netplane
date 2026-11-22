@@ -4,6 +4,8 @@ description: "Open network configuration, information, and diagnostics plane for
 version: "0.1.0"
 slug: "netplane"
 url: "https://github.com/andrebrait/netplane"
+# Published by .github/workflows/addon-image.yml for every v<version> tag; {arch} is amd64 or aarch64.
+image: "ghcr.io/andrebrait/netplane-{arch}"
 arch:
   - amd64
   - aarch64
