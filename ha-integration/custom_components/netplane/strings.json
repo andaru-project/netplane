@@ -8,6 +8,13 @@
           "url": "Server URL",
           "api_token": "API Bearer Token (optional)"
         }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate with netplane",
+        "description": "The netplane server at {url} rejected the stored API token. Enter the current token.",
+        "data": {
+          "api_token": "API Bearer Token"
+        }
       }
     },
     "error": {
@@ -15,7 +22,8 @@
       "invalid_auth": "Invalid API token"
     },
     "abort": {
-      "already_configured": "This netplane server is already configured"
+      "already_configured": "This netplane server is already configured",
+      "reauth_successful": "Reauthentication was successful"
     }
   }
 }

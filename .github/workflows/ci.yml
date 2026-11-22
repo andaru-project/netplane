@@ -62,8 +62,14 @@ jobs:
           python-version: "3.12"
       - name: Verify Apache-2.0 license boundary
         run: |
-          if grep -rn "AGPL" schema/ clients/python/ ha-integration/; then
+          # grep exits 0 on a match, 1 on a clean scan, 2 when it could not read something.
+          rc=0
+          grep -rn "AGPL" schema/ clients/python/ ha-integration/ || rc=$?
+          if [ "$rc" -eq 0 ]; then
             echo "ERROR: AGPL reference found inside Apache-2.0 boundary!"
+            exit 1
+          elif [ "$rc" -ne 1 ]; then
+            echo "ERROR: license boundary scan failed (grep exit $rc)"
             exit 1
           fi
       - name: Syntax-check HA integration and run Python client tests

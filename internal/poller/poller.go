@@ -34,7 +34,10 @@ type Scheduler struct {
 
 	mu     sync.RWMutex
 	topoMu sync.Mutex
-	status map[string]TargetStatus
+	// topoStale (guarded by topoMu) records a failed topology save, so the next offline
+	// mark re-solves even when nothing new went offline.
+	topoStale bool
+	status    map[string]TargetStatus
 
 	// pollLocks serializes polls of one target (background loop vs manual API poll), so a
 	// failed attempt can never mark offline a snapshot that a concurrent poll just saved.
@@ -92,21 +95,20 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 	defer lock.(*sync.Mutex).Unlock()
 
 	now := time.Now().UTC()
-	drv, ok := s.registry.Get(cfg.Driver)
-	if !ok {
-		err := fmt.Errorf("unknown driver %q", cfg.Driver)
-		s.recordError(cfg, now, err)
-		return err
+	var snap *driver.Snapshot
+	var err error
+	if drv, ok := s.registry.Get(cfg.Driver); ok {
+		snap, err = drv.Poll(ctx, cfg)
+	} else {
+		// A failure like any other: the target's retained devices must still go offline.
+		err = fmt.Errorf("unknown driver %q", cfg.Driver)
 	}
-
-	snap, err := drv.Poll(ctx, cfg)
 	if err != nil && ctx.Err() != nil {
 		return err // shutdown or caller cancellation, not a target failure
 	}
 	if err != nil {
-		// Retried on every failure past the threshold, so a failed mark is recovered; it only
-		// re-solves the topology when something went offline (a failed topology save is
-		// recovered by the next successful poll of any target).
+		// Retried on every failure past the threshold, so a failed mark is recovered; it
+		// re-solves the topology when something went offline or a previous save failed.
 		if s.recordError(cfg, now, err) >= offlineAfterFailures {
 			s.markOffline(ctx, cfg, now)
 		}
@@ -136,7 +138,7 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 		}
 	}
 
-	s.recomputeTopology(ctx, cfg.ID, now)
+	s.recomputeTopology(ctx, cfg.ID)
 	return nil
 }
 
@@ -152,29 +154,35 @@ func (s *Scheduler) markOffline(ctx context.Context, cfg driver.TargetConfig, no
 		return
 	}
 	evs := events.DiffSnapshots(prev, curr)
-	if len(evs) == 0 {
-		return // already offline
-	}
 	if s.bus != nil {
 		for _, ev := range evs {
 			s.bus.Publish(ev)
 		}
 	}
-	s.recomputeTopology(ctx, cfg.ID, now)
+	s.topoMu.Lock()
+	stale := s.topoStale
+	s.topoMu.Unlock()
+	if len(evs) > 0 || stale {
+		s.recomputeTopology(ctx, cfg.ID)
+	}
 }
 
-func (s *Scheduler) recomputeTopology(ctx context.Context, targetID string, now time.Time) {
+func (s *Scheduler) recomputeTopology(ctx context.Context, targetID string) {
 	// Serialize LoadState -> Solve -> SaveTopology so concurrent target pollers
-	// never overwrite a fresher topology snapshot with stale state.
+	// never overwrite a fresher topology snapshot with stale state; the generation time is
+	// taken under the lock so the saved generated_at never goes backwards.
 	s.topoMu.Lock()
+	now := time.Now().UTC()
 	state, loadErr := s.store.LoadState(ctx)
 	if loadErr != nil {
+		s.topoStale = true
 		s.topoMu.Unlock()
 		s.logger.Warn("load state for topology failed", "target_id", targetID, "err", loadErr)
 		return
 	}
 	graph := topology.Solve(state, now)
 	saveErr := s.store.SaveTopology(ctx, now, graph)
+	s.topoStale = saveErr != nil
 	s.topoMu.Unlock()
 	if saveErr != nil {
 		s.logger.Warn("save topology failed", "target_id", targetID, "err", saveErr)

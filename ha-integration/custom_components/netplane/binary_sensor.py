@@ -16,7 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import NetplaneCoordinator
+from .coordinator import NetplaneCoordinator, async_add_discovered
 
 
 async def async_setup_entry(
@@ -25,17 +25,17 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: NetplaneCoordinator = hass.data[DOMAIN][entry.entry_id]
-    data = coordinator.data or {}
-    entities: list[BinarySensorEntity] = []
 
-    for dev in data.get("devices", []):
-        entities.append(NetplaneDeviceOnlineSensor(coordinator, dev["id"]))
-        entities.append(NetplaneSfpAlarmSensor(coordinator, dev["id"]))
+    def build(data: dict[str, Any]) -> list[BinarySensorEntity]:
+        entities: list[BinarySensorEntity] = []
+        for dev in data.get("devices", []):
+            entities.append(NetplaneDeviceOnlineSensor(coordinator, dev["id"]))
+            entities.append(NetplaneSfpAlarmSensor(coordinator, dev["id"]))
+        for gw in data.get("gateways", []):
+            entities.append(NetplaneGatewayOnlineSensor(coordinator, gw["device_id"], gw["name"]))
+        return entities
 
-    for gw in data.get("gateways", []):
-        entities.append(NetplaneGatewayOnlineSensor(coordinator, gw["device_id"], gw["name"]))
-
-    async_add_entities(entities)
+    async_add_discovered(entry, coordinator, async_add_entities, build)
 
 
 class _NetplaneDeviceBase(CoordinatorEntity[NetplaneCoordinator]):
@@ -50,6 +50,12 @@ class _NetplaneDeviceBase(CoordinatorEntity[NetplaneCoordinator]):
             if d.get("id") == self._device_id:
                 return d
         return None
+
+    @property
+    def available(self) -> bool:
+        # A device that stopped answering keeps its last readings on the server; do not report them as current.
+        d = self._device()
+        return super().available and d is not None and bool(d.get("online"))
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -70,6 +76,11 @@ class NetplaneDeviceOnlineSensor(_NetplaneDeviceBase, BinarySensorEntity):
         super().__init__(coordinator, device_id)
         self._attr_unique_id = f"{coordinator.entry_id}_{device_id}_online"
         self._attr_name = "Online"
+
+    @property
+    def available(self) -> bool:
+        # Stays available so it can report the device going offline.
+        return self.coordinator.last_update_success
 
     @property
     def is_on(self) -> bool | None:

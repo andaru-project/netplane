@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -307,6 +308,11 @@ func (s *Server) handlePollTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("target %q not found", id))
 		return
 	}
+	if !cfg.Enabled {
+		// Startup pruned its stored state; a manual poll would bring the devices back.
+		writeError(w, http.StatusConflict, "TARGET_DISABLED", fmt.Sprintf("target %q is disabled", id))
+		return
+	}
 	if s.opts.Poller == nil {
 		writeError(w, http.StatusServiceUnavailable, "POLLER_UNAVAILABLE", "poller not initialized")
 		return
@@ -336,10 +342,21 @@ func (s *Server) handleListDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRunDiagnostic(w http.ResponseWriter, r *http.Request) {
 	var req model.DiagnosticRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+	// Bound the body read in time, not only in size. The deadline is cleared only once the whole
+	// body is read: an expired one would cancel a long diagnostic's context (via the server's
+	// background read), and a cleared one would let the server block discarding an unread body.
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(bodyReadTimeout))
+	body := http.MaxBytesReader(w, r.Body, 1<<20)
+	err := json.NewDecoder(body).Decode(&req)
+	if err == nil {
+		_, err = io.Copy(io.Discard, body)
+	}
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
 		return
 	}
+	_ = rc.SetReadDeadline(time.Time{})
 	if req.Kind == "" || strings.TrimSpace(req.Target) == "" {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "kind and target are required")
 		return
@@ -354,8 +371,7 @@ func (s *Server) handleRunDiagnostic(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "DIAG_ERROR", err.Error())
 			return
 		}
-		_ = s.opts.Store.SaveDiagnosticRun(r.Context(), *res)
-		writeJSON(w, http.StatusOK, res)
+		s.saveAndWriteDiagnostic(w, r, res)
 		return
 	}
 
@@ -402,8 +418,31 @@ func (s *Server) handleRunDiagnostic(w http.ResponseWriter, r *http.Request) {
 	if res.DurationMs == 0 {
 		res.DurationMs = time.Since(started).Milliseconds()
 	}
-	_ = s.opts.Store.SaveDiagnosticRun(r.Context(), *res)
+	s.saveAndWriteDiagnostic(w, r, res)
+}
+
+// bodyReadTimeout bounds how long a client may take to send a request body.
+var bodyReadTimeout = 10 * time.Second
+
+// saveAndWriteDiagnostic persists a finished run and returns it; the run is not repeated
+// when the history write fails, so the caller sees the failure instead of an unsaved ID.
+func (s *Server) saveAndWriteDiagnostic(w http.ResponseWriter, r *http.Request, res *model.DiagnosticResult) {
+	if err := s.opts.Store.SaveDiagnosticRun(r.Context(), *res); err != nil {
+		writeError(w, http.StatusInternalServerError, "STORE_ERROR", "diagnostic ran but was not saved: "+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// sameIP compares two addresses by value (2001:db8::1 equals 2001:0db8:0::1), falling back
+// to a case-insensitive text match for anything that does not parse.
+func sameIP(a, b string) bool {
+	pa, errA := netip.ParseAddr(a)
+	pb, errB := netip.ParseAddr(b)
+	if errA != nil || errB != nil {
+		return strings.EqualFold(a, b)
+	}
+	return pa.Unmap() == pb.Unmap()
 }
 
 func (s *Server) runFdbLookup(ctx context.Context, req model.DiagnosticRequest, started time.Time) (*model.DiagnosticResult, error) {
@@ -419,7 +458,7 @@ func (s *Server) runFdbLookup(ctx context.Context, req model.DiagnosticRequest, 
 		// Treat query as IP or hostname; resolve MAC from Neighbors, DHCP, or Clients.
 		qLower := strings.ToLower(query)
 		for _, n := range state.Neighbors {
-			if strings.EqualFold(n.IP, query) && n.MAC != "" {
+			if sameIP(n.IP, query) && n.MAC != "" {
 				targetMAC = n.MAC
 				matchedIPs = append(matchedIPs, n.IP)
 				break
@@ -427,7 +466,7 @@ func (s *Server) runFdbLookup(ctx context.Context, req model.DiagnosticRequest, 
 		}
 		if targetMAC == "" {
 			for _, l := range state.DHCP {
-				if (strings.EqualFold(l.IP, query) || strings.EqualFold(l.Hostname, qLower)) && l.MAC != "" {
+				if (sameIP(l.IP, query) || strings.EqualFold(l.Hostname, qLower)) && l.MAC != "" {
 					targetMAC = l.MAC
 					matchedIPs = append(matchedIPs, l.IP)
 					break
@@ -443,7 +482,7 @@ func (s *Server) runFdbLookup(ctx context.Context, req model.DiagnosticRequest, 
 					break
 				}
 				for _, ip := range c.IPs {
-					if strings.EqualFold(ip, query) {
+					if sameIP(ip, query) {
 						targetMAC = c.MAC
 						matchedIPs = append(matchedIPs, ip)
 						break clients

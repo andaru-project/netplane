@@ -57,9 +57,9 @@ func TestStoreTargetsAndIdempotentMigrate(t *testing.T) {
 	if err := st2.DeleteTarget(ctx, "t-sw1"); err != nil {
 		t.Fatalf("DeleteTarget: %v", err)
 	}
-	targets, _ = st2.ListTargets(ctx)
-	if len(targets) != 0 {
-		t.Fatalf("expected 0 targets after delete, got %d", len(targets))
+	targets, err = st2.ListTargets(ctx)
+	if err != nil || len(targets) != 0 {
+		t.Fatalf("ListTargets after delete = (%v, %v), want none", targets, err)
 	}
 }
 
@@ -385,5 +385,59 @@ func TestNoBitrateAcrossLongGap(t *testing.T) {
 	}
 	if s3.Links[0].Rates.RxBps != 1000 {
 		t.Fatalf("rate after the gap = %v, want 1000", s3.Links[0].Rates.RxBps)
+	}
+}
+
+func TestOverlappingTargetsKeepDeviceAndCounterState(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	save := func(target string, at time.Time, rx uint64, c32 bool, withDev bool) *driver.Snapshot {
+		t.Helper()
+		snap := &driver.Snapshot{TargetID: target, CollectedAt: at, Links: []model.Link{{
+			DeviceID: "d1", IfName: "lan1", Counters: &model.PortCounters{RxBytes: rx, Counter32: c32},
+		}}}
+		if withDev {
+			snap.Devices = []model.Device{{ID: "d1", Name: target, TargetID: target, LastSeen: at}}
+		}
+		if _, err := st.SaveSnapshot(ctx, snap); err != nil {
+			t.Fatal(err)
+		}
+		return snap
+	}
+	// a sees d1 later than b, but b saves last: both lookups must pick a.
+	save("a", t0.Add(time.Second), 1000, false, true)
+	save("b", t0, 5000, true, true)
+	dev, ok, err := st.GetDevice(ctx, "d1")
+	if err != nil || !ok || dev.Name != "a" {
+		t.Fatalf("GetDevice = (%+v, %v, %v), want a's record", dev, ok, err)
+	}
+	// b stops reporting d1; a still does.
+	save("b", t0.Add(10*time.Second), 5000+1250, true, false)
+	if dev, ok, err := st.GetDevice(ctx, "d1"); err != nil || !ok || dev.Name != "a" {
+		t.Fatalf("GetDevice after b dropped d1 = (%+v, %v, %v)", dev, ok, err)
+	}
+	// Each target computes its rate from its own baseline despite differing counter widths.
+	if s := save("a", t0.Add(11*time.Second), 1000+1250, false, true); s.Links[0].Rates.RxBps != 1000 {
+		t.Fatalf("a rate = %v, want 1000", s.Links[0].Rates.RxBps)
+	}
+}
+
+func TestDiagnosticRunsAgeOut(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	st.SetRetention(time.Hour)
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	for id, at := range map[string]time.Time{"old": t0.Add(-2 * time.Hour), "new": t0.Add(-time.Minute)} {
+		if err := st.SaveDiagnosticRun(ctx, model.DiagnosticResult{ID: id, Kind: model.DiagPing, StartedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.SaveSnapshot(ctx, &driver.Snapshot{TargetID: "t1", CollectedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := st.ListDiagnosticRuns(ctx, "", 10)
+	if err != nil || len(runs) != 1 || runs[0].ID != "new" {
+		t.Fatalf("runs = (%+v, %v), want only new", runs, err)
 	}
 }

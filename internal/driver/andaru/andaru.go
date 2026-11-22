@@ -29,6 +29,9 @@ func (d *Driver) ValidateConfig(cfg driver.TargetConfig) error {
 	if strings.TrimSpace(cfg.Endpoint) == "" {
 		return fmt.Errorf("andaru target %q: endpoint is required (https://... or unix:///run/andaru/engine.sock)", cfg.ID)
 	}
+	if cfg.ResolvedSecrets["api_token"] != "" {
+		return driver.CheckCredentialTransport(cfg)
+	}
 	return nil
 }
 
@@ -79,10 +82,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 	}
 
+	// Keyed by target so interface order or added interfaces never change identity; MACs stay join metadata.
 	devID := "andaru:" + cfg.ID
-	if primaryMAC != "" {
-		devID = "andaru:" + primaryMAC
-	}
 	name := cfg.Name
 	if name == "" {
 		name = cfg.ID

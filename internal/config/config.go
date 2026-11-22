@@ -2,8 +2,11 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -89,6 +92,9 @@ func ApplyHAOptions(path string) error {
 		if sec.Name == "" {
 			return fmt.Errorf("parse %s: secret with empty name", path)
 		}
+		if sec.Name == TokenEnv {
+			return fmt.Errorf("parse %s: secret name %s is reserved; set api_token instead", path, TokenEnv)
+		}
 		if err := os.Setenv(sec.Name, sec.Value); err != nil {
 			return err
 		}
@@ -99,7 +105,9 @@ func ApplyHAOptions(path string) error {
 // Parse decodes YAML bytes and resolves secret references via lookupEnv.
 func Parse(data []byte, lookupEnv func(string) (string, bool)) (*Config, error) {
 	var fc FileConfig
-	if err := yaml.Unmarshal(data, &fc); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true) // a misspelled key (say, api_token_secret) must not silently drop auth
+	if err := dec.Decode(&fc); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parse YAML config: %w", err)
 	}
 

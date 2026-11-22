@@ -35,6 +35,19 @@ func NewHTTPClient(cfg TargetConfig, timeout time.Duration) *http.Client {
 	}
 }
 
+// CheckCredentialTransport refuses to send credentials to a plain http:// endpoint unless the
+// target opts in with allow_insecure_http: true. https:// and unix:// endpoints pass.
+func CheckCredentialTransport(cfg TargetConfig) error {
+	u, err := url.Parse(strings.TrimSpace(cfg.Endpoint))
+	if err != nil {
+		return fmt.Errorf("target %q: invalid endpoint: %w", cfg.ID, err)
+	}
+	if strings.EqualFold(u.Scheme, "http") && !cfg.BoolSetting("allow_insecure_http", false) {
+		return fmt.Errorf("target %q: refusing to send credentials over plain http; use https or set allow_insecure_http: true", cfg.ID)
+	}
+	return nil
+}
+
 // sameHost reports whether next stays on first's host: hostnames compare case-insensitively
 // and an omitted port means the scheme default.
 func sameHost(next, first *url.URL) bool {

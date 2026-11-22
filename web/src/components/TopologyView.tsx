@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Badge, Group, Paper, Stack, Text } from '@mantine/core';
+import { type KeyboardEvent, useState } from 'react';
 import { formatSpeed, TopologyGraph, TopologyNode } from '../api';
 
 interface Props {
@@ -8,6 +9,8 @@ interface Props {
 }
 
 export function TopologyView({ graph, onSelectDevice }: Props) {
+  // SVG groups get no reliable focus outline, so the focused node's border is drawn thicker instead.
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   if (!graph || graph.nodes.length === 0) {
     return (
       <Paper withBorder p="xl" radius="md">
@@ -120,10 +123,30 @@ export function TopologyView({ graph, onSelectDevice }: Props) {
               <g
                 key={n.id}
                 transform={`translate(${p.x},${p.y})`}
-                style={{ cursor: isDev ? 'pointer' : 'default' }}
-                onClick={() => isDev && onSelectDevice(n.id)}
+                style={{ cursor: isDev ? 'pointer' : 'default', outline: 'none' }}
+                {...(isDev && {
+                  role: 'button',
+                  tabIndex: 0,
+                  'aria-label': `Inspect ${n.label}`,
+                  onClick: () => onSelectDevice(n.id),
+                  onKeyDown: (ev: KeyboardEvent) => {
+                    if (ev.key === 'Enter' || ev.key === ' ') {
+                      ev.preventDefault();
+                      onSelectDevice(n.id);
+                    }
+                  },
+                  onFocus: () => setFocusedId(n.id),
+                  onBlur: () => setFocusedId(null),
+                })}
               >
-                <rect width={nodeW} height={nodeH} rx={8} fill={fill} stroke={stroke} strokeWidth={1.6} />
+                <rect
+                  width={nodeW}
+                  height={nodeH}
+                  rx={8}
+                  fill={fill}
+                  stroke={focusedId === n.id ? '#fbbf24' : stroke}
+                  strokeWidth={focusedId === n.id ? 3 : 1.6}
+                />
                 <text x={10} y={22} fill="#f8fafc" fontSize="12" fontWeight="700" fontFamily="system-ui, sans-serif">
                   {n.label.slice(0, 20)}
                 </text>

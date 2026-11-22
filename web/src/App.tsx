@@ -2,6 +2,7 @@
 import {
   AppShell,
   Badge,
+  Burger,
   Button,
   Card,
   Group,
@@ -14,7 +15,9 @@ import {
   Text,
   TextInput,
   Title,
+  UnstyledButton,
 } from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   api,
@@ -50,21 +53,31 @@ export function App() {
   const [events, setEvents] = useState<NetplaneEvent[]>([]);
   const [sseConnected, setSseConnected] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure();
+  // Async responses apply only while still current, so a slow older request never overwrites newer state.
+  const refreshGen = useRef(0);
+  const selectedId = useRef<string | null>(null);
 
   const refreshAll = useCallback(async () => {
+    const gen = ++refreshGen.current;
+    const id = selectedId.current;
     try {
-      const [devs, topo, cls, diags] = await Promise.all([
+      const [devs, topo, cls, diags, detail] = await Promise.all([
         api.listDevices(),
         api.getTopology(),
         api.listClients(clientQuery, false),
         api.listDiagnostics(25),
+        id ? api.getDevice(id) : null,
       ]);
+      if (gen !== refreshGen.current) return;
       setDevices(devs);
       setTopology(topo);
       setClients(cls);
       setDiagRuns(diags);
+      if (detail && selectedId.current === id) setSelectedDevice(detail);
       setErrMsg(null);
     } catch (e) {
+      if (gen !== refreshGen.current) return;
       setErrMsg(e instanceof Error ? e.message : String(e));
     }
   }, [clientQuery]);
@@ -138,13 +151,27 @@ export function App() {
   }, [sseEpoch]);
 
   const openDevice = async (id: string) => {
+    selectedId.current = id;
     try {
       const detail = await api.getDevice(id);
+      if (selectedId.current !== id) return;
       setSelectedDevice(detail);
       setTab('devices');
     } catch (e) {
+      if (selectedId.current !== id) return;
       setErrMsg(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  const closeDevice = () => {
+    selectedId.current = null;
+    setSelectedDevice(null);
+  };
+
+  const navigate = (t: Tab) => {
+    closeDevice();
+    setTab(t);
+    closeNav();
   };
 
   const runDiag = async () => {
@@ -156,6 +183,7 @@ export function App() {
         device_id: diagKind === 'fdb_lookup' ? undefined : diagDeviceId || undefined,
         target: diagTarget.trim(),
       });
+      refreshGen.current++; // a refresh started before this run would drop its result
       setDiagRuns((prev) => [res, ...prev]);
       setErrMsg(null);
     } catch (e) {
@@ -168,9 +196,10 @@ export function App() {
   const onlineDevices = devices.filter((d) => d.online).length;
 
   return (
-    <AppShell header={{ height: 54 }} navbar={{ width: 210, breakpoint: 'sm' }} padding="md">
+    <AppShell header={{ height: 54 }} navbar={{ width: 210, breakpoint: 'sm', collapsed: { mobile: !navOpened } }} padding="md">
       <AppShell.Header px="md" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Group gap="sm">
+          <Burger opened={navOpened} onClick={toggleNav} hiddenFrom="sm" size="sm" aria-label="Toggle navigation" />
           <Title order={4}>netplane</Title>
           <Badge variant="light" color="blue">Control · Info · Diagnostics</Badge>
         </Group>
@@ -185,10 +214,10 @@ export function App() {
       </AppShell.Header>
 
       <AppShell.Navbar p="xs">
-        <NavLink label="Devices" active={tab === 'devices'} onClick={() => { setTab('devices'); setSelectedDevice(null); }} />
-        <NavLink label="Topology" active={tab === 'topology'} onClick={() => setTab('topology')} />
-        <NavLink label="Clients" active={tab === 'clients'} onClick={() => setTab('clients')} />
-        <NavLink label="Diagnostics & Events" active={tab === 'diagnostics'} onClick={() => setTab('diagnostics')} />
+        <NavLink label="Devices" active={tab === 'devices'} onClick={() => navigate('devices')} />
+        <NavLink label="Topology" active={tab === 'topology'} onClick={() => navigate('topology')} />
+        <NavLink label="Clients" active={tab === 'clients'} onClick={() => navigate('clients')} />
+        <NavLink label="Diagnostics & Events" active={tab === 'diagnostics'} onClick={() => navigate('diagnostics')} />
       </AppShell.Navbar>
 
       <AppShell.Main>
@@ -237,7 +266,17 @@ export function App() {
                 <Table.Tbody>
                   {devices.map((d) => (
                     <Table.Tr key={d.id} style={{ cursor: 'pointer' }} onClick={() => void openDevice(d.id)}>
-                      <Table.Td fw={600}>{d.name}</Table.Td>
+                      <Table.Td>
+                        <UnstyledButton
+                          fw={600}
+                          onClick={(e) => {
+                            e.stopPropagation(); // the row handler would open it a second time
+                            void openDevice(d.id);
+                          }}
+                        >
+                          {d.name}
+                        </UnstyledButton>
+                      </Table.Td>
                       <Table.Td><Badge size="xs" variant="light">{d.driver}</Badge></Table.Td>
                       <Table.Td>{d.role}</Table.Td>
                       <Table.Td>{d.model || '—'}</Table.Td>
@@ -263,7 +302,7 @@ export function App() {
             <Stack gap="md">
               <Group justify="space-between">
                 <Group gap="xs">
-                  <Button size="xs" variant="subtle" onClick={() => setSelectedDevice(null)}>← All Devices</Button>
+                  <Button size="xs" variant="subtle" onClick={closeDevice}>← All Devices</Button>
                   <Title order={4}>{selectedDevice.device.name}</Title>
                   <Badge>{selectedDevice.device.driver}</Badge>
                   <Badge variant="outline">{selectedDevice.device.model || selectedDevice.device.role}</Badge>

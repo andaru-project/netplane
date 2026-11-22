@@ -93,3 +93,22 @@ func TestSameHost(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckCredentialTransport(t *testing.T) {
+	for _, tc := range []struct {
+		endpoint string
+		settings map[string]any
+		wantErr  bool
+	}{
+		{"http://192.0.2.1", nil, true},
+		{"HTTP://192.0.2.1", nil, true},
+		{"http://192.0.2.1", map[string]any{"allow_insecure_http": true}, false},
+		{"https://192.0.2.1", nil, false},
+		{"unix:///run/andaru/engine.sock", nil, false},
+	} {
+		err := CheckCredentialTransport(TargetConfig{ID: "t", Endpoint: tc.endpoint, Settings: tc.settings})
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%s %v: err = %v, wantErr %v", tc.endpoint, tc.settings, err, tc.wantErr)
+		}
+	}
+}

@@ -3,6 +3,7 @@ package openwrt
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,7 +37,7 @@ func (d *Driver) ValidateConfig(cfg driver.TargetConfig) error {
 	if cfg.ResolvedSecrets["username"] == "" || cfg.ResolvedSecrets["password"] == "" {
 		return fmt.Errorf("openwrt target %q: username and password secrets are required", cfg.ID)
 	}
-	return nil
+	return driver.CheckCredentialTransport(cfg)
 }
 
 // Poll authenticates via ubus session.login and fetches board/info/device/interface/wireless/host hints.
@@ -107,7 +109,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	_ = ubusCall(ctx, client, ubusURL, sid, "luci-rpc", "getHostHints", map[string]any{}, &hostHints)
 
 	now := time.Now().UTC()
-	devNames := slices.Sorted(maps.Keys(devStatus))
+	devNames := slices.SortedFunc(maps.Keys(devStatus), comparePortNames)
 
 	primaryMAC := ""
 	macs := []string{}
@@ -126,10 +128,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 	}
 
+	// Keyed by target so added interfaces never change identity; MACs stay join metadata.
 	devID := "openwrt:" + cfg.ID
-	if primaryMAC != "" {
-		devID = "openwrt:" + primaryMAC
-	}
 	name := cfg.Name
 	if name == "" {
 		name = board.Hostname
@@ -189,11 +189,16 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			oper = model.OperNoCarrier
 		}
 		var fc *model.FlowControlState
-		if nd.FlowControl != nil {
+		if f := nd.FlowControl; f != nil {
+			// netifd reports the pause result as "negotiated" with pause autoneg on, "selected" without.
+			active := f.Selected
+			if f.Autoneg != nil && *f.Autoneg {
+				active = f.Negotiated
+			}
 			fc = &model.FlowControlState{
-				Rx:      nd.FlowControl.Rx,
-				Tx:      nd.FlowControl.Tx,
-				Autoneg: nd.FlowControl.Autoneg,
+				Rx:      slices.Contains(active, "rx"),
+				Tx:      slices.Contains(active, "tx"),
+				Autoneg: f.Autoneg,
 			}
 		}
 		snap.Links = append(snap.Links, model.Link{
@@ -240,7 +245,14 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				Source:       iface.Proto,
 			})
 		}
-		for _, a := range iface.IPv6Address {
+		v6 := iface.IPv6Address
+		// Delegated-prefix LAN addresses are reported only under ipv6-prefix-assignment.
+		for _, pa := range iface.IPv6PrefixAssignment {
+			if la := pa.LocalAddress; la.Address != "" && !slices.Contains(v6, la) {
+				v6 = append(v6, la)
+			}
+		}
+		for _, a := range v6 {
 			addrs = append(addrs, model.IPAddress{
 				Family:       model.IPv6,
 				Address:      a.Address,
@@ -374,6 +386,29 @@ func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method
 	return nil
 }
 
+// comparePortNames orders names by prefix, then numeric suffix, so lan2 sorts before lan10.
+func comparePortNames(a, b string) int {
+	ap, an := splitPortNumber(a)
+	bp, bn := splitPortNumber(b)
+	if c := strings.Compare(ap, bp); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(an, bn); c != 0 {
+		return c
+	}
+	return strings.Compare(a, b)
+}
+
+// splitPortNumber splits a trailing decimal number off name; n is -1 when there is none.
+func splitPortNumber(name string) (prefix string, n int) {
+	prefix = strings.TrimRight(name, "0123456789")
+	n, err := strconv.Atoi(name[len(prefix):])
+	if err != nil {
+		return name, -1
+	}
+	return prefix, n
+}
+
 func parseOpenWrtSpeed(raw string) (int, string) {
 	s := strings.ToUpper(strings.TrimSpace(raw))
 	if s == "" {
@@ -425,9 +460,9 @@ type ubusNetDev struct {
 	Speed       string `json:"speed"`
 	Autoneg     *bool  `json:"autoneg"`
 	FlowControl *struct {
-		Rx      bool  `json:"rx"`
-		Tx      bool  `json:"tx"`
-		Autoneg *bool `json:"autoneg"`
+		Autoneg    *bool    `json:"autoneg"`
+		Selected   []string `json:"selected"`
+		Negotiated []string `json:"negotiated"`
 	} `json:"flow-control"`
 	Statistics struct {
 		RxBytes   uint64 `json:"rx_bytes"`
@@ -450,10 +485,15 @@ type ubusInterface struct {
 		Address string `json:"address"`
 		Mask    int    `json:"mask"`
 	} `json:"ipv4-address"`
-	IPv6Address []struct {
-		Address string `json:"address"`
-		Mask    int    `json:"mask"`
-	} `json:"ipv6-address"`
+	IPv6Address          []ubusAddress `json:"ipv6-address"`
+	IPv6PrefixAssignment []struct {
+		LocalAddress ubusAddress `json:"local-address"`
+	} `json:"ipv6-prefix-assignment"`
+}
+
+type ubusAddress struct {
+	Address string `json:"address"`
+	Mask    int    `json:"mask"`
 }
 
 type ubusRadio struct {

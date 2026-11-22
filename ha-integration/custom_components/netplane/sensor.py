@@ -14,7 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import NetplaneCoordinator
+from .coordinator import NetplaneCoordinator, async_add_discovered
 
 
 async def async_setup_entry(
@@ -23,19 +23,19 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: NetplaneCoordinator = hass.data[DOMAIN][entry.entry_id]
-    data = coordinator.data or {}
-    entities: list[SensorEntity] = [NetplaneActiveClientsSensor(coordinator, entry.entry_id)]
 
-    for dev in data.get("devices", []):
-        if dev.get("poe_budget"):
-            entities.append(NetplanePoEWattsSensor(coordinator, dev["id"]))
-        entities.append(NetplaneCPUSensor(coordinator, dev["id"]))
+    def build(data: dict[str, Any]) -> list[SensorEntity]:
+        entities: list[SensorEntity] = [NetplaneActiveClientsSensor(coordinator, entry.entry_id)]
+        for dev in data.get("devices", []):
+            if dev.get("poe_budget"):
+                entities.append(NetplanePoEWattsSensor(coordinator, dev["id"]))
+            entities.append(NetplaneCPUSensor(coordinator, dev["id"]))
+        for gw in data.get("gateways", []):
+            if gw.get("rtt_ms") is not None:
+                entities.append(NetplaneGatewayRTTSensor(coordinator, gw["device_id"], gw["name"]))
+        return entities
 
-    for gw in data.get("gateways", []):
-        if gw.get("rtt_ms") is not None:
-            entities.append(NetplaneGatewayRTTSensor(coordinator, gw["device_id"], gw["name"]))
-
-    async_add_entities(entities)
+    async_add_discovered(entry, coordinator, async_add_entities, build)
 
 
 class NetplaneActiveClientsSensor(CoordinatorEntity[NetplaneCoordinator], SensorEntity):
@@ -64,6 +64,12 @@ class _DeviceSensorBase(CoordinatorEntity[NetplaneCoordinator], SensorEntity):
             if d.get("id") == self._device_id:
                 return d
         return None
+
+    @property
+    def available(self) -> bool:
+        # A device that stopped answering keeps its last readings on the server; do not report them as current.
+        d = self._device()
+        return super().available and d is not None and bool(d.get("online"))
 
     @property
     def device_info(self) -> DeviceInfo:

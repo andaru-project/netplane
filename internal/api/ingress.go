@@ -35,10 +35,15 @@ func parseTrustedCIDRs(raw []string) []netip.Prefix {
 			continue
 		}
 		if p, err := netip.ParsePrefix(s); err == nil {
-			out = append(out, p)
+			// Peers are matched unmapped, so ::ffff:a.b.c.d/n must become a.b.c.d/(n-96).
+			if p.Addr().Is4In6() && p.Bits() >= 96 {
+				p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+			}
+			out = append(out, p.Masked())
 			continue
 		}
 		if a, err := netip.ParseAddr(s); err == nil {
+			a = a.Unmap()
 			out = append(out, netip.PrefixFrom(a, a.BitLen()))
 		}
 	}

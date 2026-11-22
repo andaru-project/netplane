@@ -3,8 +3,10 @@ package unifi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/andrebrait/netplane/internal/driver"
@@ -12,18 +14,18 @@ import (
 )
 
 func TestUniFiDriverPoll(t *testing.T) {
-	loggedIn := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/auth/login":
-			loggedIn = true
-			w.WriteHeader(http.StatusOK)
+		if r.URL.Path == "/api/auth/login" {
+			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: "session-1", Path: "/"})
 			_, _ = w.Write([]byte(`{"unique_id":"admin"}`))
+			return
+		}
+		if c, err := r.Cookie("TOKEN"); err != nil || c.Value != "session-1" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
 		case "/proxy/network/api/s/default/stat/device":
-			if !loggedIn {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
 			_, _ = w.Write([]byte(`{
 				"data": [
 					{
@@ -90,7 +92,7 @@ func TestUniFiDriverPoll(t *testing.T) {
 		ID:       "t-unifi",
 		Driver:   "unifi",
 		Endpoint: srv.URL,
-		Settings: map[string]any{"is_unifi_os": true, "site": "default"},
+		Settings: map[string]any{"is_unifi_os": true, "site": "default", "allow_insecure_http": true},
 		ResolvedSecrets: map[string]string{
 			"username": "admin",
 			"password": "secret",
@@ -119,3 +121,38 @@ func TestUniFiDriverPoll(t *testing.T) {
 		t.Fatalf("unexpected client: %+v", snap.Clients[0])
 	}
 }
+
+func TestUniFiFailsPollWhenClientInventoryUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/s/default/stat/device" {
+			_, _ = w.Write([]byte(`{"data":[{"mac":"3c:78:95:1f:71:0d","type":"usw","state":1}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	_, err := New().Poll(context.Background(), driver.TargetConfig{
+		ID: "u1", Endpoint: srv.URL,
+		Settings:        map[string]any{"is_unifi_os": false, "allow_insecure_http": true},
+		ResolvedSecrets: map[string]string{"api_key": "k"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "stat/sta") {
+		t.Fatalf("want stat/sta error, got %v", err)
+	}
+}
+
+func TestFlexFloatDropsNonfinite(t *testing.T) {
+	for in, want := range map[string]*float64{
+		`"12.5"`: ptr(12.5), `12.5`: ptr(12.5), `"NaN"`: nil, `"Inf"`: nil, `"-Infinity"`: nil, `"12.5abc"`: nil,
+	} {
+		var f flexFloat
+		if err := json.Unmarshal([]byte(in), &f); err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		if got := f.Ptr(); (got == nil) != (want == nil) || (got != nil && *got != *want) {
+			t.Errorf("%s: got %v, want %v", in, got, want)
+		}
+	}
+}
+
+func ptr(v float64) *float64 { return &v }

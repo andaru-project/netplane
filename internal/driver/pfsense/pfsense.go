@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,7 +33,7 @@ func (d *Driver) ValidateConfig(cfg driver.TargetConfig) error {
 	if cfg.ResolvedSecrets["api_key"] == "" {
 		return fmt.Errorf("pfsense target %q: api_key secret is required", cfg.ID)
 	}
-	return nil
+	return driver.CheckCredentialTransport(cfg)
 }
 
 // Poll reads system status, interfaces, gateways, DHCP leases, ARP, services, and WireGuard peers.
@@ -46,15 +48,13 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	var sysResp struct {
 		Data struct {
-			Hostname    string  `json:"hostname"`
-			Version     string  `json:"version"`
-			UptimeSec   uint64  `json:"uptime_sec"`
-			CPUUsage    float64 `json:"cpu_usage"`
-			MemUsagePct float64 `json:"mem_usage"`
-			TempC       float64 `json:"temp_c"`
-			StatesUsed  int64   `json:"states_used"`
-			StatesMax   int64   `json:"states_max"`
-			LoadAvg1    float64 `json:"load_avg_1"`
+			Hostname    string    `json:"hostname"`
+			Version     string    `json:"version"`
+			Uptime      string    `json:"uptime"` // formatted, e.g. "1 Day 02 Hours 03 Minutes 04 Seconds"
+			CPUUsage    float64   `json:"cpu_usage"`
+			MemUsagePct float64   `json:"mem_usage"`
+			TempC       float64   `json:"temp_c"`
+			CPULoadAvg  []float64 `json:"cpu_load_avg"` // 1, 5, 15 minutes
 		} `json:"data"`
 	}
 	if err := getJSON(ctx, client, baseURL+"/api/v2/status/system", apiKey, &sysResp); err != nil {
@@ -66,13 +66,14 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Name     string `json:"name"`
 			Descr    string `json:"descr"`
 			HwIf     string `json:"hwif"`
+			Enable   bool   `json:"enable"`
 			Status   string `json:"status"`
 			MAC      string `json:"macaddr"`
-			MTU      int    `json:"mtu"`
+			MTU      string `json:"mtu"` // pfREST StringField, may be "" or null
 			IPAddr   string `json:"ipaddr"`
-			Subnet   int    `json:"subnet"`
+			Subnet   string `json:"subnet"`
 			IPAddrV6 string `json:"ipaddrv6"`
-			SubnetV6 int    `json:"subnetv6"`
+			SubnetV6 string `json:"subnetv6"`
 			InBytes  uint64 `json:"inbytes"`
 			OutBytes uint64 `json:"outbytes"`
 			InPkts   uint64 `json:"inpkts"`
@@ -88,7 +89,6 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	var gwResp struct {
 		Data []struct {
 			Name      string  `json:"name"`
-			SrcIP     string  `json:"srcip"`
 			MonitorIP string  `json:"monitorip"`
 			Status    string  `json:"status"`
 			DelayMs   float64 `json:"delay"`
@@ -129,7 +129,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	var wgResp struct {
 		Data []struct {
-			Tun        string `json:"tun"`
+			Tun        string `json:"tunnel_device"`
 			Descr      string `json:"descr"`
 			PublicKey  string `json:"public_key"`
 			Endpoint   string `json:"endpoint"`
@@ -141,16 +141,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	_ = getJSON(ctx, client, baseURL+"/api/v2/status/wireguard/peers", apiKey, &wgResp)
 
 	now := time.Now().UTC()
-	primaryMAC := ""
 	macs := []string{}
 	seenMAC := map[string]bool{}
 	mgmtIP := ""
 	for _, iface := range ifResp.Data {
 		if m, err := model.NormalizeMAC(iface.MAC); err == nil && !seenMAC[m] {
 			seenMAC[m] = true
-			if primaryMAC == "" {
-				primaryMAC = m
-			}
 			macs = append(macs, m)
 		}
 		if mgmtIP == "" && strings.EqualFold(iface.Name, "lan") && iface.IPAddr != "" {
@@ -158,10 +154,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 	}
 
-	devID := "pfsense:" + cfg.ID
-	if primaryMAC != "" {
-		devID = "pfsense:" + primaryMAC
+	// Lowest MAC keeps PrimaryMAC independent of interface response order.
+	primaryMAC := ""
+	if len(macs) > 0 {
+		primaryMAC = slices.Min(macs)
 	}
+	devID := "pfsense:" + cfg.ID
 	name := cfg.Name
 	if name == "" {
 		name = sysResp.Data.Hostname
@@ -190,6 +188,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		caps = append(caps, model.CapVPN)
 	}
 
+	var load1 float64
+	if len(sysResp.Data.CPULoadAvg) > 0 {
+		load1 = sysResp.Data.CPULoadAvg[0]
+	}
+
 	snap := &driver.Snapshot{
 		TargetID:    cfg.ID,
 		CollectedAt: now,
@@ -206,56 +209,69 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			MACs:         macs,
 			MgmtIP:       mgmtIP,
 			Firmware:     model.FirmwareInfo{Current: sysResp.Data.Version},
-			UptimeSec:    sysResp.Data.UptimeSec,
+			UptimeSec:    parseUptime(sysResp.Data.Uptime),
 			Online:       true,
 			LastSeen:     now,
 			Capabilities: caps,
 			SystemStats: model.SystemStats{
 				CPUPct: sysResp.Data.CPUUsage,
-				Load1:  sysResp.Data.LoadAvg1,
+				Load1:  load1,
 			},
 			Sensors: sensors,
 		}},
 	}
 
+	seenLink := map[string]bool{}
 	for idx, iface := range ifResp.Data {
 		up := strings.EqualFold(iface.Status, "up")
 		oper := model.OperDown
-		if up {
+		if !iface.Enable {
+			oper = model.OperDisabled
+		} else if up {
 			oper = model.OperUp
 		}
-		mtu := iface.MTU
+		var mtu *int
+		if v, err := strconv.Atoi(strings.TrimSpace(iface.MTU)); err == nil {
+			mtu = &v
+		}
 		ifName := iface.HwIf
 		if ifName == "" {
 			ifName = iface.Name
 		}
-		snap.Links = append(snap.Links, model.Link{
-			DeviceID:  devID,
-			Index:     idx + 1,
-			IfName:    ifName,
-			Label:     iface.Descr,
-			MAC:       iface.MAC,
-			AdminUp:   up,
-			LinkUp:    up,
-			OperState: oper,
-			MTU:       &mtu,
-			Media:     model.MediaOther,
-			Counters: &model.PortCounters{
-				RxBytes:   iface.InBytes,
-				TxBytes:   iface.OutBytes,
-				RxPackets: iface.InPkts,
-				TxPackets: iface.OutPkts,
-				RxErrors:  iface.InErrs,
-				TxErrors:  iface.OutErrs,
-			},
-		})
+		// One physical link (and counter baseline) per hardware interface; each logical
+		// interface still contributes its segment.
+		if !seenLink[ifName] {
+			seenLink[ifName] = true
+			snap.Links = append(snap.Links, model.Link{
+				DeviceID:  devID,
+				Index:     idx + 1,
+				IfName:    ifName,
+				Label:     iface.Descr,
+				MAC:       iface.MAC,
+				AdminUp:   iface.Enable,
+				LinkUp:    up,
+				OperState: oper,
+				MTU:       mtu,
+				Media:     model.MediaOther,
+				Counters: &model.PortCounters{
+					RxBytes:   iface.InBytes,
+					TxBytes:   iface.OutBytes,
+					RxPackets: iface.InPkts,
+					TxPackets: iface.OutPkts,
+					RxErrors:  iface.InErrs,
+					TxErrors:  iface.OutErrs,
+				},
+			})
+		}
 
 		addrs := []model.IPAddress{}
 		if iface.IPAddr != "" {
-			addrs = append(addrs, model.IPAddress{Family: model.IPv4, Address: iface.IPAddr, PrefixLength: iface.Subnet})
+			prefix, _ := strconv.Atoi(strings.TrimSpace(iface.Subnet))
+			addrs = append(addrs, model.IPAddress{Family: model.IPv4, Address: iface.IPAddr, PrefixLength: prefix})
 		}
 		if iface.IPAddrV6 != "" {
-			addrs = append(addrs, model.IPAddress{Family: model.IPv6, Address: iface.IPAddrV6, PrefixLength: iface.SubnetV6})
+			prefix, _ := strconv.Atoi(strings.TrimSpace(iface.SubnetV6))
+			addrs = append(addrs, model.IPAddress{Family: model.IPv6, Address: iface.IPAddrV6, PrefixLength: prefix})
 		}
 		snap.Segments = append(snap.Segments, model.Segment{
 			DeviceID:   devID,
@@ -263,8 +279,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Name:       iface.Descr,
 			Kind:       "ethernet",
 			ParentLink: ifName,
-			MTU:        &mtu,
-			AdminUp:    up,
+			MTU:        mtu,
+			AdminUp:    iface.Enable,
 			OperState:  oper,
 			Addresses:  addrs,
 		})
@@ -275,10 +291,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		loss := gw.LossPct
 		online := strings.EqualFold(gw.Status, "online") || strings.EqualFold(gw.Status, "none")
 		snap.Gateways = append(snap.Gateways, model.GatewayStatus{
-			DeviceID:  devID,
-			Name:      gw.Name,
-			Family:    model.IPv4,
-			GatewayIP: gw.SrcIP,
+			DeviceID: devID,
+			Name:     gw.Name,
+			Family:   model.IPv4,
+			// shortcut: status/gateways has no next-hop field (srcip is the probe source);
+			// read routing/gateways to fill GatewayIP if topology needs it.
 			MonitorIP: gw.MonitorIP,
 			Online:    online,
 			RTTMs:     &rtt,
@@ -325,14 +342,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 		services = append(services, model.ServiceStatus{Name: sv.Name, State: st, Summary: sv.Description})
 	}
-	used := sysResp.Data.StatesUsed
-	maxSt := sysResp.Data.StatesMax
+	// status/system reports no pf state counts: leave StatesUsed/StatesMax unset.
 	snap.Firewalls = append(snap.Firewalls, model.FirewallState{
-		DeviceID:   devID,
-		Engine:     "pf",
-		StatesUsed: &used,
-		StatesMax:  &maxSt,
-		Services:   services,
+		DeviceID: devID,
+		Engine:   "pf",
+		Services: services,
 	})
 
 	for idx, p := range wgResp.Data {
@@ -362,6 +376,33 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	return snap, nil
+}
+
+// parseUptime converts pfSense's get_uptime() text ("1 Day 02 Hours 03 Minutes 04 Seconds")
+// to seconds; unknown text yields 0.
+func parseUptime(s string) uint64 {
+	f := strings.Fields(s)
+	var total uint64
+	for i := 0; i+1 < len(f); i += 2 {
+		n, err := strconv.ParseUint(f[i], 10, 64)
+		if err != nil {
+			return 0
+		}
+		unit := strings.ToLower(f[i+1])
+		switch {
+		case strings.HasPrefix(unit, "day"):
+			total += n * 86400
+		case strings.HasPrefix(unit, "hour"):
+			total += n * 3600
+		case strings.HasPrefix(unit, "minute"):
+			total += n * 60
+		case strings.HasPrefix(unit, "second"):
+			total += n
+		default:
+			return 0
+		}
+	}
+	return total
 }
 
 func getJSON(ctx context.Context, client *http.Client, url, apiKey string, out any) error {

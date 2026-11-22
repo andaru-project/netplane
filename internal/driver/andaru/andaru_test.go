@@ -59,6 +59,9 @@ func TestAndaruDriverPoll(t *testing.T) {
 	if len(snap.Devices) != 1 || snap.Devices[0].Role != model.RoleFirewall || snap.Devices[0].MgmtIP != "192.0.2.1" {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
+	if snap.Devices[0].ID != "andaru:andaru-core" || snap.Devices[0].PrimaryMAC != "00:11:22:33:44:01" {
+		t.Fatalf("device identity = %q (primary MAC %q), want target-keyed ID", snap.Devices[0].ID, snap.Devices[0].PrimaryMAC)
+	}
 	if len(snap.Links) != 1 || snap.Links[0].IfName != "eth0" || !snap.Links[0].LinkUp {
 		t.Fatalf("unexpected links: %+v", snap.Links)
 	}
@@ -95,11 +98,22 @@ func TestAndaruUnixSocket(t *testing.T) {
 	srv.Start()
 	defer srv.Close()
 
-	snap, err := New().Poll(context.Background(), driver.TargetConfig{ID: "a1", Endpoint: "unix://" + sock})
+	snap, err := New().Poll(context.Background(), driver.TargetConfig{ID: "a1", Endpoint: "unix://" + sock, ResolvedSecrets: map[string]string{"api_token": "tok"}})
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
 	if len(snap.Links) != 1 || snap.Links[0].IfName != "eth0" {
 		t.Fatalf("unexpected links: %+v", snap.Links)
+	}
+}
+
+func TestAndaruRefusesTokenOverPlainHTTP(t *testing.T) {
+	cfg := driver.TargetConfig{ID: "a1", Endpoint: "http://192.0.2.1", ResolvedSecrets: map[string]string{"api_token": "tok"}}
+	if err := New().ValidateConfig(cfg); err == nil {
+		t.Fatal("expected refusal to send api_token over plain http")
+	}
+	cfg.Settings = map[string]any{"allow_insecure_http": true}
+	if err := New().ValidateConfig(cfg); err != nil {
+		t.Fatalf("allow_insecure_http: %v", err)
 	}
 }

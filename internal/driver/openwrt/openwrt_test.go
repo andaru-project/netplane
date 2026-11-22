@@ -33,12 +33,17 @@ func TestOpenWrtDriverPoll(t *testing.T) {
 		case "network.device.status":
 			_, _ = w.Write([]byte(`{"result":[0,{
 				"lo":{"type":"Network device","up":true,"carrier":true,"mtu":65536},
-				"lan1":{"type":"Network device","up":true,"carrier":true,"mtu":1500,"macaddr":"02:51:0a:00:00:01","speed":"2500F","autoneg":true,"flow-control":{"rx":true,"tx":true},"statistics":{"rx_bytes":1000,"tx_bytes":2000}},
+				"lan1":{"type":"Network device","up":true,"carrier":true,"mtu":1500,"macaddr":"02:51:0a:00:00:01","speed":"2500F","autoneg":true,"flow-control":{"autoneg":true,"supported":["rx","tx"],"link-advertising":["rx","tx"],"link-partner-advertising":["rx","tx"],"negotiated":["rx","tx"]},"statistics":{"rx_bytes":1000,"tx_bytes":2000}},
+				"lan10":{"type":"Network device","up":false,"carrier":false,"mtu":1500,"macaddr":"02:51:0a:00:00:01","flow-control":{"autoneg":false,"supported":["rx","tx"],"link-partner-advertising":[],"selected":["tx"]}},
+				"lan2":{"type":"Network device","up":false,"carrier":false,"mtu":1500,"macaddr":"02:51:0a:00:00:01"},
 				"sfp9":{"type":"Network device","up":true,"carrier":true,"mtu":1500,"macaddr":"02:51:0a:00:00:02","speed":"10000F","statistics":{"rx_bytes":50000,"tx_bytes":40000}}
 			}]}`))
 		case "network.interface.dump":
 			_, _ = w.Write([]byte(`{"result":[0,{"interface":[
-				{"interface":"lan","up":true,"proto":"static","l3_device":"br-lan","ipv4-address":[{"address":"192.0.2.10","mask":24}],"ipv6-address":[{"address":"2001:db8::10","mask":64}]}
+				{"interface":"lan","up":true,"proto":"static","l3_device":"br-lan","ipv4-address":[{"address":"192.0.2.10","mask":24}],"ipv6-address":[{"address":"2001:db8::10","mask":64}],"ipv6-prefix-assignment":[
+					{"address":"2001:db8:1::","mask":64,"local-address":{"address":"2001:db8:1::1","mask":64}},
+					{"address":"2001:db8:2::","mask":64,"local-address":{}}
+				]}
 			]}]}`))
 		case "network.wireless.status":
 			_, _ = w.Write([]byte(`{"result":[0,{}]}`))
@@ -59,6 +64,7 @@ func TestOpenWrtDriverPoll(t *testing.T) {
 		ID:       "ow-sw",
 		Driver:   "openwrt",
 		Endpoint: srv.URL,
+		Settings: map[string]any{"allow_insecure_http": true},
 		ResolvedSecrets: map[string]string{
 			"username": "root",
 			"password": "secret",
@@ -68,13 +74,26 @@ func TestOpenWrtDriverPoll(t *testing.T) {
 		t.Fatalf("Poll: %v", err)
 	}
 	snap.Normalize()
-	if len(snap.Devices) != 1 || snap.Devices[0].MgmtIP != "192.0.2.10" {
+	if len(snap.Devices) != 1 || snap.Devices[0].MgmtIP != "192.0.2.10" || snap.Devices[0].ID != "openwrt:ow-sw" || snap.Devices[0].PrimaryMAC != "02:51:0a:00:00:01" {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
-	if len(snap.Links) != 2 || snap.Links[0].SpeedMbps != 2500 || !snap.Links[1].IsFiber || snap.Links[1].Media != model.MediaSFPPl {
+	var names []string
+	for _, l := range snap.Links {
+		names = append(names, l.IfName)
+	}
+	if got := strings.Join(names, ","); got != "lan1,lan2,lan10,sfp9" {
+		t.Fatalf("link order = %s, want lan1,lan2,lan10,sfp9", got)
+	}
+	if snap.Links[0].SpeedMbps != 2500 || !snap.Links[3].IsFiber || snap.Links[3].Media != model.MediaSFPPl {
 		t.Fatalf("unexpected links: %+v", snap.Links)
 	}
-	if len(snap.Segments) != 1 || len(snap.Segments[0].Addresses) != 2 {
+	if fc := snap.Links[0].FlowControl; fc == nil || !fc.Rx || !fc.Tx {
+		t.Fatalf("negotiated flow control = %+v, want rx+tx", fc)
+	}
+	if fc := snap.Links[2].FlowControl; fc == nil || fc.Rx || !fc.Tx {
+		t.Fatalf("selected flow control = %+v, want tx only", fc)
+	}
+	if len(snap.Segments) != 1 || len(snap.Segments[0].Addresses) != 3 || snap.Segments[0].Addresses[2].Address != "2001:db8:1::1" {
 		t.Fatalf("unexpected segments: %+v", snap.Segments)
 	}
 	if len(snap.Neighbors) != 1 || snap.Neighbors[0].MAC != "de:ad:be:ef:00:01" {
@@ -89,9 +108,20 @@ func TestOpenWrtEmptySessionError(t *testing.T) {
 	defer srv.Close()
 	_, err := New().Poll(context.Background(), driver.TargetConfig{
 		ID: "ow1", Endpoint: srv.URL,
+		Settings:        map[string]any{"allow_insecure_http": true},
 		ResolvedSecrets: map[string]string{"username": "root", "password": "pw"},
 	})
-	if err == nil || strings.Contains(err.Error(), "%!") {
+	if err == nil || err.Error() != "openwrt ubus login: empty session" {
 		t.Fatalf("want plain empty-session error, got %v", err)
+	}
+}
+
+func TestOpenWrtRefusesCredentialsOverPlainHTTP(t *testing.T) {
+	err := New().ValidateConfig(driver.TargetConfig{
+		ID: "ow1", Endpoint: "http://192.0.2.1",
+		ResolvedSecrets: map[string]string{"username": "root", "password": "pw"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "allow_insecure_http") {
+		t.Fatalf("want plain-http refusal, got %v", err)
 	}
 }

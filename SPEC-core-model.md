@@ -183,11 +183,11 @@ type ConfigDriver interface {
 `topology.Solve(state)` builds nodes (`Device` + optionally `Client`) and directed edges with explicit `Kind` (`wired`, `lag`, `wireless_uplink`, `wireless_client`), `Evidence` (`lldp`, `fdb_unique`, `fdb_inferred`, `wireless_uplink`, `wireless_client`), and `Confidence` (`0.0–1.0`):
 
 1. **LAG-aware link normalization:** Map member `Link` names in `LLDP` / `FDB` onto their parent `LagGroup` when applicable so bonded uplinks collapse into a single `lag` edge (listing constituent member links) rather than duplicate parallel edges.
-2. **Direct LLDP edges (`confidence: 1.0`):** Match `LldpNeighbor.ChassisID` / `RemoteMgmtIP` / `RemoteSysName` against known `Device.MACs` / `MgmtIP` / `Hostname`. Deduplicate bidirectional pairs cleanly.
+2. **Direct LLDP edges (`confidence: 1.0`):** Match `LldpNeighbor.ChassisID` / `RemoteMgmtIP` / `RemoteSysName` against known `Device.MACs` / `MgmtIP` / `Hostname`. Deduplicate bidirectional pairs cleanly. Distinct port pairs between the same two devices stay separate edges.
 3. **Wireless mesh uplinks (`confidence: 0.95`):** Attach APs reporting `WirelessUplink` to their peer AP.
 4. **FDB infrastructure edges (`confidence: 0.85`):** For known device `B` appearing in `A`'s FDB (ignoring `IsLocal` entries and ports already linked to a downstream switch that sees `B`), select the port with the smallest downstream MAC cardinality.
 5. **Wireless client attachment (`confidence: 0.95`):** Attach wireless `Client` records to their reporting AP + SSID.
-6. **Wired client attachment (`confidence: 0.80`):** Attach wired MACs (from `Neighbors` / `DHCP` / `FDB` not matching infrastructure `Device.MACs`) to the leaf access link (no downstream infrastructure device) where the MAC appears in `FDB`.
+6. **Wired client attachment (`confidence: 0.80`):** Attach wired MACs (from `Neighbors` / `DHCP` / `FDB` not matching infrastructure `Device.MACs`) to the leaf access link (no downstream infrastructure device) where the MAC appears in `FDB`. FDB and neighbor records of an offline device place clients but never mark them online.
 7. **Root orientation:** Prefer `Role` in `{gateway, firewall}` (or `cap:gateway`), breaking ties by reachability, and sort all nodes/edges deterministically by ID.
 
 ### 5.5 SQLite Storage & Rolling Telemetry
@@ -197,7 +197,7 @@ type ConfigDriver interface {
   - Normalized state tables replaced transactionally per `target_id` on poll: `devices`, `links`, `lag_groups`, `segments`, `zones`, `fdb_entries`, `lldp_neighbors`, `neighbors`, `dhcp_leases`, `gateways`, `routes`, `vpn_tunnels`, `firewalls`, `radios`, `wireless_uplinks`, `clients`
   - `link_samples` (rolling time-series of `rx_bps`, `tx_bps`, `rx_errors`, `tx_errors`, `sfp_rx_dbm`, `sfp_temp_c`, `poe_watts` — default 24h retention, pruned automatically)
   - `topology_snapshots` (latest solved graph JSON + timestamp)
-  - `diagnostic_runs` (audit/history of executed diagnostic requests and results)
+  - `diagnostic_runs` (audit/history of executed diagnostic requests and results, pruned with the same retention as `link_samples`)
 - Counter delta bitrate math handles 32-bit/64-bit counter wraparound and device reboot resets without ever emitting negative rates.
 - Default SFP optical warning thresholds (used only when transceiver doesn't expose its own alarm flags, overridable per link): `RxPowerDbm < -20.0` or `RxPowerDbm > 0.0`, or `TempC > 70.0`.
 

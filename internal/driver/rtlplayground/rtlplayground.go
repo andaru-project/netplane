@@ -28,6 +28,11 @@ func (d *Driver) ValidateConfig(cfg driver.TargetConfig) error {
 	if strings.TrimSpace(cfg.Endpoint) == "" {
 		return fmt.Errorf("rtlplayground target %q: endpoint is required", cfg.ID)
 	}
+	// Credentials are optional here; only refuse plain http when some would be sent.
+	s := cfg.ResolvedSecrets
+	if s["username"] != "" || s["password"] != "" || s["api_token"] != "" {
+		return driver.CheckCredentialTransport(cfg)
+	}
 	return nil
 }
 
@@ -109,9 +114,6 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	now := time.Now().UTC()
 	primaryMAC, _ := model.NormalizeMAC(sysInfo.MAC)
 	devID := "rtlplayground:" + cfg.ID
-	if primaryMAC != "" {
-		devID = "rtlplayground:" + primaryMAC
-	}
 	name := cfg.Name
 	if name == "" {
 		name = sysInfo.Hostname
@@ -173,10 +175,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	for _, p := range ports {
-		media := model.MediaType(strings.ToUpper(strings.TrimSpace(p.Media)))
-		if media == "" {
-			media = model.MediaOther
-		}
+		media := parseMedia(p.Media)
 		isFiber := model.IsFiberMedia(media)
 		oper := model.OperDown
 		if !p.AdminUp {
@@ -255,6 +254,21 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	return snap, nil
+}
+
+// parseMedia maps a media token case-insensitively to its model constant, else MediaOther.
+func parseMedia(s string) model.MediaType {
+	s = strings.TrimSpace(s)
+	for _, m := range []model.MediaType{
+		model.MediaFE, model.MediaGE, model.Media25GE, model.Media5GE, model.Media10GE,
+		model.Media25G, model.Media40G, model.Media100G, model.MediaSFP, model.MediaSFPPl,
+		model.MediaSFP28, model.MediaQSFP28,
+	} {
+		if strings.EqualFold(s, string(m)) {
+			return m
+		}
+	}
+	return model.MediaOther
 }
 
 func getJSON(ctx context.Context, client *http.Client, url, user, pass, token string, out any) error {

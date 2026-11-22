@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/cookiejar"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,7 +37,7 @@ func (d *Driver) ValidateConfig(cfg driver.TargetConfig) error {
 	if !hasAPIKey && !hasUserPass {
 		return fmt.Errorf("unifi target %q: provide either api_key or username+password secrets", cfg.ID)
 	}
-	return nil
+	return driver.CheckCredentialTransport(cfg)
 }
 
 // Poll authenticates against the UniFi controller and fetches devices and active clients.
@@ -92,8 +94,10 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	var staResp struct {
 		Data []unifiClient `json:"data"`
 	}
-	// Best-effort client fetch; device inventory still succeeds if stat/sta is unavailable.
-	_ = getJSON(ctx, client, baseURL+prefix+"/api/s/"+site+"/stat/sta", apiKey, &staResp)
+	// Required: an empty client list would replace the stored one and publish false client departures.
+	if err := getJSON(ctx, client, baseURL+prefix+"/api/s/"+site+"/stat/sta", apiKey, &staResp); err != nil {
+		return nil, fmt.Errorf("unifi stat/sta: %w", err)
+	}
 
 	now := time.Now().UTC()
 	snap := &driver.Snapshot{
@@ -470,9 +474,8 @@ func (f *flexFloat) UnmarshalJSON(b []byte) error {
 	if s == "" || s == "null" || s == `""` {
 		return nil
 	}
-	s = strings.Trim(s, `"`)
-	var v float64
-	if _, err := fmt.Sscanf(s, "%f", &v); err == nil {
+	// Nonfinite values would make the snapshot unmarshalable as JSON, so they count as absent.
+	if v, err := strconv.ParseFloat(strings.Trim(s, `"`), 64); err == nil && !math.IsNaN(v) && !math.IsInf(v, 0) {
 		f.val = v
 		f.set = true
 	}

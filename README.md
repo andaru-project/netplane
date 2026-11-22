@@ -1,6 +1,6 @@
 # netplane
 
-An open, driver-based **network configuration, information, and diagnostics plane** designed to manage heterogeneous networks (OpenWrt/DSA switches and routers, pfSense/OPNsense gateways, UniFi gear, and SNMP v2c/v3 managed switches) from a single fast UI—standalone or directly inside Home Assistant via Ingress.
+An open, driver-based **network configuration, information, and diagnostics plane** designed to manage heterogeneous networks (OpenWrt/DSA switches and routers, pfSense gateways, UniFi gear, and SNMP v2c/v3 managed switches; OPNsense support is planned) from a single fast UI—standalone or directly inside Home Assistant via Ingress.
 
 ## Architecture
 
@@ -9,11 +9,11 @@ An open, driver-based **network configuration, information, and diagnostics plan
 1. **Standalone Core + Embedded Web UI** (Go + React/TypeScript SPA, single static binary/container, embedded SQLite in WAL mode):
    - Capability-based canonical data model (devices, ports, media/SFP DOM, EEE/Flow Control, VLANs, FDB, ARP, LLDP, wireless radios/SSIDs, clients, gateways, DHCP leases).
    - Native API/SSH drivers (**OpenWrt**, **pfSense**, **UniFi**) plus a standards-based **SNMP v2c/v3** driver.
-   - Cross-vendor L2/L3 topology solver (LLDP + FDB + ARP + wireless associations) and live diagnostics (ping, traceroute/mtr, cable tests, optical DOM, port counters).
+   - Cross-vendor L2/L3 topology solver (LLDP + FDB + ARP + wireless associations) and diagnostics: a cross-vendor FDB/MAC/IP lookup (`fdb_lookup`) today, with device-side ping, traceroute/mtr, cable tests, optical DOM and port counter diagnostics planned.
 2. **Home Assistant Add-on with Ingress:**
    - Embeds the full UI directly into the Home Assistant sidebar and Android/iOS Companion Apps with SSO and zero extra exposed ports.
 3. **Thin Home Assistant Integration (`ha-integration/`):**
-   - Connects to `netplane` over HTTP/WebSocket and exposes only automation-worthy entities (device/WAN health, PoE switches, SSID toggles, SFP optical alarms, `device_tracker` presence) without entity explosion or Recorder DB bloat.
+   - Connects to `netplane` over HTTP/WebSocket and exposes only automation-worthy entities (device/WAN health, CPU and PoE draw, SFP optical alarms, `device_tracker` presence; PoE switches and SSID toggles are planned) without entity explosion or Recorder DB bloat.
 
 See [CAPABILITY-MAP.md](CAPABILITY-MAP.md) for the module decomposition and build order.
 
@@ -30,15 +30,25 @@ CGO_ENABLED=0 go build -tags embedui -o bin/netplane ./cmd/netplane
 
 # Copy and edit config (secrets resolved from environment variables)
 cp netplane.example.yaml netplane.local.yaml
+export NETPLANE_API_TOKEN="$(openssl rand -hex 32)"  # the example requires a bearer token
 ./bin/netplane serve --config netplane.local.yaml --db netplane.db --listen :8099
 ```
+
+The example configuration requires a bearer token (`api_token_secret`). Remove it only when the server listens on a loopback address; in the Home Assistant Add-on, set the `api_token` option instead.
+
+Drivers refuse to send credentials to a plain `http://` endpoint unless the target sets `allow_insecure_http: true` under `settings`. Use `https://` (or a `unix://` socket) where the device supports it.
 
 ### Container / Home Assistant Add-on
 
 ```bash
 docker build -t netplane:local .
-docker run --rm -p 8099:8099 -v netplane-data:/data netplane:local
+docker run --rm -p 8099:8099 -v netplane-data:/data \
+  -v "$PWD/netplane.local.yaml:/config/netplane.yaml:ro" \
+  --env-file netplane.env \
+  netplane:local
 ```
+
+The container reads its configuration from `/config/netplane.yaml`. Secrets the configuration references as `${NAME}` are resolved from environment variables, so pass them with `--env-file` (or `-e NAME=value`); in the Home Assistant Add-on, set them in the add-on's `secrets` option instead.
 
 Home Assistant Add-on metadata lives in [ha-addon/config.yaml](ha-addon/config.yaml) (`ingress: true`, port `8099`), and the upstreamable Apache-2.0 Home Assistant integration lives in [ha-integration/custom_components/netplane](ha-integration/custom_components/netplane).
 

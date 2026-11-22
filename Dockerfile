@@ -15,8 +15,9 @@ COPY internal/ ./internal/
 COPY schema/ ./schema/
 COPY web/embed.go ./web/embed.go
 COPY --from=web-builder /src/web/dist ./web/dist
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+# Value-free so BuildKit's automatic platform values apply; empty (legacy builder) builds natively.
+ARG TARGETOS
+ARG TARGETARCH
 ARG VERSION=0.1.0
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -tags embedui -trimpath -ldflags="-s -w -X main.Version=${VERSION}" \

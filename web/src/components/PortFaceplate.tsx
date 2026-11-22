@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Badge, Card, Group, Paper, SimpleGrid, Stack, Text, Tooltip } from '@mantine/core';
+import { Badge, Card, Group, Paper, SimpleGrid, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import { useState } from 'react';
 import { formatBps, formatSpeed, Link } from '../api';
 
@@ -36,11 +36,12 @@ export function PortFaceplate({ links }: Props) {
                 key={l.if_name}
                 label={`${l.if_name} (${l.media}) ${l.link_up ? formatSpeed(l.speed_mbps) : l.oper_state}`}
               >
-                <Paper
+                <UnstyledButton
                   onClick={() => setSelectedIfName(l.if_name)}
+                  aria-pressed={isSel}
                   p="xs"
-                  radius="sm"
                   style={{
+                    borderRadius: 'var(--mantine-radius-sm)',
                     cursor: 'pointer',
                     minWidth: 68,
                     background: l.is_fiber ? '#172554' : '#1f2937',
@@ -71,7 +72,7 @@ export function PortFaceplate({ links }: Props) {
                       </Badge>
                     )}
                   </Group>
-                </Paper>
+                </UnstyledButton>
               </Tooltip>
             );
           })}

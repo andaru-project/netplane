@@ -125,3 +125,21 @@ func TestDiffSnapshotsVanishedDevicesAndClients(t *testing.T) {
 		t.Fatalf("events = %v", got)
 	}
 }
+
+func TestDiffSnapshotsNewLinkSfpAlert(t *testing.T) {
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	prev := &driver.Snapshot{TargetID: "t1", CollectedAt: ts}
+	curr := &driver.Snapshot{
+		TargetID:    "t1",
+		CollectedAt: ts.Add(time.Minute),
+		Links: []model.Link{
+			{DeviceID: "sw1", IfName: "sfp9", LinkUp: true, StpState: model.StpBlocking,
+				SFP: &model.SfpDom{Present: true, AlertState: model.AlertCrit}},
+			{DeviceID: "sw1", IfName: "p1", LinkUp: true, StpState: model.StpForwarding},
+		},
+	}
+	evs := DiffSnapshots(prev, curr)
+	if len(evs) != 1 || evs[0].Type != SfpAlert || evs[0].Severity != SeverityCrit || evs[0].LinkName != "sfp9" {
+		t.Fatalf("events = %+v, want one crit SFP alert for sfp9", evs)
+	}
+}

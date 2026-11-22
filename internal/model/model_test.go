@@ -71,6 +71,10 @@ func TestEvaluateSfpAlert(t *testing.T) {
 		{"high_temp_warn", &SfpDom{Present: true, RxPowerDbm: ptr(-4.0), TempC: ptr(72.0)}, AlertWarn},
 		{"high_temp_crit", &SfpDom{Present: true, RxPowerDbm: ptr(-4.0), TempC: ptr(82.0)}, AlertCrit},
 		{"hardware_flag_preserved", &SfpDom{Present: true, RxPowerDbm: ptr(-4.0), AlertState: AlertCrit}, AlertCrit},
+		{"hardware_ok_preserved", &SfpDom{Present: true, RxPowerDbm: ptr(-22.0), AlertState: AlertOK}, AlertOK},
+		{"unknown_falls_back", &SfpDom{Present: true, RxPowerDbm: ptr(-22.0), AlertState: AlertUnknown}, AlertWarn},
+		{"rx_warn_temp_crit", &SfpDom{Present: true, RxPowerDbm: ptr(-22.0), TempC: ptr(85.0)}, AlertCrit},
+		{"rx_warn_temp_warn", &SfpDom{Present: true, RxPowerDbm: ptr(-22.0), TempC: ptr(72.0)}, AlertWarn},
 	}
 
 	for _, tc := range tests {

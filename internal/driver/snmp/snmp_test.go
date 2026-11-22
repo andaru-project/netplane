@@ -84,8 +84,12 @@ func TestSNMPDriverPollWithFixtures(t *testing.T) {
 				{Name: oidBasePortIf + ".1", Type: gosnmp.Integer, Value: 1},
 			},
 			oidDot1qFdb: {
-				// VLAN 10, MAC de:ad:be:ef:00:01 -> bridge port 1
-				{Name: oidDot1qFdb + ".10.222.173.190.239.0.1", Type: gosnmp.Integer, Value: 1},
+				// FDB 7, MAC de:ad:be:ef:00:01 -> bridge port 1
+				{Name: oidDot1qFdb + ".7.222.173.190.239.0.1", Type: gosnmp.Integer, Value: 1},
+			},
+			oidVlanFdbID: {
+				// VLAN 10 uses FDB 7
+				{Name: oidVlanFdbID + ".0.10", Type: gosnmp.Gauge32, Value: uint32(7)},
 			},
 			oidLldpRem: {
 				{Name: oidLldpRem + ".5.100.25.1", Type: gosnmp.OctetString, Value: []byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x01}},
@@ -99,7 +103,7 @@ func TestSNMPDriverPollWithFixtures(t *testing.T) {
 		},
 	}
 
-	drv := NewWithFactory(func(driver.TargetConfig) (Walker, error) { return fw, nil })
+	drv := NewWithFactory(func(context.Context, driver.TargetConfig) (Walker, error) { return fw, nil })
 	snap, err := drv.Poll(context.Background(), driver.TargetConfig{
 		ID:              "sw-snmp",
 		Driver:          "snmp",
@@ -111,7 +115,7 @@ func TestSNMPDriverPollWithFixtures(t *testing.T) {
 		t.Fatalf("Poll: %v", err)
 	}
 	snap.Normalize()
-	if len(snap.Devices) != 1 || snap.Devices[0].UptimeSec != 3600 || snap.Devices[0].PrimaryMAC != "aa:bb:cc:00:00:01" {
+	if len(snap.Devices) != 1 || snap.Devices[0].ID != "snmp:sw-snmp" || snap.Devices[0].UptimeSec != 3600 || snap.Devices[0].PrimaryMAC != "aa:bb:cc:00:00:01" {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
 	if len(snap.Links) != 2 || snap.Links[0].SpeedMbps != 1000 || snap.Links[0].PoE == nil || snap.Links[0].PoE.State != "delivering" {
@@ -149,7 +153,7 @@ func TestSNMPV3RejectsUnknownProtocols(t *testing.T) {
 func pollFixture(t *testing.T, trees map[string][]gosnmp.SnmpPDU) *driver.Snapshot {
 	t.Helper()
 	trees[".1.3.6.1.2.1.1"] = []gosnmp.SnmpPDU{{Name: oidSysName, Type: gosnmp.OctetString, Value: []byte("sw")}}
-	drv := NewWithFactory(func(driver.TargetConfig) (Walker, error) { return &fakeWalker{trees: trees}, nil })
+	drv := NewWithFactory(func(context.Context, driver.TargetConfig) (Walker, error) { return &fakeWalker{trees: trees}, nil })
 	snap, err := drv.Poll(context.Background(), driver.TargetConfig{
 		ID: "sw", Endpoint: "192.0.2.30", ResolvedSecrets: map[string]string{"community": "public"},
 	})
@@ -204,5 +208,88 @@ func TestSNMPLLDPLocalPortNumMapsViaLocPortTable(t *testing.T) {
 	})
 	if len(snap.LLDP) != 1 || snap.LLDP[0].LocalLink != "Gi1/0/1" {
 		t.Fatalf("unexpected LLDP: %+v", snap.LLDP)
+	}
+}
+
+func TestSNMPV3RejectsPrivWithoutAuth(t *testing.T) {
+	err := New().ValidateConfig(driver.TargetConfig{
+		ID: "s3", Endpoint: "192.0.2.30",
+		Settings:        map[string]any{"version": "3", "username": "netplane", "priv_protocol": "AES"},
+		ResolvedSecrets: map[string]string{"priv_passphrase": "p"},
+	})
+	if err == nil {
+		t.Fatal("expected error for priv_protocol without auth_protocol")
+	}
+}
+
+func TestSNMPRejectsInvalidExplicitPort(t *testing.T) {
+	drv := New()
+	for _, ep := range []string{"switch.example:65536", "switch.example:0", "switch.example:snmp"} {
+		if err := drv.ValidateConfig(driver.TargetConfig{ID: "s", Endpoint: ep,
+			ResolvedSecrets: map[string]string{"community": "public"}}); err == nil {
+			t.Errorf("%s: expected invalid port error", ep)
+		}
+	}
+	for _, ep := range []string{"switch.example", "switch.example:1161"} {
+		if err := drv.ValidateConfig(driver.TargetConfig{ID: "s", Endpoint: ep,
+			ResolvedSecrets: map[string]string{"community": "public"}}); err != nil {
+			t.Errorf("%s: %v", ep, err)
+		}
+	}
+}
+
+func TestSNMPWalkerFactoryHonoursPollContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := driver.TargetConfig{ID: "s", Endpoint: "192.0.2.30", ResolvedSecrets: map[string]string{"community": "public"}}
+	if w, err := defaultWalkerFactory(ctx, cfg); err == nil {
+		_ = w.Close()
+		t.Fatal("expected connect to fail with a cancelled context")
+	}
+}
+
+func TestSNMPMixedCounterWidthsUse32BitBoth(t *testing.T) {
+	snap := pollFixture(t, map[string][]gosnmp.SnmpPDU{
+		oidIfTable: {
+			{Name: oidIfTable + ".2.1", Type: gosnmp.OctetString, Value: []byte("gi1")},
+			{Name: oidIfTable + ".10.1", Type: gosnmp.Counter32, Value: uint32(100)},
+			{Name: oidIfTable + ".16.1", Type: gosnmp.Counter32, Value: uint32(200)},
+		},
+		oidIfXTable: {
+			{Name: oidIfXTable + ".6.1", Type: gosnmp.Counter64, Value: uint64(1 << 40)},
+		},
+	})
+	if c := snap.Links[0].Counters; !c.Counter32 || c.RxBytes != 100 || c.TxBytes != 200 {
+		t.Fatalf("mixed-width counters: %+v", c)
+	}
+}
+
+func TestSNMPFdbSkipsPortZeroAndSharedDatabases(t *testing.T) {
+	snap := pollFixture(t, map[string][]gosnmp.SnmpPDU{
+		oidIfTable: {{Name: oidIfTable + ".2.1", Type: gosnmp.OctetString, Value: []byte("gi1")}},
+		oidDot1qFdb: {
+			{Name: oidDot1qFdb + ".1.222.173.190.239.0.1", Type: gosnmp.Integer, Value: 1},
+			{Name: oidDot1qFdb + ".1.222.173.190.239.0.2", Type: gosnmp.Integer, Value: 0},
+		},
+		oidVlanFdbID: {
+			{Name: oidVlanFdbID + ".0.10", Type: gosnmp.Gauge32, Value: uint32(1)},
+			{Name: oidVlanFdbID + ".0.20", Type: gosnmp.Gauge32, Value: uint32(1)},
+		},
+	})
+	if len(snap.FDB) != 1 || snap.FDB[0].LinkName != "gi1" || snap.FDB[0].VLAN != 0 {
+		t.Fatalf("unexpected FDB: %+v", snap.FDB)
+	}
+}
+
+func TestSNMPPoEAmbiguousAcrossGroupsNotAttached(t *testing.T) {
+	snap := pollFixture(t, map[string][]gosnmp.SnmpPDU{
+		oidIfTable: {{Name: oidIfTable + ".2.1", Type: gosnmp.OctetString, Value: []byte("gi1")}},
+		oidPethPort: {
+			{Name: oidPethPort + ".3.1.1", Type: gosnmp.Integer, Value: 1},
+			{Name: oidPethPort + ".3.2.1", Type: gosnmp.Integer, Value: 2},
+		},
+	})
+	if snap.Links[0].PoE != nil {
+		t.Fatalf("PoE from two PSE groups merged onto ifIndex 1: %+v", snap.Links[0].PoE)
 	}
 }

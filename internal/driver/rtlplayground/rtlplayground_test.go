@@ -47,7 +47,7 @@ func TestRTLPlaygroundDriverPoll(t *testing.T) {
 		t.Fatalf("Poll: %v", err)
 	}
 	snap.Normalize()
-	if len(snap.Devices) != 1 || snap.Devices[0].Model != "LG510S" || len(snap.Devices[0].Sensors) != 1 {
+	if len(snap.Devices) != 1 || snap.Devices[0].ID != "rtlplayground:sw-lg510s" || snap.Devices[0].Model != "LG510S" || len(snap.Devices[0].Sensors) != 1 {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
 	if len(snap.Links) != 2 {
@@ -65,5 +65,28 @@ func TestRTLPlaygroundDriverPoll(t *testing.T) {
 	}
 	if len(snap.FDB) != 1 || len(snap.LLDP) != 1 {
 		t.Fatalf("expected 1 FDB and 1 LLDP, got %d/%d", len(snap.FDB), len(snap.LLDP))
+	}
+}
+
+func TestRTLPlaygroundParseMedia(t *testing.T) {
+	for in, want := range map[string]model.MediaType{
+		" sfp+ ": model.MediaSFPPl, "2.5ge": model.Media25GE, "other": model.MediaOther,
+		"OTHER": model.MediaOther, "bogus": model.MediaOther, "": model.MediaOther,
+	} {
+		if got := parseMedia(in); got != want {
+			t.Errorf("parseMedia(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRTLPlaygroundRefusesCredentialsOverHTTP(t *testing.T) {
+	cfg := driver.TargetConfig{ID: "r", Endpoint: "http://192.0.2.10",
+		ResolvedSecrets: map[string]string{"api_token": "t"}}
+	if err := New().ValidateConfig(cfg); err == nil {
+		t.Fatal("expected refusal to send a token over plain http")
+	}
+	cfg.Settings = map[string]any{"allow_insecure_http": true}
+	if err := New().ValidateConfig(cfg); err != nil {
+		t.Fatalf("opt-in rejected: %v", err)
 	}
 }

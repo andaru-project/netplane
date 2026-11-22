@@ -214,6 +214,8 @@ export const AUTH_EVENT = 'netplane-auth';
 
 // One shared prompt so parallel 401s ask for the token only once.
 let tokenPrompt: Promise<boolean> | null = null;
+// Bumped on each stored token, so a 401 sent before it retries with the new cookie instead of prompting again.
+let authGen = 0;
 
 // promptForToken stores the API token in a SameSite=Strict cookie, which fetch and
 // EventSource both send; EventSource cannot set an Authorization header.
@@ -224,6 +226,7 @@ function promptForToken(): Promise<boolean> {
     // Scope to the app's base path so other apps on the origin (e.g. other HA ingress add-ons) never get it.
     const path = new URL('.', document.baseURI).pathname;
     document.cookie = `netplane_token=${encodeURIComponent(token)}; path=${path}; SameSite=Strict`;
+    authGen++;
     window.dispatchEvent(new Event(AUTH_EVENT));
     return true;
   }).finally(() => {
@@ -233,6 +236,7 @@ function promptForToken(): Promise<boolean> {
 }
 
 async function fetchJSON<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
+  const gen = authGen;
   const resp = await fetch(`./api/v1${path}`, {
     ...init,
     headers: {
@@ -240,7 +244,7 @@ async function fetchJSON<T>(path: string, init?: RequestInit, retried = false): 
       ...(init?.headers ?? {}),
     },
   });
-  if (resp.status === 401 && !retried && (await promptForToken())) {
+  if (resp.status === 401 && !retried && (gen !== authGen || (await promptForToken()))) {
     return fetchJSON<T>(path, init, true);
   }
   if (!resp.ok) {

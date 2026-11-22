@@ -171,7 +171,8 @@ func (s *Store) ListTargets(ctx context.Context) ([]driver.TargetConfig, error) 
 	return out, rows.Err()
 }
 
-// DeleteTarget removes a target and its cached snapshot/devices; link and diagnostic history ages out via retention.
+// DeleteTarget removes a target and its cached snapshot, devices and counter baselines; link and
+// diagnostic history ages out via retention.
 func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -187,6 +188,9 @@ func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE target_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM link_counter_state WHERE target_id = ?`, id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -237,7 +241,7 @@ func (s *Store) PruneTargets(ctx context.Context, keep map[string]bool) error {
 
 // SaveSnapshot normalizes snap, computes positive link bitrates from previous counter state,
 // persists the target's snapshot and indexed devices transactionally, records link_samples,
-// and prunes samples older than retention. Returns the previous snapshot for diffing (nil on first poll).
+// and prunes samples and diagnostic runs older than retention. Returns the previous snapshot for diffing (nil on first poll).
 func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*driver.Snapshot, error) {
 	if snap == nil || snap.TargetID == "" {
 		return nil, fmt.Errorf("snapshot and target_id are required")
@@ -275,8 +279,8 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 			var prevTs, prevRx, prevTx int64
 			var prev32 bool
 			err := tx.QueryRowContext(ctx,
-				`SELECT collected_at, rx_bytes, tx_bytes, counter32 FROM link_counter_state WHERE device_id = ? AND if_name = ?`,
-				l.DeviceID, l.IfName,
+				`SELECT collected_at, rx_bytes, tx_bytes, counter32 FROM link_counter_state WHERE target_id = ? AND device_id = ? AND if_name = ?`,
+				snap.TargetID, l.DeviceID, l.IfName,
 			).Scan(&prevTs, &prevRx, &prevTx, &prev32)
 			// A counter width change (e.g. SNMP falling back from ifXTable) makes the delta meaningless.
 			elapsed := time.Duration(tsNano - prevTs)
@@ -287,14 +291,14 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 			l.Rates = &model.PortRates{RxBps: rxBps, TxBps: txBps}
 
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO link_counter_state (device_id, if_name, collected_at, rx_bytes, tx_bytes, counter32)
-				VALUES (?, ?, ?, ?, ?, ?)
-				ON CONFLICT(device_id, if_name) DO UPDATE SET
+				INSERT INTO link_counter_state (target_id, device_id, if_name, collected_at, rx_bytes, tx_bytes, counter32)
+				VALUES (?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(target_id, device_id, if_name) DO UPDATE SET
 					collected_at = excluded.collected_at,
 					rx_bytes = excluded.rx_bytes,
 					tx_bytes = excluded.tx_bytes,
 					counter32 = excluded.counter32
-			`, l.DeviceID, l.IfName, tsNano, int64(l.Counters.RxBytes), int64(l.Counters.TxBytes), l.Counters.Counter32); err != nil {
+			`, snap.TargetID, l.DeviceID, l.IfName, tsNano, int64(l.Counters.RxBytes), int64(l.Counters.TxBytes), l.Counters.Counter32); err != nil {
 				return nil, err
 			}
 		} else if l.Rates != nil {
@@ -359,8 +363,7 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO devices (id, target_id, driver, name, role, primary_mac, mgmt_ip, online, last_seen, data_json)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(id) DO UPDATE SET
-				target_id = excluded.target_id,
+			ON CONFLICT(id, target_id) DO UPDATE SET
 				driver = excluded.driver,
 				name = excluded.name,
 				role = excluded.role,
@@ -376,6 +379,9 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 
 	cutoff := snap.CollectedAt.UTC().Add(-s.retention).UnixNano()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM link_samples WHERE ts < ?`, cutoff); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM diagnostic_runs WHERE started_at < ?`, cutoff); err != nil {
 		return nil, err
 	}
 
@@ -560,10 +566,11 @@ func mergeClients(in []model.Client) []model.Client {
 	return out
 }
 
-// GetDevice returns one indexed Device by ID.
+// GetDevice returns one indexed Device by ID: when several targets report it, the most
+// recently seen record, ties going to the lowest target ID (the same pick as LoadState).
 func (s *Store) GetDevice(ctx context.Context, id string) (*model.Device, bool, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT data_json FROM devices WHERE id = ?`, id).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT data_json FROM devices WHERE id = ? ORDER BY last_seen DESC, target_id LIMIT 1`, id).Scan(&raw)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}

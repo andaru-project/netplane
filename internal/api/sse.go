@@ -23,12 +23,13 @@ func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	// Subscribe before the acknowledgement so no event published after it is missed.
+	ch, unsub := s.opts.Bus.Subscribe(64)
+	defer unsub()
+
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprint(w, ": connected\n\n")
 	flusher.Flush()
-
-	ch, unsub := s.opts.Bus.Subscribe(64)
-	defer unsub()
 
 	keepalive := time.NewTicker(25 * time.Second)
 	defer keepalive.Stop()

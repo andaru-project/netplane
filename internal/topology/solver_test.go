@@ -2,6 +2,7 @@
 package topology
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -132,11 +133,8 @@ func TestSolveMultiVendorTopology(t *testing.T) {
 	}
 
 	// Determinism check: running Solve twice yields identical output.
-	g2 := Solve(state, now)
-	for i := range g.Edges {
-		if g.Edges[i].ID != g2.Edges[i].ID {
-			t.Fatalf("non-deterministic edge ordering at %d: %s vs %s", i, g.Edges[i].ID, g2.Edges[i].ID)
-		}
+	if g2 := Solve(state, now); !reflect.DeepEqual(g, g2) {
+		t.Fatalf("non-deterministic graph:\n%+v\nvs\n%+v", g, g2)
 	}
 }
 
@@ -215,5 +213,81 @@ func TestSolveLLDPByIPAndHostnameAndDualStackClients(t *testing.T) {
 	}
 	if _, ok := edges["gw1->client:bb:00:00:00:00:51"]; !ok {
 		t.Fatalf("expected direct wired client attached to gw1/igc1, got %+v", g.Edges)
+	}
+}
+
+func TestSolveParallelLLDPLinks(t *testing.T) {
+	state := &store.NetworkState{
+		Devices: []model.Device{
+			{ID: "a", Name: "a", PrimaryMAC: "00:00:00:00:00:0a", Online: true},
+			{ID: "b", Name: "b", PrimaryMAC: "00:00:00:00:00:0b", Online: true},
+		},
+		LLDP: []model.LldpNeighbor{
+			{DeviceID: "a", LocalLink: "p1", ChassisID: "00:00:00:00:00:0b", RemotePort: "q1"},
+			{DeviceID: "a", LocalLink: "p2", ChassisID: "00:00:00:00:00:0b", RemotePort: "q2"},
+			// Reverse records: one matching, one with port IDs spelled differently.
+			{DeviceID: "b", LocalLink: "q2", ChassisID: "00:00:00:00:00:0a", RemotePort: "p2"},
+			{DeviceID: "b", LocalLink: "q1", ChassisID: "00:00:00:00:00:0a", RemotePort: "Port 1"},
+		},
+	}
+	var ids []string
+	for _, e := range Solve(state, time.Unix(0, 0)).Edges {
+		ids = append(ids, e.ID)
+	}
+	if want := []string{"a:p1->b:q1", "a:p2->b:q2"}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("edges = %v, want %v", ids, want)
+	}
+
+	// A single link whose reverse record spells both port IDs differently stays one edge.
+	state.LLDP = []model.LldpNeighbor{
+		{DeviceID: "a", LocalLink: "p1", ChassisID: "00:00:00:00:00:0b", RemotePort: "Gi0/1"},
+		{DeviceID: "b", LocalLink: "q1", ChassisID: "00:00:00:00:00:0a", RemotePort: "Port 1"},
+	}
+	if g := Solve(state, time.Unix(0, 0)); len(g.Edges) != 1 || g.Edges[0].ID != "a:p1->b:q1" {
+		t.Fatalf("edges = %+v, want one a:p1->b:q1", g.Edges)
+	}
+}
+
+func TestSolveIgnoresDanglingAndOfflineEvidence(t *testing.T) {
+	state := &store.NetworkState{
+		Devices: []model.Device{
+			{ID: "sw1", Name: "sw1", PrimaryMAC: "00:00:00:00:00:01", Online: false},
+			{ID: "ap1", Name: "ap1", PrimaryMAC: "00:00:00:00:00:02", Online: true},
+		},
+		// Peer and attachment devices missing from the state must not produce dangling edges.
+		WirelessUplinks: []model.WirelessUplink{{DeviceID: "ap1", PeerDeviceID: "gone"}},
+		Clients: []model.Client{
+			{MAC: "bb:00:00:00:00:01", ConnectionType: "wireless", AttachedDeviceID: "gone", SSID: "x"},
+			{MAC: "bb:00:00:00:00:02", ConnectionType: "wired", AttachedDeviceID: "gone"},
+		},
+		// Retained records of the offline switch place clients but do not make them online.
+		FDB: []model.FdbEntry{
+			{DeviceID: "sw1", LinkName: "p1", MAC: "bb:00:00:00:00:01"},
+			{DeviceID: "sw1", LinkName: "p3", MAC: "bb:00:00:00:00:03"},
+		},
+		Neighbors: []model.NeighborEntry{{DeviceID: "sw1", MAC: "bb:00:00:00:00:03", State: "reachable"}},
+	}
+	g := Solve(state, time.Unix(0, 0))
+	nodes := map[string]Node{}
+	for _, n := range g.Nodes {
+		nodes[n.ID] = n
+	}
+	var ids []string
+	for _, e := range g.Edges {
+		if _, ok := nodes[e.FromID]; !ok {
+			t.Errorf("edge %s starts at a missing node", e.ID)
+		}
+		if _, ok := nodes[e.ToID]; !ok {
+			t.Errorf("edge %s ends at a missing node", e.ID)
+		}
+		ids = append(ids, e.ID)
+	}
+	if want := []string{"sw1:p1->client:bb:00:00:00:00:01", "sw1:p3->client:bb:00:00:00:00:03"}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("edges = %v, want %v", ids, want)
+	}
+	for _, id := range []string{"client:bb:00:00:00:00:01", "client:bb:00:00:00:00:03"} {
+		if nodes[id].Online {
+			t.Errorf("%s online from an offline device's records", id)
+		}
 	}
 }

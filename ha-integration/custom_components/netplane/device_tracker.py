@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import NetplaneCoordinator
+from .coordinator import NetplaneCoordinator, async_add_discovered
 
 
 async def async_setup_entry(
@@ -21,9 +21,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: NetplaneCoordinator = hass.data[DOMAIN][entry.entry_id]
-    clients = (coordinator.data or {}).get("clients", [])
-    macs = dict.fromkeys(c["mac"] for c in clients if c.get("mac"))  # ordered, unique
-    async_add_entities(NetplaneClientTracker(coordinator, mac) for mac in macs)
+
+    def build(data: dict[str, Any]) -> list[NetplaneClientTracker]:
+        macs = dict.fromkeys(c["mac"] for c in data.get("clients", []) if c.get("mac"))  # ordered, unique
+        return [NetplaneClientTracker(coordinator, mac) for mac in macs]
+
+    async_add_discovered(entry, coordinator, async_add_entities, build)
 
 
 class NetplaneClientTracker(CoordinatorEntity[NetplaneCoordinator], ScannerEntity):

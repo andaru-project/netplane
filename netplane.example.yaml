@@ -5,8 +5,10 @@ server:
   db_path: "/data/netplane.db"
   retention: "24h"
   trust_ingress_proxy: true
-  # Optional bearer token for standalone API access (Home Assistant integration):
-  # api_token_secret: "${NETPLANE_API_TOKEN}"
+  # Bearer token required for API access outside Home Assistant Ingress (export
+  # NETPLANE_API_TOKEN before starting; in the add-on, set the api_token option).
+  # Remove this line only when the server listens on loopback (listen: "127.0.0.1:8099").
+  api_token_secret: "${NETPLANE_API_TOKEN}"
 
 targets:
   - id: core-pfsense
@@ -24,6 +26,9 @@ targets:
     driver: rtlplayground
     endpoint: "http://192.0.2.10"
     poll_interval: "15s"
+    settings:
+      # Plain-HTTP endpoint: credentials cross the LAN unencrypted. Prefer https:// where supported.
+      allow_insecure_http: true
     secrets:
       username: "${LG510S_USER}"
       password: "${LG510S_PASS}"

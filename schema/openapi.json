@@ -115,7 +115,8 @@
         ],
         "responses": {
           "200": { "description": "TargetStatus" },
-          "404": { "description": "Target not found" }
+          "404": { "description": "Target not found" },
+          "409": { "description": "Target is disabled" }
         }
       }
     },
@@ -134,10 +135,28 @@
       "post": {
         "operationId": "runDiagnostic",
         "summary": "Execute an on-demand diagnostic (fdb_lookup, ping, traceroute, cable_test)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["kind", "target"],
+                "properties": {
+                  "kind": { "type": "string", "enum": ["fdb_lookup", "ping", "traceroute", "cable_test"] },
+                  "device_id": { "type": "string", "description": "Required for every kind except fdb_lookup" },
+                  "target": { "type": "string", "description": "MAC, IP or hostname for fdb_lookup; the host or port to test for device-side kinds" },
+                  "params": { "type": "object", "additionalProperties": { "type": "string" } }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": { "description": "DiagnosticResult" },
           "400": { "description": "Invalid diagnostic request" },
-          "404": { "description": "Device or target not found" }
+          "404": { "description": "Device or target not found" },
+          "500": { "description": "Diagnostic failed or its result could not be saved" }
         }
       }
     },

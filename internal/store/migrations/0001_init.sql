@@ -22,8 +22,9 @@ CREATE TABLE IF NOT EXISTS target_snapshots (
     snapshot_json TEXT NOT NULL
 );
 
+-- One row per target observing a device: overlapping targets may report the same ID.
 CREATE TABLE IF NOT EXISTS devices (
-    id          TEXT PRIMARY KEY,
+    id          TEXT NOT NULL,
     target_id   TEXT NOT NULL,
     driver      TEXT NOT NULL,
     name        TEXT NOT NULL,
@@ -32,19 +33,22 @@ CREATE TABLE IF NOT EXISTS devices (
     mgmt_ip     TEXT NOT NULL DEFAULT '',
     online      INTEGER NOT NULL DEFAULT 0,
     last_seen   INTEGER NOT NULL,
-    data_json   TEXT NOT NULL
+    data_json   TEXT NOT NULL,
+    PRIMARY KEY (id, target_id)
 );
 CREATE INDEX IF NOT EXISTS idx_devices_target ON devices(target_id);
 CREATE INDEX IF NOT EXISTS idx_devices_mac ON devices(primary_mac);
 
+-- Keyed per target: two targets reading one port keep separate baselines.
 CREATE TABLE IF NOT EXISTS link_counter_state (
+    target_id    TEXT NOT NULL,
     device_id    TEXT NOT NULL,
     if_name      TEXT NOT NULL,
     collected_at INTEGER NOT NULL,
     rx_bytes     INTEGER NOT NULL,
     tx_bytes     INTEGER NOT NULL,
     counter32    INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (device_id, if_name)
+    PRIMARY KEY (target_id, device_id, if_name)
 );
 
 CREATE TABLE IF NOT EXISTS link_samples (

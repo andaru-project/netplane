@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -56,6 +57,9 @@ func (apiMockDriver) Poll(_ context.Context, cfg driver.TargetConfig) (*driver.S
 }
 
 func (apiMockDriver) RunDiagnostic(_ context.Context, _ driver.TargetConfig, req model.DiagnosticRequest) (*model.DiagnosticResult, error) {
+	if req.Target == "unsaveable" {
+		return &model.DiagnosticResult{Kind: req.Kind, Structured: make(chan int)}, nil // JSON encoding fails
+	}
 	return &model.DiagnosticResult{
 		Kind:       req.Kind,
 		DeviceID:   req.DeviceID,
@@ -322,6 +326,8 @@ func TestDiagnosticsFdbLookupAndDeviceRPC(t *testing.T) {
 		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"missing","target":"1.1.1.1"}`, http.StatusNotFound},
 		{"POST", "/api/v1/diagnostics", `{"kind":"fdb_lookup","target":"nas"}`, http.StatusOK},
 		{"POST", "/api/v1/diagnostics", `{"kind":"fdb_lookup","target":"00:00:00:00:00:99"}`, http.StatusOK},
+		// A run whose history write fails is reported, not returned as saved.
+		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"mock:02:51:0a:00:00:01","target":"unsaveable"}`, http.StatusInternalServerError},
 	} {
 		var rBody io.Reader
 		if tc.body != "" {
@@ -373,5 +379,65 @@ func TestSSEEventStream(t *testing.T) {
 	}
 	if !gotEvent {
 		t.Fatal("did not receive published SSE event")
+	}
+}
+
+func TestFdbLookupComparesIPsByValueAndDisabledPoll(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/diagnostics",
+		strings.NewReader(`{"kind":"fdb_lookup","target":"::ffff:192.0.2.55"}`)))
+	var res model.DiagnosticResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || !res.OK {
+		t.Fatalf("fdb_lookup by mapped IP = %d %s", rec.Code, rec.Body.String())
+	}
+
+	off := srv.opts.Targets[0]
+	off.Enabled = false
+	opts := srv.opts
+	opts.Targets = []driver.TargetConfig{off}
+	rec = httptest.NewRecorder()
+	New(opts).ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/targets/t1/poll", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("poll disabled target = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTrustedIngressMappedPrefix(t *testing.T) {
+	s := &Server{opts: Options{TrustIngressProxy: true}, trustedIngress: parseTrustedCIDRs([]string{"::ffff:172.30.32.0/120", "::ffff:10.0.0.9"})}
+	for addr, want := range map[string]bool{
+		"172.30.32.2:1234":       true,
+		"[::ffff:172.30.32.7]:1": true,
+		"10.0.0.9:1":             true,
+		"172.30.33.2:1234":       false,
+	} {
+		if got := s.isTrustedIngressPeer(addr); got != want {
+			t.Errorf("isTrustedIngressPeer(%s) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
+func TestDiagnosticBodyReadTimeout(t *testing.T) {
+	old := bodyReadTimeout
+	bodyReadTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { bodyReadTimeout = old }) // after ts.Close below has stopped every handler
+	srv, _ := newTestServer(t, "")
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// Complete headers and a valid JSON value, then a stalled remainder of the declared body.
+	_, _ = io.WriteString(conn, "POST /api/v1/diagnostics HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"kind\":\"fdb_lookup\",\"target\":\"nas\"}")
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no response to a stalled body: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 }

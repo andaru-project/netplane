@@ -17,7 +17,7 @@ Expose `core-model` over a clean, documented HTTP REST + Server-Sent Events (SSE
 
 - **HTTP router:** Go stdlib `net/http` (`http.ServeMux` with method+path patterns).
 - **Config parsing:** `gopkg.in/yaml.v3`.
-- **Auth:** Optional static bearer token (config `server.api_token_secret`, else the `NETPLANE_API_TOKEN` environment variable; the add-on sets it from its `api_token` option). The browser UI sends it as a `SameSite=Strict` `netplane_token` cookie, because `EventSource` cannot set headers. Optional Ingress trusted-proxy bypass only for requests from Home Assistant Supervisor (`172.30.32.2`, overridable with `server.trusted_ingress_cidrs`) that carry an `X-Ingress-Path` under `/api/hassio_ingress/`; loopback is not trusted by default.
+- **Auth:** Optional static bearer token (config `server.api_token_secret`, else the `NETPLANE_API_TOKEN` environment variable; the add-on sets it from its `api_token` option). The browser UI sends it as a `SameSite=Strict` `netplane_token` cookie, because `EventSource` cannot set headers. Optional Ingress trusted-proxy bypass only for requests from Home Assistant Supervisor (`172.30.32.2`, overridable with `server.trusted_ingress_cidrs`) that carry an `X-Ingress-Path` under `/api/hassio_ingress/`; loopback is not trusted by default. Unknown configuration keys are rejected at startup, except inside a target's `settings`; a secret named `NETPLANE_API_TOKEN` is rejected in add-on options.
 - **Wire contract:** `schema/openapi.json` (`Apache-2.0`).
 
 ## 3. Commands
@@ -58,8 +58,8 @@ cmd/
 - `GET /api/v1/topology` → `topology.Graph`
 - `GET /api/v1/clients?online=true&q=<query>` → `{"items":[Client...]}`
 - `GET /api/v1/targets` → `{"items":[TargetConfig...]}` (strictly redacted; zero secrets)
-- `POST /api/v1/targets/{id}/poll` → triggers immediate poll; returns updated `TargetStatus`
-- `POST /api/v1/diagnostics` → runs `DiagnosticRequest` (`fdb_lookup` locally, or delegates to `DiagnosticDriver`), saves to store, returns `DiagnosticResult`
+- `POST /api/v1/targets/{id}/poll` → triggers an immediate poll of an enabled target (409 `TARGET_DISABLED` for a disabled one); returns updated `TargetStatus`
+- `POST /api/v1/diagnostics` → runs `DiagnosticRequest` (`fdb_lookup` locally, or delegates to `DiagnosticDriver`), saves to store, returns `DiagnosticResult`; if the save fails it returns 500 `STORE_ERROR` without re-running the diagnostic
 - `GET /api/v1/diagnostics?device_id=...&limit=...` → `{"items":[DiagnosticResult...]}`
 - `GET /api/v1/events/stream` → `text/event-stream` (`event: <type>\ndata: <json>\n\n`)
 

@@ -3,6 +3,8 @@ package poller
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -36,7 +38,7 @@ func TestSchedulerConcurrentIsolationAndShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open store: %v", err)
 	}
-	defer st.Close()
+	t.Cleanup(func() { _ = st.Close() })
 
 	reg := driver.NewRegistry()
 	goodDrv := &mockDriver{
@@ -86,14 +88,18 @@ func TestSchedulerConcurrentIsolationAndShutdown(t *testing.T) {
 		sched.Run(runCtx, targets)
 		close(done)
 	}()
+	// Runs before the store closes (cleanups run last-in first-out), also when a check fails.
+	t.Cleanup(func() { cancel(); <-done })
 
-	// Wait until goodDrv completes at least 2 polls (triggering link transition + topology update).
-	deadline := time.Now().Add(2 * time.Second)
-	for goodDrv.calls.Load() < 2 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if goodDrv.calls.Load() < 2 {
-		t.Fatalf("expected >= 2 polls on good target, got %d", goodDrv.calls.Load())
+	// Wait until the good target's second poll has committed its link transition.
+	timeout := time.After(2 * time.Second)
+	for gotDown := false; !gotDown; {
+		select {
+		case ev := <-evCh:
+			gotDown = ev.Type == events.LinkDown && ev.TargetID == "t-good"
+		case <-timeout:
+			t.Fatalf("no link.down event for t-good after %d polls", goodDrv.calls.Load())
+		}
 	}
 
 	stopStart := time.Now()
@@ -123,9 +129,6 @@ func TestSchedulerConcurrentIsolationAndShutdown(t *testing.T) {
 	if raw, ok, err := st.LoadTopologyRaw(ctx); err != nil || !ok || len(raw) == 0 {
 		t.Fatalf("expected persisted topology, got (%s, %v, %v)", raw, ok, err)
 	}
-	if len(evCh) == 0 {
-		t.Fatal("expected emitted events on bus")
-	}
 }
 
 func TestPollOnceUnknownDriverAndBackoff(t *testing.T) {
@@ -134,9 +137,17 @@ func TestPollOnceUnknownDriverAndBackoff(t *testing.T) {
 	defer st.Close()
 
 	sched := New(driver.NewRegistry(), st, nil, nil)
-	err := sched.PollOnce(ctx, driver.TargetConfig{ID: "t1", Driver: "nonexistent"})
-	if err == nil {
-		t.Fatal("expected error for unknown driver")
+	// A target whose driver is unknown (say, misspelled after a restart) still goes offline.
+	if _, err := st.SaveSnapshot(ctx, &driver.Snapshot{TargetID: "t1", Devices: []model.Device{{ID: "d1", Online: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	for range offlineAfterFailures {
+		if err := sched.PollOnce(ctx, driver.TargetConfig{ID: "t1", Driver: "nonexistent"}); err == nil {
+			t.Fatal("expected error for unknown driver")
+		}
+	}
+	if d, ok, err := st.GetDevice(ctx, "d1"); err != nil || !ok || d.Online {
+		t.Fatalf("device after unknown-driver failures = (%+v, %v, %v), want offline", d, ok, err)
 	}
 	if got := backoffDuration(10*time.Second, 0, time.Minute); got != 10*time.Second {
 		t.Fatalf("backoff(0) = %v", got)
@@ -232,5 +243,58 @@ func TestCancelledPollIsNotAFailure(t *testing.T) {
 	_ = sched.PollOnce(ctx, driver.TargetConfig{ID: "t1", Driver: "mock", Enabled: true})
 	if st := sched.Status()["t1"]; st.ConsecutiveFailures != 0 {
 		t.Fatalf("cancellation recorded as failure: %+v", st)
+	}
+}
+
+func TestFailedOfflineRecomputeIsRetried(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "test.db")
+	st, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+
+	drv := &mockDriver{kind: "mock", fn: func(_ context.Context, cfg driver.TargetConfig, n int32) (*driver.Snapshot, error) {
+		if n > 1 {
+			return nil, errors.New("dial tcp: connection refused")
+		}
+		return &driver.Snapshot{TargetID: cfg.ID, Devices: []model.Device{{ID: "mock:sw1", Online: true}}}, nil
+	}}
+	reg := driver.NewRegistry()
+	_ = reg.Register(drv)
+	sched := New(reg, st, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cfg := driver.TargetConfig{ID: "t1", Driver: "mock", Enabled: true}
+	_ = sched.PollOnce(ctx, cfg)
+
+	// Another target's unreadable snapshot makes the offline recompute fail.
+	if _, err := raw.Exec(`INSERT INTO target_snapshots (target_id, collected_at, snapshot_json) VALUES ('bad', 0, '{')`); err != nil {
+		t.Fatal(err)
+	}
+	for range offlineAfterFailures {
+		_ = sched.PollOnce(ctx, cfg)
+	}
+	if _, err := raw.Exec(`DELETE FROM target_snapshots WHERE target_id = 'bad'`); err != nil {
+		t.Fatal(err)
+	}
+	_ = sched.PollOnce(ctx, cfg) // nothing new goes offline, but the stale graph must be re-solved
+
+	topo, _, err := st.LoadTopologyRaw(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g struct {
+		Nodes []struct {
+			ID     string `json:"id"`
+			Online bool   `json:"online"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(topo, &g); err != nil || len(g.Nodes) != 1 || g.Nodes[0].Online {
+		t.Fatalf("stored topology nodes = %+v (err %v), want sw1 offline", g.Nodes, err)
 	}
 }

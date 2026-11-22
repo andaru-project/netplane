@@ -63,28 +63,32 @@ func EvaluateSfpAlert(dom *SfpDom, th SfpThresholds) AlertState {
 	if dom == nil || !dom.Present {
 		return AlertOK
 	}
-	if dom.AlertState == AlertCrit || dom.AlertState == AlertWarn {
+	if dom.AlertState != "" && dom.AlertState != AlertUnknown {
 		return dom.AlertState
+	}
+	state := AlertOK
+	raise := func(a AlertState) {
+		if a == AlertCrit || state == AlertOK {
+			state = a
+		}
 	}
 	if dom.RxPowerDbm != nil {
 		rx := *dom.RxPowerDbm
 		if rx < th.RxMinDbm-5.0 || rx > th.RxMaxDbm+3.0 {
-			return AlertCrit
-		}
-		if rx < th.RxMinDbm || rx > th.RxMaxDbm {
-			return AlertWarn
+			raise(AlertCrit)
+		} else if rx < th.RxMinDbm || rx > th.RxMaxDbm {
+			raise(AlertWarn)
 		}
 	}
 	if dom.TempC != nil {
 		t := *dom.TempC
 		if t > th.TempMaxC+10.0 {
-			return AlertCrit
-		}
-		if t > th.TempMaxC {
-			return AlertWarn
+			raise(AlertCrit)
+		} else if t > th.TempMaxC {
+			raise(AlertWarn)
 		}
 	}
-	return AlertOK
+	return state
 }
 
 // ComputeBitrate computes bits-per-second from two cumulative byte counters separated

@@ -3,6 +3,8 @@ package topology
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -195,8 +197,18 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 		return ""
 	}
 
-	infraEdges := make(map[pairKey]*Edge)
+	// Several edges may join one device pair (parallel links); each is one physical link or LAG.
+	infraEdges := make(map[pairKey][]*Edge)
 	infraPorts := make(map[devPortKey]bool)
+	// confirmed records which endpoint names came from the device's own LLDP record (its local
+	// port), as opposed to the peer's possibly differently spelled remote port ID.
+	confirmed := make(map[*Edge]map[string]bool)
+	side := func(e *Edge, devID string) *string {
+		if e.FromID == devID {
+			return &e.FromLink
+		}
+		return &e.ToLink
+	}
 
 	// 1. Direct LLDP edges (confidence 1.0).
 	for _, n := range state.LLDP {
@@ -222,14 +234,31 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 			members = rMembers
 		}
 
-		if existing, ok := infraEdges[pk]; ok {
-			// Fill missing remote port name from the reverse LLDP record.
-			if existing.FromID == n.DeviceID && existing.FromLink == "" {
-				existing.FromLink = localName
+		// Same link: an endpoint port matches. Otherwise a reverse record whose port IDs are
+		// spelled differently joins an edge this device has not confirmed yet.
+		var existing *Edge
+		for _, e := range infraEdges[pk] {
+			if *side(e, n.DeviceID) == localName || (remoteName != "" && *side(e, peerID) == remoteName) {
+				existing = e
+				break
 			}
-			if existing.ToID == n.DeviceID && existing.ToLink == "" {
-				existing.ToLink = localName
+		}
+		if existing == nil {
+			for _, e := range infraEdges[pk] {
+				if !confirmed[e][n.DeviceID] {
+					existing = e
+					break
+				}
 			}
+		}
+		if existing != nil {
+			if !confirmed[existing][n.DeviceID] {
+				*side(existing, n.DeviceID) = localName
+			}
+			if *side(existing, peerID) == "" {
+				*side(existing, peerID) = remoteName
+			}
+			confirmed[existing][n.DeviceID] = true
 			if kind == EdgeLAG {
 				existing.Kind = EdgeLAG
 			}
@@ -251,7 +280,8 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 				SpeedMbps:   spd,
 				MemberLinks: members,
 			}
-			infraEdges[pk] = e
+			infraEdges[pk] = append(infraEdges[pk], e)
+			confirmed[e] = map[string]bool{n.DeviceID: true}
 		}
 		infraPorts[devPortKey{n.DeviceID, localName}] = true
 		if remoteName != "" {
@@ -268,18 +298,18 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 		if peerID == "" && u.PeerMAC != "" {
 			peerID = devByMAC[u.PeerMAC]
 		}
-		if peerID == "" || peerID == u.DeviceID {
+		if _, ok := devByID[peerID]; !ok || peerID == u.DeviceID {
 			continue
 		}
 		pk := makePair(u.DeviceID, peerID)
-		if _, exists := infraEdges[pk]; exists {
+		if len(infraEdges[pk]) > 0 {
 			continue
 		}
 		spd := u.TxRateMbps
 		if u.RxRateMbps > spd {
 			spd = u.RxRateMbps
 		}
-		infraEdges[pk] = &Edge{
+		infraEdges[pk] = []*Edge{{
 			FromID:      peerID,
 			ToID:        u.DeviceID,
 			Kind:        EdgeWirelessUplink,
@@ -287,7 +317,7 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 			Confidence:  0.95,
 			SpeedMbps:   spd,
 			MemberLinks: []string{},
-		}
+		}}
 	}
 
 	// 3. FDB infrastructure edges (confidence 0.85), avoiding transitive shortcuts.
@@ -307,22 +337,22 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 		portMACs[key][f.MAC] = true
 	}
 
-	// Build adjacency from already-known edges to avoid FDB shortcuts across multi-hop LLDP chains.
+	// Adjacency of known edges, so FDB edges never shortcut multi-hop LLDP chains.
+	infraAdj := make(map[string][]string)
+	for pk := range infraEdges {
+		infraAdj[pk.a] = append(infraAdj[pk.a], pk.b)
+		infraAdj[pk.b] = append(infraAdj[pk.b], pk.a)
+	}
 	connected := func(src, dst string) bool {
 		if src == dst {
 			return true
-		}
-		adj := make(map[string][]string)
-		for pk := range infraEdges {
-			adj[pk.a] = append(adj[pk.a], pk.b)
-			adj[pk.b] = append(adj[pk.b], pk.a)
 		}
 		visited := map[string]bool{src: true}
 		q := []string{src}
 		for len(q) > 0 {
 			cur := q[0]
 			q = q[1:]
-			for _, nxt := range adj[cur] {
+			for _, nxt := range infraAdj[cur] {
 				if nxt == dst {
 					return true
 				}
@@ -376,7 +406,7 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 		// never a leaf client access port — mark it even if an LLDP/earlier path already exists.
 		alreadyInfra := infraPorts[devPortKey{c.srcID, normName}]
 		infraPorts[devPortKey{c.srcID, normName}] = true
-		if connected(c.srcID, c.dstID) || alreadyInfra {
+		if alreadyInfra || connected(c.srcID, c.dstID) {
 			continue
 		}
 		kind := EdgeWired
@@ -384,7 +414,9 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 			kind = EdgeLAG
 		}
 		pk := makePair(c.srcID, c.dstID)
-		infraEdges[pk] = &Edge{
+		infraAdj[pk.a] = append(infraAdj[pk.a], pk.b)
+		infraAdj[pk.b] = append(infraAdj[pk.b], pk.a)
+		infraEdges[pk] = []*Edge{{
 			FromID:      c.srcID,
 			FromLink:    normName,
 			ToID:        c.dstID,
@@ -393,7 +425,7 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 			Confidence:  0.85,
 			SpeedMbps:   spd,
 			MemberLinks: members,
-		}
+		}}
 	}
 
 	// 4. Identify root devices and orient edges away from roots via BFS.
@@ -431,7 +463,7 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 		}
 	}
 
-	for _, e := range infraEdges {
+	for _, e := range slices.Concat(slices.Collect(maps.Values(infraEdges))...) {
 		dFrom, okFrom := depth[e.FromID]
 		dTo, okTo := depth[e.ToID]
 		swap := false
@@ -489,14 +521,16 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 			ci.ip = c.IPs[0]
 		}
 		ci.online = ci.online || c.Online
-		if c.ConnectionType == "wireless" && c.AttachedDeviceID != "" {
+		// An attachment to a device missing from the graph would dangle; FDB may still place it.
+		_, attached := devByID[c.AttachedDeviceID]
+		if c.ConnectionType == "wireless" && attached {
 			ci.wireless = true
 			ci.devID = c.AttachedDeviceID
 			ci.ssid = c.SSID
 			if c.TxRateMbps != nil {
 				ci.speed = *c.TxRateMbps
 			}
-		} else if c.AttachedDeviceID != "" && ci.devID == "" {
+		} else if attached && ci.devID == "" {
 			ci.devID = c.AttachedDeviceID
 			ci.link = c.AttachedLink
 		}
@@ -527,7 +561,8 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 		if ci.ip == "" && n.IP != "" {
 			ci.ip = n.IP
 		}
-		if n.State == "reachable" || n.State == "permanent" {
+		// A retained record of an offline device is no proof the client is online.
+		if (n.State == "reachable" || n.State == "permanent") && devByID[n.DeviceID].Online {
 			ci.online = true
 		}
 	}
@@ -547,7 +582,11 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 			if _, isDev := devByMAC[mac]; isDev {
 				continue
 			}
-			ensureClient(mac).online = true
+			if devByID[pk.devID].Online {
+				ensureClient(mac).online = true
+			} else {
+				ensureClient(mac)
+			}
 			clientLeaf[mac] = append(clientLeaf[mac], leafMatch{
 				devID: pk.devID,
 				port:  pk.link,

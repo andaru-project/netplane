@@ -79,6 +79,8 @@ func TestParseErrors(t *testing.T) {
 		{"dup_target_id", "targets:\n  - id: a\n    driver: snmp\n  - id: a\n    driver: snmp"},
 		{"missing_driver", "targets:\n  - id: a"},
 		{"bad_poll_interval", "targets:\n  - id: a\n    driver: snmp\n    poll_interval: -5s"},
+		{"misspelled_server_key", "server:\n  api_token_secert: TOK"},
+		{"misspelled_target_key", "targets:\n  - id: a\n    driver: snmp\n    setings: {}"},
 		{"missing_enabled_secret", "targets:\n  - id: a\n    driver: snmp\n    secrets:\n      community: SNMP_COMM"},
 	}
 	for _, tc := range cases {
@@ -115,5 +117,34 @@ func TestTokenEnvFallbackAndHAOptions(t *testing.T) {
 	}
 	if err := ApplyHAOptions(path); err == nil {
 		t.Fatal("expected error for empty secret name")
+	}
+	t.Setenv(TokenEnv, "")
+	if err := os.WriteFile(path, []byte(`{"api_token":"ha-tok","secrets":[{"name":"NETPLANE_API_TOKEN","value":"x"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyHAOptions(path); err == nil {
+		t.Fatal("expected error for a secret named NETPLANE_API_TOKEN")
+	}
+}
+
+func TestParseKeepsFreeFormSettingsAndEmptyFile(t *testing.T) {
+	none := func(string) (string, bool) { return "", false }
+	cfg, err := Parse([]byte("targets:\n  - id: a\n    driver: snmp\n    settings:\n      any_key: 1\n"), none)
+	if err != nil || cfg.Targets[0].Settings["any_key"] != 1 {
+		t.Fatalf("Parse = (%+v, %v)", cfg, err)
+	}
+	if _, err := Parse(nil, none); err != nil {
+		t.Fatalf("empty config: %v", err)
+	}
+}
+
+func TestExampleConfigParses(t *testing.T) {
+	raw, err := os.ReadFile("../../netplane.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Parse(raw, func(string) (string, bool) { return "x", true })
+	if err != nil || cfg.Server.ResolvedAPIToken != "x" {
+		t.Fatalf("example config = (%+v, %v)", cfg, err)
 	}
 }

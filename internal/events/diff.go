@@ -96,7 +96,9 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 	for _, l := range curr.Links {
 		pl, ok := prevLinks[linkKey{l.DeviceID, l.IfName}]
 		if !ok {
-			continue
+			// New link: no link/STP baseline, but an active SFP alert still fires.
+			pl = l
+			pl.SFP = nil
 		}
 		if pl.LinkUp != l.LinkUp {
 			if l.LinkUp {

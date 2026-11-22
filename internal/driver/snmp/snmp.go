@@ -26,6 +26,7 @@ const (
 	oidIfXTable   = ".1.3.6.1.2.1.31.1.1.1"
 	oidBasePortIf = ".1.3.6.1.2.1.17.1.4.1.2"
 	oidDot1qFdb   = ".1.3.6.1.2.1.17.7.1.2.2.1.2"
+	oidVlanFdbID  = ".1.3.6.1.2.1.17.7.1.4.2.1.3" // dot1qVlanFdbId.<timeMark>.<vlan> = fdbId
 	oidLldpRem    = ".1.0.8802.1.1.2.1.4.1.1"
 	oidLldpLoc    = ".1.0.8802.1.1.2.1.3.7.1"
 	oidPethPort   = ".1.3.6.1.2.1.105.1.1.1"
@@ -37,8 +38,8 @@ type Walker interface {
 	Close() error
 }
 
-// WalkerFactory constructs a Walker for a given target config.
-type WalkerFactory func(cfg driver.TargetConfig) (Walker, error)
+// WalkerFactory constructs a Walker for a given target config; ctx bounds connection setup.
+type WalkerFactory func(ctx context.Context, cfg driver.TargetConfig) (Walker, error)
 
 // Driver polls managed switches and routers over SNMP v2c or SNMP v3.
 type Driver struct {
@@ -63,6 +64,9 @@ func (d *Driver) ValidateConfig(cfg driver.TargetConfig) error {
 	if strings.TrimSpace(cfg.Endpoint) == "" {
 		return fmt.Errorf("snmp target %q: endpoint (host[:port]) is required", cfg.ID)
 	}
+	if _, _, err := splitEndpoint(cfg.Endpoint); err != nil {
+		return fmt.Errorf("snmp target %q: %w", cfg.ID, err)
+	}
 	ver := snmpVersion(cfg)
 	switch ver {
 	case "2c":
@@ -85,6 +89,9 @@ func (d *Driver) ValidateConfig(cfg driver.TargetConfig) error {
 		if pp != "" && parsePrivProto(pp) == gosnmp.NoPriv {
 			return fmt.Errorf("snmp v3 target %q: unsupported priv_protocol %q", cfg.ID, pp)
 		}
+		if pp != "" && ap == "" {
+			return fmt.Errorf("snmp v3 target %q: priv_protocol requires auth_protocol (USM has no privacy without authentication)", cfg.ID)
+		}
 		if pp != "" && cfg.ResolvedSecrets["priv_passphrase"] == "" {
 			return fmt.Errorf("snmp v3 target %q: priv_passphrase secret is required for priv_protocol %q", cfg.ID, pp)
 		}
@@ -99,7 +106,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	if err := d.ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
-	w, err := d.newWalker(cfg)
+	w, err := d.newWalker(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("snmp connect %s: %w", cfg.Endpoint, err)
 	}
@@ -129,6 +136,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	ifXPDUs, _ := w.Walk(ctx, oidIfXTable)
 	basePortPDUs, _ := w.Walk(ctx, oidBasePortIf)
 	fdbPDUs, _ := w.Walk(ctx, oidDot1qFdb)
+	vlanFdbPDUs, _ := w.Walk(ctx, oidVlanFdbID)
 	lldpPDUs, _ := w.Walk(ctx, oidLldpRem)
 	lldpLocPDUs, _ := w.Walk(ctx, oidLldpLoc)
 	poePDUs, _ := w.Walk(ctx, oidPethPort)
@@ -144,10 +152,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		mac       string
 		adminUp   bool
 		operUp    bool
-		inBytes   uint64
-		outBytes  uint64
-		in32      bool // inBytes from 32-bit ifInOctets, no ifHCInOctets seen
-		out32     bool
+		in32      uint64 // ifInOctets
+		out32     uint64 // ifOutOctets
+		inHC      uint64 // ifHCInOctets
+		outHC     uint64 // ifHCOutOctets
+		hasInHC   bool
+		hasOutHC  bool
 		inPkts    uint64
 		outPkts   uint64
 		inErr     uint64
@@ -185,19 +195,13 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		case 8:
 			a.operUp = pduUint64(p) == 1
 		case 10:
-			if a.inBytes == 0 {
-				a.inBytes = pduUint64(p)
-				a.in32 = true
-			}
+			a.in32 = pduUint64(p)
 		case 13:
 			a.inDrop = pduUint64(p)
 		case 14:
 			a.inErr = pduUint64(p)
 		case 16:
-			if a.outBytes == 0 {
-				a.outBytes = pduUint64(p)
-				a.out32 = true
-			}
+			a.out32 = pduUint64(p)
 		case 19:
 			a.outDrop = pduUint64(p)
 		case 20:
@@ -215,13 +219,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		case 1:
 			a.name = pduString(p)
 		case 6:
-			a.inBytes = pduUint64(p)
-			a.in32 = false
+			a.inHC, a.hasInHC = pduUint64(p), true
 		case 7:
 			a.inPkts = pduUint64(p)
 		case 10:
-			a.outBytes = pduUint64(p)
-			a.out32 = false
+			a.outHC, a.hasOutHC = pduUint64(p), true
 		case 11:
 			a.outPkts = pduUint64(p)
 		case 15:
@@ -242,8 +244,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 	}
 
-	// PoE status per port index (group.port -> enabled/state).
-	poeByPort := map[int]*model.PortPoE{}
+	// PoE status per pethPsePortTable index (group.port -> enabled/state).
+	poeByKey := map[[2]int]*model.PortPoE{}
 	for _, p := range poePDUs {
 		rest := strings.TrimPrefix(p.Name, oidPethPort+".")
 		parts := strings.Split(rest, ".")
@@ -251,14 +253,16 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			continue
 		}
 		col, err1 := strconv.Atoi(parts[0])
-		portIdx, err2 := strconv.Atoi(parts[2])
-		if err1 != nil || err2 != nil {
+		group, err2 := strconv.Atoi(parts[1])
+		portIdx, err3 := strconv.Atoi(parts[2])
+		if err1 != nil || err2 != nil || err3 != nil {
 			continue
 		}
-		poe := poeByPort[portIdx]
+		key := [2]int{group, portIdx}
+		poe := poeByKey[key]
 		if poe == nil {
 			poe = &model.PortPoE{Supported: true}
-			poeByPort[portIdx] = poe
+			poeByKey[key] = poe
 		}
 		switch col {
 		case 3: // pethPsePortAdminEnable (1=true, 2=false)
@@ -274,6 +278,20 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			case 4:
 				poe.State = "fault"
 			}
+		}
+	}
+
+	// POWER-ETHERNET-MIB defines no group.port -> ifIndex mapping. With a single PSE group,
+	// treat pethPsePortIndex as the ifIndex (common on single-unit switches); with several
+	// groups (stacks) the same port number is ambiguous, so attach nothing.
+	poeByIf := map[int]*model.PortPoE{}
+	groups := map[int]bool{}
+	for k := range poeByKey {
+		groups[k[0]] = true
+	}
+	if len(groups) == 1 {
+		for k, poe := range poeByKey {
+			poeByIf[k[1]] = poe
 		}
 	}
 
@@ -305,9 +323,6 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	now := time.Now().UTC()
 	devID := "snmp:" + cfg.ID
-	if primaryMAC != "" {
-		devID = "snmp:" + primaryMAC
-	}
 	name := cfg.Name
 	if name == "" {
 		name = sysName
@@ -327,7 +342,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	if len(lldpPDUs) > 0 {
 		caps = append(caps, model.CapLLDP)
 	}
-	if len(poeByPort) > 0 {
+	if len(poeByKey) > 0 {
 		caps = append(caps, model.CapPoE)
 	}
 
@@ -372,6 +387,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 		mtu := a.mtu
 		media := guessSnmpMedia(ifName, speedMbps)
+		// Report both directions at one width: the store compares a single width flag per link.
+		hc := a.hasInHC && a.hasOutHC
+		rx, tx := a.in32, a.out32
+		if hc {
+			rx, tx = a.inHC, a.outHC
+		}
 		snap.Links = append(snap.Links, model.Link{
 			DeviceID:  devID,
 			Index:     idx,
@@ -384,31 +405,56 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			SpeedMbps: speedMbps,
 			MTU:       &mtu,
 			Media:     media,
-			PoE:       poeByPort[idx],
+			PoE:       poeByIf[idx],
 			Counters: &model.PortCounters{
-				RxBytes:   a.inBytes,
-				TxBytes:   a.outBytes,
+				RxBytes:   rx,
+				TxBytes:   tx,
 				RxPackets: a.inPkts,
 				TxPackets: a.outPkts,
 				RxErrors:  a.inErr,
 				TxErrors:  a.outErr,
 				RxDropped: a.inDrop,
 				TxDropped: a.outDrop,
-				Counter32: a.in32 || a.out32,
+				Counter32: !hc,
 			},
 		})
 	}
 
-	// Q-BRIDGE-MIB FDB: .1.3.6.1.2.1.17.7.1.2.2.1.2.<vlan>.<m0>.<m1>.<m2>.<m3>.<m4>.<m5> = bridgePort
+	// dot1qTpFdbTable is indexed by dot1qFdbId, not VLAN: resolve it via dot1qVlanFdbId.
+	// A database shared by several VLANs (SVL) cannot attribute a MAC to one VLAN.
+	fdbVLANs := map[int]map[int]bool{}
+	for _, p := range vlanFdbPDUs {
+		parts := strings.Split(strings.TrimPrefix(p.Name, oidVlanFdbID+"."), ".")
+		if len(parts) != 2 {
+			continue
+		}
+		vlan, err := strconv.Atoi(parts[1])
+		if err != nil {
+			continue
+		}
+		fid := int(pduUint64(p))
+		if fdbVLANs[fid] == nil {
+			fdbVLANs[fid] = map[int]bool{}
+		}
+		fdbVLANs[fid][vlan] = true
+	}
+
+	// Q-BRIDGE-MIB FDB: .1.3.6.1.2.1.17.7.1.2.2.1.2.<fdbId>.<m0>.<m1>.<m2>.<m3>.<m4>.<m5> = bridgePort
 	for _, p := range fdbPDUs {
 		rest := strings.TrimPrefix(p.Name, oidDot1qFdb+".")
 		parts := strings.Split(rest, ".")
 		if len(parts) != 7 {
 			continue
 		}
-		vlan, err := strconv.Atoi(parts[0])
+		fid, err := strconv.Atoi(parts[0])
 		if err != nil {
 			continue
+		}
+		vlan := 0 // unknown
+		if vs := fdbVLANs[fid]; len(vs) == 1 {
+			for v := range vs {
+				vlan = v
+			}
 		}
 		b := make(net.HardwareAddr, 6)
 		valid := true
@@ -424,13 +470,16 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			continue
 		}
 		bp := int(pduUint64(p))
+		if bp == 0 { // port 0: location not learned
+			continue
+		}
 		ifIdx := bp
 		if mapped, ok := bridgePortToIf[bp]; ok {
 			ifIdx = mapped
 		}
 		linkName := ifIdxToName[ifIdx]
 		if linkName == "" {
-			linkName = fmt.Sprintf("if%d", ifIdx)
+			continue
 		}
 		snap.FDB = append(snap.FDB, model.FdbEntry{
 			DeviceID: devID,
@@ -541,16 +590,27 @@ func (w *goSnmpWalker) Close() error {
 	return nil
 }
 
-func defaultWalkerFactory(cfg driver.TargetConfig) (Walker, error) {
-	host, portStr, err := net.SplitHostPort(cfg.Endpoint)
-	port := uint16(161)
+// splitEndpoint returns host and port, defaulting to 161 only when no port is given.
+func splitEndpoint(endpoint string) (string, uint16, error) {
+	host, portStr, err := net.SplitHostPort(endpoint)
 	if err != nil {
-		host = cfg.Endpoint
-	} else if p, err := strconv.Atoi(portStr); err == nil && p > 0 && p <= 65535 {
-		port = uint16(p)
+		return endpoint, 161, nil
+	}
+	p, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil || p == 0 {
+		return "", 0, fmt.Errorf("invalid port %q in endpoint %q", portStr, endpoint)
+	}
+	return host, uint16(p), nil
+}
+
+func defaultWalkerFactory(ctx context.Context, cfg driver.TargetConfig) (Walker, error) {
+	host, port, err := splitEndpoint(cfg.Endpoint)
+	if err != nil {
+		return nil, err
 	}
 
 	g := &gosnmp.GoSNMP{
+		Context:        ctx,
 		Target:         host,
 		Port:           port,
 		Timeout:        5 * time.Second,
