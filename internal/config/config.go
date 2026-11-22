@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -26,6 +27,7 @@ type ServerConfig struct {
 	TrustIngressProxy   bool     `yaml:"trust_ingress_proxy"`
 	TrustedIngressCIDRs []string `yaml:"trusted_ingress_cidrs"`
 	AllowedHosts        []string `yaml:"allowed_hosts"`
+	TrustedOrigins      []string `yaml:"trusted_origins"`
 	APITokenSecret      string   `yaml:"api_token_secret"`
 	ResolvedAPIToken    string   `yaml:"-"`
 }
@@ -134,9 +136,14 @@ func Parse(data []byte, lookupEnv func(string) (string, bool)) (*Config, error) 
 	for i, h := range fc.Server.AllowedHosts {
 		n := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
 		if !hostNameRe.MatchString(n) {
-			return nil, fmt.Errorf("server.allowed_hosts[%d] %q: want a bare host name (no scheme, port, path or wildcard)", i, h)
+			return nil, fmt.Errorf("server.allowed_hosts[%d] %q: want a bare ASCII host name (punycode for IDNs; no scheme, port, path or wildcard)", i, h)
 		}
 		fc.Server.AllowedHosts[i] = n
+	}
+	for i, o := range fc.Server.TrustedOrigins {
+		if err := http.NewCrossOriginProtection().AddTrustedOrigin(o); err != nil {
+			return nil, fmt.Errorf("server.trusted_origins[%d]: %w", i, err)
+		}
 	}
 	if fc.Server.APITokenSecret != "" {
 		envName := stripEnvSyntax(fc.Server.APITokenSecret)

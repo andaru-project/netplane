@@ -161,3 +161,13 @@ func TestAllowedHostsNormalizedAndValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestTrustedOriginsValidated(t *testing.T) {
+	lookup := func(string) (string, bool) { return "", false }
+	if _, err := Parse([]byte("server:\n  trusted_origins: [\"https://netplane.example\"]\n"), lookup); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse([]byte("server:\n  trusted_origins: [\"netplane.example\"]\n"), lookup); err == nil {
+		t.Fatal("an origin without a scheme was accepted")
+	}
+}

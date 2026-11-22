@@ -111,6 +111,7 @@ func newTestServer(t *testing.T, token string) (*Server, *events.Bus) {
 		APIToken:          token,
 		TrustIngressProxy: true,
 		AllowedHosts:      []string{"example.com"}, // httptest.NewRequest's default Host
+		TrustedOrigins:    []string{"https://netplane.example"},
 		WebFS:             webFS,
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -473,15 +474,15 @@ func TestBrowserGuards(t *testing.T) {
 	// Cross-origin writes are refused, with or without a token.
 	type wcase struct{ host, origin, fetchSite string }
 	for c, refused := range map[wcase]bool{
-		{"192.0.2.10:8099", "http://evil.example", ""}:                true,
-		{"192.0.2.10:8099", "null", ""}:                               true,
-		{"192.0.2.10:8099", "http://u@192.0.2.10:8099", ""}:           true,
-		{"192.0.2.10:8099", "http://192.0.2.10:8099", ""}:             false,
-		{"192.0.2.10:80", "http://192.0.2.10", ""}:                    false, // default port filled in
-		{"192.0.2.10:8099", "", ""}:                                   false,
-		{"192.0.2.10", "http://192.0.2.10:8080", ""}:                  true, // another port on the same host
-		{"127.0.0.1:8099", "https://example.com", ""}:                 true, // allowed_hosts is not an origin list
-		{"127.0.0.1:8099", "https://netplane.example", "same-origin"}: false,
+		{"192.0.2.10:8099", "http://evil.example", ""}:              true,
+		{"192.0.2.10:8099", "null", ""}:                             true,
+		{"192.0.2.10", "http://192.0.2.10:8080", ""}:                true, // another port
+		{"192.0.2.10:8099", "http://192.0.2.10:8099", "cross-site"}: true,
+		{"192.0.2.10:8099", "http://192.0.2.10:8099", ""}:           false,
+		{"192.0.2.10:8099", "", ""}:                                 false, // non-browser client
+		{"127.0.0.1:8099", "http://evil.example", "same-origin"}:    false,
+		{"127.0.0.1:8099", "https://netplane.example", "same-site"}: false, // trusted origin
+		{"127.0.0.1:8099", "https://example.com", ""}:               true,  // allowed_hosts is not an origin list
 	} {
 		for _, srv := range []http.Handler{open, tok} {
 			req := httptest.NewRequest("POST", "/api/v1/diagnostics", strings.NewReader(`{"kind":"fdb_lookup","target":"192.0.2.55"}`))

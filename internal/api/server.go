@@ -35,7 +35,8 @@ type Options struct {
 	APIToken            string
 	TrustIngressProxy   bool
 	TrustedIngressCIDRs []string
-	AllowedHosts        []string // extra public host names accepted as Host without an API token
+	AllowedHosts        []string // extra Host names accepted without an API token; lowercase, no trailing dot
+	TrustedOrigins      []string // extra origins (scheme://host[:port]) allowed to send writes
 	WebFS               fs.FS    // optional embedded SPA root containing index.html
 	Logger              *slog.Logger
 }
@@ -63,6 +64,7 @@ type Server struct {
 	mux            *http.ServeMux
 	handler        http.Handler
 	trustedIngress []netip.Prefix
+	csrf           *http.CrossOriginProtection
 	targets        map[string]driver.TargetConfig // read-only after New
 }
 
@@ -74,16 +76,12 @@ func New(opts Options) *Server {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	hosts := make([]string, 0, len(opts.AllowedHosts))
-	for _, h := range opts.AllowedHosts {
-		hosts = append(hosts, strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), ".")))
-	}
-	opts.AllowedHosts = hosts
 
 	s := &Server{
 		opts:           opts,
 		mux:            http.NewServeMux(),
 		trustedIngress: parseTrustedCIDRs(opts.TrustedIngressCIDRs),
+		csrf:           http.NewCrossOriginProtection(),
 		targets:        make(map[string]driver.TargetConfig, len(opts.Targets)),
 	}
 	for _, t := range opts.Targets {
@@ -91,6 +89,11 @@ func New(opts Options) *Server {
 	}
 
 	s.registerRoutes()
+	for _, o := range opts.TrustedOrigins {
+		if err := s.csrf.AddTrustedOrigin(o); err != nil {
+			opts.Logger.Warn("ignoring invalid trusted origin", "origin", o, "err", err) // config.Parse validates
+		}
+	}
 	s.handler = s.withBrowserGuards(s.withIngress(s.withAuth(s.mux)))
 	return s
 }

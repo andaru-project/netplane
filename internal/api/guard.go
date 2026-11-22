@@ -2,11 +2,9 @@
 package api
 
 import (
-	"cmp"
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"slices"
 	"strings"
 )
@@ -17,26 +15,22 @@ import (
 var privateSuffixes = []string{".local", ".lan", ".home.arpa", ".internal", ".localhost"}
 
 // withBrowserGuards protects against a malicious web page in the operator's browser:
-//   - a write (any method but GET, HEAD, OPTIONS) from another origin is refused (cross-site
-//     request forgery: text/plain POSTs need no CORS preflight);
+//   - a write (any method but GET, HEAD, OPTIONS) from another origin is refused, using the
+//     standard library's cross-origin protection (Sec-Fetch-Site, else Origin against Host)
+//     plus server.trusted_origins for proxies that rewrite Host;
 //   - without an API token, a request whose Host is a public DNS name is refused (421), since
 //     only a DNS-rebinding page would reach this server under such a name.
 //
-// Requests the trusted ingress proxy forwards (peer and X-Ingress-Path, as for auth) are
-// exempt. A reverse proxy in front of netplane must pass the browser's Host through.
+// Requests the trusted ingress proxy forwards are exempt, as for authentication.
 func (s *Server) withBrowserGuards(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.fromIngressProxy(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		switch r.Method {
-		case http.MethodGet, http.MethodHead, http.MethodOptions:
-		default:
-			if !s.sameOrigin(r) {
-				writeError(w, http.StatusForbidden, "CROSS_ORIGIN", "cross-origin request refused")
-				return
-			}
+		if err := s.csrf.Check(r); err != nil {
+			writeError(w, http.StatusForbidden, "CROSS_ORIGIN", "cross-origin request refused")
+			return
 		}
 		if s.opts.APIToken == "" && !s.allowedHost(r.Host) {
 			writeError(w, http.StatusMisdirectedRequest, "HOST_NOT_ALLOWED",
@@ -45,30 +39,6 @@ func (s *Server) withBrowserGuards(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// sameOrigin accepts a write without Origin (non-browser clients), one the browser marks
-// same-origin (which also covers proxies that rewrite Host), or one whose Origin is exactly
-// this Host, a port-less Host meaning the scheme's default port.
-func (s *Server) sameOrigin(r *http.Request) bool {
-	o := r.Header.Get("Origin")
-	if o == "" || r.Header.Get("Sec-Fetch-Site") == "same-origin" {
-		return true
-	}
-	u, err := url.Parse(o)
-	if err != nil || u.User != nil || u.Host == "" {
-		return false // includes "null"
-	}
-	defaultPort := "80"
-	if u.Scheme == "https" {
-		defaultPort = "443"
-	}
-	oPort := cmp.Or(u.Port(), defaultPort)
-	rHost, rPort, err := net.SplitHostPort(r.Host)
-	if err != nil {
-		rHost, rPort = r.Host, defaultPort
-	}
-	return strings.EqualFold(u.Hostname(), strings.Trim(rHost, "[]")) && oPort == rPort
 }
 
 // allowedHost accepts IP literals, single-label names, private suffixes and allowed_hosts.
@@ -89,5 +59,5 @@ func (s *Server) allowedHost(hostport string) bool {
 			return true
 		}
 	}
-	return slices.Contains(s.opts.AllowedHosts, host) // normalized by New
+	return slices.Contains(s.opts.AllowedHosts, host) // normalized by config.Parse
 }
