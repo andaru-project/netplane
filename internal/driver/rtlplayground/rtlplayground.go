@@ -75,7 +75,8 @@ type schedule struct{ ok, next time.Time }
 // target, so its fields need no lock of their own. It lives in memory only, so each start of
 // netplane takes a new login slot; the old one ages out on the switch (session_timeout).
 type target struct {
-	password string    // the password this state was built with
+	base     string    // the endpoint this state belongs to
+	password string    // the password last used
 	session  string    // "session" cookie value
 	jsonNext time.Time // after a global failure, no JSON request (or login) before this
 
@@ -163,11 +164,15 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	st := d.state(cfg.ID)
 	now := time.Now()
-	if c.password != st.password {
-		// Password set, changed or removed: start over. A dropped session keeps its slot on
-		// the switch until it ages out (the firmware has no logout).
-		*st = target{password: c.password}
+	switch {
+	case c.base != st.base || (c.password == "" && st.password != ""):
+		// Another switch, or the password removed: start over. A dropped session keeps its
+		// slot on the switch until it ages out (the firmware has no logout).
+		*st = target{base: c.base}
+	case c.password != st.password:
+		st.jsonNext = time.Time{} // a corrected password need not wait out the old pause
 	}
+	st.password = c.password
 	if c.password != "" && !now.Before(st.jsonNext) {
 		// Best effort: a failure keeps that data set's cache. A refused login, a rejected
 		// session or a transport failure (the web server's only slot busy or dead) pauses all
@@ -183,7 +188,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				s.ok, s.next = now, now.Add(every)
 			case ctx.Err() != nil:
 				return false // cancelled by the caller, not the device's fault
-			case errors.Is(err, errLoginRefused), errors.Is(err, errSessionRejected), errors.As(err, new(*url.Error)):
+			case errors.Is(err, errLoginRefused), errors.Is(err, errSessionRejected), errors.As(err, new(transportError)):
 				st.jsonNext = now.Add(retryAfter)
 				return false
 			default:
@@ -228,12 +233,22 @@ func (c *client) do(ctx context.Context, req *http.Request, limit int64) (*http.
 	c.sent = true
 	resp, err := c.http.Do(req.WithContext(ctx))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, transportError{err}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
-	return resp, body, err
+	if err != nil {
+		return nil, nil, transportError{err} // a reply stalled or cut mid-body
+	}
+	return resp, body, nil
 }
+
+// transportError marks a failure to exchange a request with the switch at all, as opposed
+// to an HTTP status or a malformed reply.
+type transportError struct{ err error }
+
+func (e transportError) Error() string { return e.err.Error() }
+func (e transportError) Unwrap() error { return e.err }
 
 func sleep(ctx context.Context, d time.Duration) error {
 	select {
@@ -307,7 +322,8 @@ func (c *client) login(ctx context.Context, st *target) error {
 // getJSON fetches an authenticated JSON endpoint, logging in first or again after a 401.
 func (c *client) getJSON(ctx context.Context, st *target, path string, out any) error {
 	for attempt := 0; attempt < 2; attempt++ {
-		if st.session == "" {
+		fresh := st.session == ""
+		if fresh {
 			if err := c.login(ctx, st); err != nil {
 				return err
 			}
@@ -325,7 +341,12 @@ func (c *client) getJSON(ctx context.Context, st *target, path string, out any) 
 		case http.StatusOK:
 			return json.Unmarshal(body, out)
 		case http.StatusUnauthorized:
-			st.session = "" // expired or evicted: log in again, once
+			st.session = ""
+			if fresh {
+				// Rejected right after logging in: another login would only take another slot.
+				return fmt.Errorf("rtlplayground %s: %w", path, errSessionRejected)
+			}
+			// The kept session expired or was evicted: log in again, once.
 		default:
 			return fmt.Errorf("rtlplayground %s: HTTP %d", path, resp.StatusCode)
 		}
@@ -655,7 +676,7 @@ func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target, now ti
 		m.mac = cmp.Or(m.mac, info.MACAddress)
 		// Without NTP sync the exporter omits boot time: age the cached value. A reboot shows
 		// at the next info refresh either way.
-		if uptime == 0 {
+		if uptime == 0 && !st.infoS.ok.IsZero() {
 			if v, err := strconv.ParseUint(strings.TrimPrefix(info.Uptime, "0x"), 16, 64); err == nil {
 				uptime = v + uint64(now.Sub(st.infoS.ok).Seconds())
 			}

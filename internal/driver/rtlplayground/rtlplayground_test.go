@@ -462,18 +462,20 @@ func TestFailingDataSetDoesNotBlockOthersAndPasswordRemovalClears(t *testing.T) 
 func TestUnreachableWebServerPausesAllJSON(t *testing.T) {
 	_, srv := newFakeSwitch(t)
 	cfg := cfgFor(srv, "s3cret")
-	cfg.Endpoint = "http://127.0.0.1:1" // refused: the web server is down, the exporter answers
+	dead := httptest.NewServer(http.NotFoundHandler())
+	cfg.Endpoint = dead.URL
+	dead.Close() // refused: the web server is down, the exporter answers
 	drv := New()
 	if _, err := drv.Poll(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 	st := drv.state("sw1")
-	if st.jsonNext.IsZero() || !st.infoS.next.IsZero() {
+	if d := time.Until(st.jsonNext); d < retryAfter-time.Second || !st.lldpS.next.IsZero() || !st.infoS.next.IsZero() {
 		t.Fatalf("a transport failure must pause all JSON work before info is tried: jsonNext=%v infoNext=%v", st.jsonNext, st.infoS.next)
 	}
 }
 
-func TestPasswordChangeResetsState(t *testing.T) {
+func TestPasswordChangeLiftsPause(t *testing.T) {
 	_, srv := newFakeSwitch(t)
 	drv := New()
 	if _, err := drv.Poll(context.Background(), cfgFor(srv, "wrong")); err != nil {
@@ -488,5 +490,70 @@ func TestPasswordChangeResetsState(t *testing.T) {
 	}
 	if len(snap.LLDP) == 0 {
 		t.Fatal("a corrected password must not wait out the old pause")
+	}
+}
+
+func TestUptimeAgesWithoutNTP(t *testing.T) {
+	m, err := os.ReadFile("testdata/metrics.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, l := range strings.Split(string(m), "\n") {
+		if !strings.HasPrefix(l, "node_boot_time_seconds") {
+			lines = append(lines, l)
+		}
+	}
+	now := time.Now()
+	st := &target{info: &infoReply{Uptime: "0x00000064"}}
+	st.infoS.ok = now.Add(-30 * time.Second)
+	snap := buildSnapshot(driver.TargetConfig{ID: "sw1"}, parsePromText([]byte(strings.Join(lines, "\n"))), st, now)
+	if got := snap.Devices[0].UptimeSec; got != 130 {
+		t.Fatalf("uptime = %d, want 100 + 30", got)
+	}
+	st.infoS.ok = time.Time{}
+	if got := buildSnapshot(driver.TargetConfig{ID: "sw1"}, nil, st, now).Devices[0].UptimeSec; got != 0 {
+		t.Fatalf("uptime without a refresh time = %d, want 0", got)
+	}
+}
+
+func TestFreshSessionRejectedLogsInOnce(t *testing.T) {
+	f, _ := newFakeSwitch(t)
+	reject := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			f.mu.Lock()
+			f.paths = append(f.paths, r.URL.Path)
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		f.serve(w, r)
+	}))
+	defer reject.Close()
+	drv := New()
+	if _, err := drv.Poll(context.Background(), cfgFor(reject, "s3cret")); err != nil {
+		t.Fatal(err)
+	}
+	if f.logins != 1 || drv.state("sw1").jsonNext.IsZero() {
+		t.Fatalf("logins = %d, want 1 and a pause", f.logins)
+	}
+}
+
+func TestEndpointChangeResetsState(t *testing.T) {
+	_, srv := newFakeSwitch(t)
+	drv := New()
+	if _, err := drv.Poll(context.Background(), cfgFor(srv, "s3cret")); err != nil {
+		t.Fatal(err)
+	}
+	_, srv2 := newFakeSwitch(t)
+	cfg := cfgFor(srv2, "s3cret")
+	cfg.Settings["metrics_url"] = srv2.URL + "/metrics"
+	st := drv.state("sw1")
+	old := st.session
+	if _, err := drv.Poll(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if st.base != srv2.URL || st.session == "" || (st.session == old && st.lldpS.ok.IsZero()) {
+		t.Fatalf("state not rebuilt for the new endpoint: base=%q", st.base)
 	}
 }
