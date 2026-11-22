@@ -413,7 +413,10 @@ export function App() {
                   <Select
                     label="Type"
                     value={diagKind}
-                    onChange={(v) => setDiagKind(v ?? 'fdb_lookup')}
+                    onChange={(v) => {
+                      setDiagKind(v ?? 'fdb_lookup');
+                      setDiagDeviceId(''); // the new kind may hide the selected device
+                    }}
                     data={[
                       { value: 'fdb_lookup', label: 'FDB / MAC / IP Lookup (Cross-Vendor)' },
                       { value: 'ping', label: 'Device Ping' },

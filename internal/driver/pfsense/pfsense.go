@@ -450,7 +450,25 @@ func doJSON(ctx context.Context, client *http.Client, method, url, apiKey string
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		// The REST API explains a refusal (validation, privilege) in its message field.
+		var e struct {
+			Message string `json:"message"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+		return &statusError{code: resp.StatusCode, message: e.Message}
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out)
+}
+
+// statusError is a non-2xx answer from the REST API.
+type statusError struct {
+	code    int
+	message string
+}
+
+func (e *statusError) Error() string {
+	if e.message == "" {
+		return fmt.Sprintf("HTTP %d", e.code)
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.code, e.message)
 }

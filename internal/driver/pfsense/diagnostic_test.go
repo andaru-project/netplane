@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/andrebrait/netplane/internal/driver"
@@ -38,7 +39,36 @@ func TestPfSensePing(t *testing.T) {
 	}
 	// A REST API older than v2.7.0 has no ping route.
 	cfg.ResolvedSecrets = map[string]string{"api_key": "other"}
-	if _, err := d.RunDiagnostic(context.Background(), cfg, model.DiagnosticRequest{Kind: model.DiagPing, Target: "192.0.2.1"}); err == nil {
-		t.Error("expected an error for HTTP 404")
+	if _, err := d.RunDiagnostic(context.Background(), cfg, model.DiagnosticRequest{Kind: model.DiagPing, Target: "192.0.2.1"}); err == nil || !strings.Contains(err.Error(), "HTTP 404 (needs REST API v2.7.0") {
+		t.Errorf("404 err = %v", err)
+	}
+}
+
+func TestPfSensePingFailures(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status        int
+		body, wantErr string
+	}{
+		"rejected host":  {400, `{"code":400,"status":"bad request","message":"Field host is invalid"}`, "pfsense diagnostics/ping: HTTP 400: Field host is invalid"},
+		"silent failure": {200, `{"code":200,"data":{"output":"","result_code":68}}`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			cfg := driver.TargetConfig{ID: "pf", Endpoint: srv.URL, Settings: map[string]any{"allow_insecure_http": true}, ResolvedSecrets: map[string]string{"api_key": "k"}}
+			res, err := New().RunDiagnostic(context.Background(), cfg, model.DiagnosticRequest{Kind: model.DiagPing, Target: "nas.lan"})
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("err = %v, want %s", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || res.OK || res.Error != "ping exited with status 68 and no output" {
+				t.Fatalf("res=%+v err=%v", res, err)
+			}
+		})
 	}
 }

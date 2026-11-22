@@ -66,9 +66,9 @@ var (
 	pingRTTRE = regexp.MustCompile(`min/avg/max\S* = ([\d.]+)/([\d.]+)/([\d.]+)`)
 )
 
-// ParsePing reads the summary of BusyBox, iputils or FreeBSD ping output. ok is false when
+// parsePing reads the summary of BusyBox, iputils or FreeBSD ping output. ok is false when
 // the output has no summary line (the tool failed before sending).
-func ParsePing(out string) (stats PingStats, ok bool) {
+func parsePing(out string) (stats PingStats, ok bool) {
 	m := pingCountsRE.FindStringSubmatch(out)
 	if m == nil {
 		return PingStats{}, false
@@ -88,19 +88,34 @@ func ParsePing(out string) (stats PingStats, ok bool) {
 // PingResult builds the result of a ping run from the tool's output.
 func PingResult(req model.DiagnosticRequest, host, output string) *model.DiagnosticResult {
 	res := &model.DiagnosticResult{Kind: req.Kind, DeviceID: req.DeviceID, Target: host, RawOutput: output}
-	stats, ok := ParsePing(output)
+	stats, ok := parsePing(output)
 	if !ok {
 		res.Summary = fmt.Sprintf("ping %s failed", host)
 		res.Error = LastLine(output)
 		return res
 	}
 	res.OK = stats.Received > 0
+	if !res.OK {
+		res.Error = toolError(output, "no replies")
+	}
 	res.Structured = stats
 	res.Summary = fmt.Sprintf("%d/%d replies from %s (%.0f%% loss)", stats.Received, stats.Transmitted, host, stats.LossPct)
 	if stats.RTTAvgMs != nil {
 		res.Summary += fmt.Sprintf(", avg %.1f ms", *stats.RTTAvgMs)
 	}
 	return res
+}
+
+// toolError returns the last line ping printed about itself ("ping: sendto: Network
+// unreachable"), or fallback when it printed none.
+func toolError(output, fallback string) string {
+	msg := fallback
+	for line := range strings.SplitSeq(output, "\n") {
+		if strings.HasPrefix(line, "ping: ") {
+			msg = strings.TrimSpace(line)
+		}
+	}
+	return msg
 }
 
 // LastLine returns the last non-empty line of a tool's output, usually its error message.

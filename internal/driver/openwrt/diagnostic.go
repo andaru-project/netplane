@@ -20,8 +20,8 @@ const tracerouteMaxHops = 20
 
 // RunDiagnostic runs ping or traceroute on the device through rpcd's file.exec, which the
 // account's ACL must grant for the tool (LuCI's luci-mod-network-diagnostics grant does).
-// It logs in to a session of its own, so it never races a poll over the kept session; rpcd
-// expires the session after 300 s.
+// It logs in to a session of its own, so it never races a poll over the kept session, and
+// destroys it after the run where the ACL allows (rpcd expires it after 300 s otherwise).
 func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req model.DiagnosticRequest) (*model.DiagnosticResult, error) {
 	if err := d.ValidateConfig(cfg); err != nil {
 		return nil, err
@@ -54,23 +54,30 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = ubusCall(ctx, client, ubusURL, sid, "session", "destroy", map[string]any{}, nil) }()
 	var out struct {
 		Code   int    `json:"code"`
 		Stdout string `json:"stdout"`
 		Stderr string `json:"stderr"`
 	}
-	// BusyBox installs the tools in /bin or /usr/bin depending on the applet and release.
-	for _, path := range paths {
+	// BusyBox installs the tools in /bin or /usr/bin depending on the applet and release, and
+	// an ACL may grant only one of them: rpcd answers a missing file with NOT_FOUND and a path
+	// the ACL refuses with PERMISSION_DENIED, so both move on to the next path.
+	var path string
+	denied := false
+	for _, path = range paths {
 		err = ubusCall(ctx, client, ubusURL, sid, "file", "exec", map[string]any{"command": path, "params": args}, &out)
-		if !errors.Is(err, errNotFound) {
+		denied = denied || errors.Is(err, errAccessDenied) || errors.Is(err, errPermissionDenied)
+		if !errors.Is(err, errNotFound) && !errors.Is(err, errPermissionDenied) {
 			break
 		}
 	}
 	if err != nil {
-		if errors.Is(err, errAccessDenied) {
-			return nil, fmt.Errorf("openwrt file.exec %s: %w (grant the account luci-mod-network-diagnostics)", paths[0], err)
+		hint := ""
+		if denied {
+			hint = " (grant the account luci-mod-network-diagnostics)"
 		}
-		return nil, fmt.Errorf("openwrt file.exec %s: %w", paths[0], err)
+		return nil, fmt.Errorf("openwrt file.exec %s: %w%s", path, err, hint)
 	}
 	output := strings.TrimSpace(out.Stdout + "\n" + out.Stderr)
 	if req.Kind == model.DiagPing {
@@ -79,8 +86,8 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 	return tracerouteResult(req, host, out.Code, output), nil
 }
 
-// TracerouteHop is one line of traceroute output; Address is empty when the probe timed out.
-type TracerouteHop struct {
+// tracerouteHop is one line of traceroute output; Address is empty when the probe timed out.
+type tracerouteHop struct {
 	TTL     int      `json:"ttl"`
 	Address string   `json:"address,omitempty"`
 	RTTMs   *float64 `json:"rtt_ms,omitempty"`
@@ -96,7 +103,7 @@ var (
 func tracerouteResult(req model.DiagnosticRequest, host string, code int, output string) *model.DiagnosticResult {
 	res := &model.DiagnosticResult{Kind: req.Kind, DeviceID: req.DeviceID, Target: host, RawOutput: output}
 	dest := ""
-	hops := []TracerouteHop{}
+	hops := []tracerouteHop{}
 	for line := range strings.SplitSeq(output, "\n") {
 		if m := traceDestRE.FindStringSubmatch(line); m != nil {
 			dest = m[1]
@@ -106,7 +113,7 @@ func tracerouteResult(req model.DiagnosticRequest, host string, code int, output
 		if m == nil {
 			continue
 		}
-		hop := TracerouteHop{}
+		hop := tracerouteHop{}
 		hop.TTL, _ = strconv.Atoi(m[1])
 		if m[2] != "*" {
 			hop.Address = m[2]

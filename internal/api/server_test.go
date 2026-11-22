@@ -66,8 +66,7 @@ func (apiMockDriver) RunDiagnostic(_ context.Context, _ driver.TargetConfig, req
 		return nil, fmt.Errorf("%w: mock", driver.ErrDiagnosticRequest)
 	case req.Target == "unreachable":
 		return nil, errors.New("connection refused")
-	}
-	if req.Target == "unsaveable" {
+	case req.Target == "unsaveable":
 		return &model.DiagnosticResult{Kind: req.Kind, Structured: make(chan int)}, nil // JSON encoding fails
 	}
 	return &model.DiagnosticResult{

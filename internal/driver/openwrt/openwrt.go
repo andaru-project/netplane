@@ -439,10 +439,18 @@ func ubusLogin(ctx context.Context, client *http.Client, ubusURL string, cfg dri
 // errAccessDenied is uhttpd refusing a call: an expired or unknown session, or an ACL refusal.
 var errAccessDenied = errors.New("ubus access denied")
 
-// ubusStatusNotFound is UBUS_STATUS_NOT_FOUND: no such object, method or (for file.exec) file.
-const ubusStatusNotFound = 4
+// UBUS_STATUS_NOT_FOUND (no such object, method or, for file.exec, file) and
+// UBUS_STATUS_PERMISSION_DENIED (rpcd refusing a file the session's ACL does not grant).
+// The latter is not errAccessDenied: it never means the session expired.
+const (
+	ubusStatusNotFound         = 4
+	ubusStatusPermissionDenied = 6
+)
 
-var errNotFound = errors.New("ubus not found")
+var (
+	errNotFound         = errors.New("ubus not found")
+	errPermissionDenied = errors.New("ubus permission denied")
+)
 
 func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method string, params map[string]any, out any) error {
 	payload, _ := json.Marshal(map[string]any{
@@ -485,8 +493,11 @@ func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method
 	}
 	var code int
 	if err := json.Unmarshal(rpcResp.Result[0], &code); err != nil || code != 0 {
-		if code == ubusStatusNotFound {
+		switch code {
+		case ubusStatusNotFound:
 			return fmt.Errorf("ubus call %s.%s returned status %d: %w", object, method, code, errNotFound)
+		case ubusStatusPermissionDenied:
+			return fmt.Errorf("ubus call %s.%s returned status %d: %w", object, method, code, errPermissionDenied)
 		}
 		return fmt.Errorf("ubus call %s.%s returned status %d", object, method, code)
 	}

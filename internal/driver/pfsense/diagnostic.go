@@ -3,6 +3,7 @@ package pfsense
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -41,7 +42,15 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 	}
 	url := strings.TrimRight(cfg.Endpoint, "/") + "/api/v2/diagnostics/ping"
 	if err := doJSON(ctx, client, http.MethodPost, url, cfg.ResolvedSecrets["api_key"], map[string]any{"host": host, "count": n}, &resp); err != nil {
-		return nil, fmt.Errorf("pfsense diagnostics/ping: %w (needs REST API v2.7.0 or later and the api-v2-diagnostics-ping-post privilege)", err)
+		var se *statusError
+		if errors.As(err, &se) && (se.code == http.StatusNotFound || se.code == http.StatusForbidden) {
+			return nil, fmt.Errorf("pfsense diagnostics/ping: %w (needs REST API v2.7.0 or later and the api-v2-diagnostics-ping-post privilege)", err)
+		}
+		return nil, fmt.Errorf("pfsense diagnostics/ping: %w", err)
 	}
-	return driver.PingResult(req, host, strings.TrimSpace(resp.Data.Output)), nil
+	res := driver.PingResult(req, host, strings.TrimSpace(resp.Data.Output))
+	if !res.OK && res.Error == "" {
+		res.Error = fmt.Sprintf("ping exited with status %d and no output", resp.Data.ResultCode)
+	}
+	return res, nil
 }

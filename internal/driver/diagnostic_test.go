@@ -74,4 +74,13 @@ func TestPingResult(t *testing.T) {
 	if res := PingResult(model.DiagnosticRequest{}, "x", "ping: bad address 'x'\n"); res.Error != "ping: bad address 'x'" || res.Structured != nil {
 		t.Errorf("failed run: error=%q structured=%v", res.Error, res.Structured)
 	}
+	for out, want := range map[string]string{
+		"ping: sendto: Network unreachable\n3 packets transmitted, 0 packets received, 100% packet loss": "ping: sendto: Network unreachable",
+		"3 packets transmitted, 0 packets received, 100% packet loss":                                    "no replies",
+		"3 packets transmitted, 1 packets received, 66% packet loss":                                     "",
+	} {
+		if res := PingResult(model.DiagnosticRequest{}, "x", out); res.Error != want {
+			t.Errorf("error for %q = %q, want %q", out, res.Error, want)
+		}
+	}
 }
