@@ -19,6 +19,7 @@ import (
 	"github.com/andaru-project/netplane/internal/driver"
 	"github.com/andaru-project/netplane/internal/driver/andaru"
 	"github.com/andaru-project/netplane/internal/driver/openwrt"
+	"github.com/andaru-project/netplane/internal/driver/opnsense"
 	"github.com/andaru-project/netplane/internal/driver/pfsense"
 	"github.com/andaru-project/netplane/internal/driver/rtlplayground"
 	"github.com/andaru-project/netplane/internal/driver/snmp"
@@ -187,6 +188,7 @@ func registerDrivers(reg *driver.Registry) {
 	for _, d := range []driver.Driver{
 		andaru.New(),
 		openwrt.New(),
+		opnsense.New(),
 		pfsense.New(),
 		rtlplayground.New(),
 		snmp.New(),

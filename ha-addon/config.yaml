@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 name: "Andaru Netplane"
-description: "Open network configuration, information, and diagnostics plane for OpenWrt, RTLPlayground, Andaru, pfSense, UniFi, and SNMP gear"
+description: "Open network configuration, information, and diagnostics plane for OpenWrt, RTLPlayground, Andaru, pfSense, OPNsense, UniFi, and SNMP gear"
 version: "0.1.0"
 slug: "netplane"
 url: "https://github.com/andaru-project/netplane"

@@ -27,6 +27,18 @@ targets:
     secrets:
       api_key: "${PFSENSE_API_KEY}"
 
+  - id: core-opnsense
+    name: Edge Firewall
+    driver: opnsense
+    endpoint: "https://192.0.2.2"
+    poll_interval: "15s"
+    settings:
+      insecure_skip_verify: true
+    # An API key of a dedicated user; README lists the privileges it needs.
+    secrets:
+      api_key: "${OPNSENSE_API_KEY}"
+      api_secret: "${OPNSENSE_API_SECRET}"
+
   - id: sw-rtl
     name: Access Switch
     driver: rtlplayground

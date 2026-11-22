@@ -134,7 +134,7 @@
       },
       "post": {
         "operationId": "runDiagnostic",
-        "summary": "Execute an on-demand diagnostic (fdb_lookup; ping and traceroute on OpenWrt; ping on pfSense; no driver runs cable_test yet)",
+        "summary": "Execute an on-demand diagnostic (fdb_lookup; ping and traceroute on OpenWrt; ping on pfSense and OPNsense; no driver runs cable_test yet)",
         "requestBody": {
           "required": true,
           "content": {
