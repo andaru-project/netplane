@@ -10,8 +10,15 @@ if [ -f /data/options.json ]; then
   fi
 fi
 
-if [ -f "$CFG" ]; then
-  exec /usr/local/bin/netplane serve --config "$CFG" --db /data/netplane.db --listen :8099
+OPTS=""
+if [ -f /data/options.json ]; then
+  OPTS="--ha-options /data/options.json"
 fi
 
-exec /usr/local/bin/netplane serve --db /data/netplane.db --listen :8099
+if [ -f "$CFG" ]; then
+  # shellcheck disable=SC2086
+  exec /usr/local/bin/netplane serve $OPTS --config "$CFG" --db /data/netplane.db --listen :8099
+fi
+
+# shellcheck disable=SC2086
+exec /usr/local/bin/netplane serve $OPTS --db /data/netplane.db --listen :8099

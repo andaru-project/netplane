@@ -148,6 +148,58 @@ func TestAPIEndpointsAndIngressAndAuth(t *testing.T) {
 		t.Fatalf("forged X-Ingress-Path from untrusted IP should return 401, got %d", rec.Code)
 	}
 
+	// Loopback peer (e.g. a same-host reverse proxy) is not trusted by default, and a trusted
+	// peer must still send a Supervisor-shaped ingress path.
+	for _, tc := range []struct{ addr, path string }{
+		{"127.0.0.1:40000", "/api/hassio_ingress/abc123"},
+		{"[::1]:40000", "/api/hassio_ingress/abc123"},
+		{"172.30.32.2:40000", "/x"},
+	} {
+		req = httptest.NewRequest("GET", "/api/v1/devices", nil)
+		req.RemoteAddr = tc.addr
+		req.Header.Set("X-Ingress-Path", tc.path)
+		rec = httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("ingress bypass from %s with %q should return 401, got %d", tc.addr, tc.path, rec.Code)
+		}
+	}
+
+	// Health hides per-target status (errors may name internal hosts) from unauthenticated callers.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/health", nil))
+	if strings.Contains(rec.Body.String(), `"targets"`) {
+		t.Fatalf("unauthenticated health leaked targets: %s", rec.Body.String())
+	}
+	req = httptest.NewRequest("GET", "/api/v1/health", nil)
+	req.Header.Set("Authorization", "Bearer secret-api-tok")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `"targets"`) {
+		t.Fatalf("authenticated health missing targets: %s", rec.Body.String())
+	}
+
+	// Escaped slashes in an interface name still route after the ingress prefix is stripped.
+	req = httptest.NewRequest("GET", "/api/hassio_ingress/abc123/api/v1/devices/mock:02:51:0a:00:00:01/links/Gi1%2F0%2F1/samples", nil)
+	req.RemoteAddr = "172.30.32.2:40000"
+	req.Header.Set("X-Ingress-Path", "/api/hassio_ingress/abc123")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ingress escaped link name = %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Browser UI cookie carries the token; a wrong cookie is rejected.
+	for cookie, want := range map[string]int{"secret-api-tok": http.StatusOK, "wrong": http.StatusUnauthorized} {
+		req = httptest.NewRequest("GET", "/api/v1/devices", nil)
+		req.AddCookie(&http.Cookie{Name: "netplane_token", Value: cookie})
+		rec = httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Fatalf("cookie %q: want %d, got %d", cookie, want, rec.Code)
+		}
+	}
+
 	// Hostile X-Ingress-Path (protocol-relative or URL) MUST be rejected and never injected into <base href>.
 	for _, evil := range []string{"//evil.example", "https://evil.example", "/api/../evil"} {
 		req = httptest.NewRequest("GET", "/topology", nil)

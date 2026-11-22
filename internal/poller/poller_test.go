@@ -148,3 +148,65 @@ func TestPollOnceUnknownDriverAndBackoff(t *testing.T) {
 		t.Fatalf("backoff(10) = %v, want 1m cap", got)
 	}
 }
+
+func TestFailingTargetGoesOffline(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open store: %v", err)
+	}
+	defer st.Close()
+
+	drv := &mockDriver{
+		kind: "mock",
+		fn: func(_ context.Context, cfg driver.TargetConfig, n int32) (*driver.Snapshot, error) {
+			if n > 1 {
+				return nil, errors.New("dial tcp: connection refused")
+			}
+			return &driver.Snapshot{
+				TargetID: cfg.ID,
+				Devices:  []model.Device{{ID: "mock:sw1", Name: "sw1", TargetID: cfg.ID, Online: true}},
+			}, nil
+		},
+	}
+	reg := driver.NewRegistry()
+	if err := reg.Register(drv); err != nil {
+		t.Fatal(err)
+	}
+	bus := events.NewBus()
+	evCh, unsub := bus.Subscribe(16)
+	defer unsub()
+	sched := New(reg, st, bus, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cfg := driver.TargetConfig{ID: "t1", Driver: "mock", Enabled: true}
+
+	online := func() bool {
+		d, ok, err := st.GetDevice(ctx, "mock:sw1")
+		if err != nil || !ok {
+			t.Fatalf("GetDevice: ok=%v err=%v", ok, err)
+		}
+		return d.Online
+	}
+	_ = sched.PollOnce(ctx, cfg)
+	_ = sched.PollOnce(ctx, cfg) // first failure: still online
+	if !online() {
+		t.Fatal("device offline after a single failure")
+	}
+	_ = sched.PollOnce(ctx, cfg)
+	if online() {
+		t.Fatal("device still online after consecutive failures")
+	}
+	state, err := st.LoadState(ctx)
+	if err != nil || len(state.Devices) != 1 || state.Devices[0].Online {
+		t.Fatalf("state devices = %+v err=%v", state.Devices, err)
+	}
+	for {
+		select {
+		case ev := <-evCh:
+			if ev.Type == events.DeviceOffline {
+				return
+			}
+		default:
+			t.Fatal("no device.offline event")
+		}
+	}
+}

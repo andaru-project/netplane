@@ -4,8 +4,9 @@ package snmp
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ const (
 	oidBasePortIf = ".1.3.6.1.2.1.17.1.4.1.2"
 	oidDot1qFdb   = ".1.3.6.1.2.1.17.7.1.2.2.1.2"
 	oidLldpRem    = ".1.0.8802.1.1.2.1.4.1.1"
+	oidLldpLoc    = ".1.0.8802.1.1.2.1.3.7.1"
 	oidPethPort   = ".1.3.6.1.2.1.105.1.1.1"
 )
 
@@ -68,14 +70,22 @@ func (d *Driver) ValidateConfig(cfg driver.TargetConfig) error {
 			return fmt.Errorf("snmp v2c target %q: community secret is required", cfg.ID)
 		}
 	case "3":
-		user := stringSetting(cfg.Settings, "username", cfg.ResolvedSecrets["username"])
+		user := cfg.StringSetting("username", cfg.ResolvedSecrets["username"])
 		if user == "" {
 			return fmt.Errorf("snmp v3 target %q: username setting or secret is required", cfg.ID)
 		}
-		if ap := stringSetting(cfg.Settings, "auth_protocol", ""); ap != "" && cfg.ResolvedSecrets["auth_passphrase"] == "" {
+		ap := cfg.StringSetting("auth_protocol", "")
+		if ap != "" && parseAuthProto(ap) == gosnmp.NoAuth {
+			return fmt.Errorf("snmp v3 target %q: unsupported auth_protocol %q", cfg.ID, ap)
+		}
+		if ap != "" && cfg.ResolvedSecrets["auth_passphrase"] == "" {
 			return fmt.Errorf("snmp v3 target %q: auth_passphrase secret is required for auth_protocol %q", cfg.ID, ap)
 		}
-		if pp := stringSetting(cfg.Settings, "priv_protocol", ""); pp != "" && cfg.ResolvedSecrets["priv_passphrase"] == "" {
+		pp := cfg.StringSetting("priv_protocol", "")
+		if pp != "" && parsePrivProto(pp) == gosnmp.NoPriv {
+			return fmt.Errorf("snmp v3 target %q: unsupported priv_protocol %q", cfg.ID, pp)
+		}
+		if pp != "" && cfg.ResolvedSecrets["priv_passphrase"] == "" {
 			return fmt.Errorf("snmp v3 target %q: priv_passphrase secret is required for priv_protocol %q", cfg.ID, pp)
 		}
 	default:
@@ -120,6 +130,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	basePortPDUs, _ := w.Walk(ctx, oidBasePortIf)
 	fdbPDUs, _ := w.Walk(ctx, oidDot1qFdb)
 	lldpPDUs, _ := w.Walk(ctx, oidLldpRem)
+	lldpLocPDUs, _ := w.Walk(ctx, oidLldpLoc)
 	poePDUs, _ := w.Walk(ctx, oidPethPort)
 
 	type ifAcc struct {
@@ -135,6 +146,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		operUp    bool
 		inBytes   uint64
 		outBytes  uint64
+		in32      bool // inBytes from 32-bit ifInOctets, no ifHCInOctets seen
+		out32     bool
 		inPkts    uint64
 		outPkts   uint64
 		inErr     uint64
@@ -174,6 +187,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		case 10:
 			if a.inBytes == 0 {
 				a.inBytes = pduUint64(p)
+				a.in32 = true
 			}
 		case 13:
 			a.inDrop = pduUint64(p)
@@ -182,6 +196,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		case 16:
 			if a.outBytes == 0 {
 				a.outBytes = pduUint64(p)
+				a.out32 = true
 			}
 		case 19:
 			a.outDrop = pduUint64(p)
@@ -201,10 +216,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			a.name = pduString(p)
 		case 6:
 			a.inBytes = pduUint64(p)
+			a.in32 = false
 		case 7:
 			a.inPkts = pduUint64(p)
 		case 10:
 			a.outBytes = pduUint64(p)
+			a.out32 = false
 		case 11:
 			a.outPkts = pduUint64(p)
 		case 15:
@@ -260,11 +277,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 	}
 
-	idxs := make([]int, 0, len(ifaces))
-	for idx := range ifaces {
-		idxs = append(idxs, idx)
-	}
-	sort.Ints(idxs)
+	idxs := slices.Sorted(maps.Keys(ifaces))
 
 	primaryMAC := ""
 	macs := []string{}
@@ -371,7 +384,6 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			SpeedMbps: speedMbps,
 			MTU:       &mtu,
 			Media:     media,
-			IsFiber:   model.IsFiberMedia(media),
 			PoE:       poeByPort[idx],
 			Counters: &model.PortCounters{
 				RxBytes:   a.inBytes,
@@ -382,6 +394,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				TxErrors:  a.outErr,
 				RxDropped: a.inDrop,
 				TxDropped: a.outDrop,
+				Counter32: a.in32 || a.out32,
 			},
 		})
 	}
@@ -397,9 +410,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		if err != nil {
 			continue
 		}
-		var b [6]byte
+		b := make(net.HardwareAddr, 6)
 		valid := true
-		for i := 0; i < 6; i++ {
+		for i := range b {
 			v, err := strconv.Atoi(parts[i+1])
 			if err != nil || v < 0 || v > 255 {
 				valid = false
@@ -422,9 +435,54 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		snap.FDB = append(snap.FDB, model.FdbEntry{
 			DeviceID: devID,
 			LinkName: linkName,
-			MAC:      fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", b[0], b[1], b[2], b[3], b[4], b[5]),
+			MAC:      b.String(),
 			VLAN:     vlan,
 		})
+	}
+
+	// lldpRemLocalPortNum is an lldpLocPortNum, not an ifIndex: resolve it via lldpLocPortTable
+	// (portId/portDesc matched against ifName or ifDescr).
+	nameToIf := map[string]string{}
+	for _, idx := range idxs {
+		if n := ifaces[idx].name; n != "" {
+			nameToIf[n] = ifIdxToName[idx]
+		}
+	}
+	for _, idx := range idxs {
+		if d := ifaces[idx].descr; d != "" {
+			if _, ok := nameToIf[d]; !ok {
+				nameToIf[d] = ifIdxToName[idx]
+			}
+		}
+	}
+	locPortID := map[int]string{}
+	locPortDesc := map[int]string{}
+	for _, p := range lldpLocPDUs {
+		col, lpNum, ok := parseTableOID(p.Name, oidLldpLoc)
+		if !ok {
+			continue
+		}
+		switch col {
+		case 3:
+			locPortID[lpNum] = pduString(p)
+		case 4:
+			locPortDesc[lpNum] = pduString(p)
+		}
+	}
+	localPortName := func(lpNum int) string {
+		if n := nameToIf[locPortID[lpNum]]; n != "" {
+			return n
+		}
+		if n := nameToIf[locPortDesc[lpNum]]; n != "" {
+			return n
+		}
+		if ifIdx, ok := bridgePortToIf[lpNum]; ok && ifIdxToName[ifIdx] != "" {
+			return ifIdxToName[ifIdx]
+		}
+		if n := ifIdxToName[lpNum]; n != "" {
+			return n
+		}
+		return fmt.Sprintf("if%d", lpNum)
 	}
 
 	// LLDP-MIB: .1.0.8802.1.1.2.1.4.1.1.<col>.<timeMark>.<localPortNum>.<remIndex>
@@ -444,11 +502,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		n := lldpAcc[k]
 		if n == nil {
 			lpNum, _ := strconv.Atoi(parts[2])
-			linkName := ifIdxToName[lpNum]
-			if linkName == "" {
-				linkName = fmt.Sprintf("if%d", lpNum)
-			}
-			n = &model.LldpNeighbor{DeviceID: devID, LocalLink: linkName}
+			n = &model.LldpNeighbor{DeviceID: devID, LocalLink: localPortName(lpNum)}
 			lldpAcc[k] = n
 		}
 		switch col {
@@ -507,8 +561,8 @@ func defaultWalkerFactory(cfg driver.TargetConfig) (Walker, error) {
 	if snmpVersion(cfg) == "3" {
 		g.Version = gosnmp.Version3
 		g.SecurityModel = gosnmp.UserSecurityModel
-		authProto := parseAuthProto(stringSetting(cfg.Settings, "auth_protocol", ""))
-		privProto := parsePrivProto(stringSetting(cfg.Settings, "priv_protocol", ""))
+		authProto := parseAuthProto(cfg.StringSetting("auth_protocol", ""))
+		privProto := parsePrivProto(cfg.StringSetting("priv_protocol", ""))
 		flags := gosnmp.NoAuthNoPriv
 		if authProto != gosnmp.NoAuth && privProto != gosnmp.NoPriv {
 			flags = gosnmp.AuthPriv
@@ -517,7 +571,7 @@ func defaultWalkerFactory(cfg driver.TargetConfig) (Walker, error) {
 		}
 		g.MsgFlags = flags
 		g.SecurityParameters = &gosnmp.UsmSecurityParameters{
-			UserName:                 stringSetting(cfg.Settings, "username", cfg.ResolvedSecrets["username"]),
+			UserName:                 cfg.StringSetting("username", cfg.ResolvedSecrets["username"]),
 			AuthenticationProtocol:   authProto,
 			AuthenticationPassphrase: cfg.ResolvedSecrets["auth_passphrase"],
 			PrivacyProtocol:          privProto,
@@ -535,7 +589,7 @@ func defaultWalkerFactory(cfg driver.TargetConfig) (Walker, error) {
 }
 
 func snmpVersion(cfg driver.TargetConfig) string {
-	v := strings.ToLower(strings.TrimSpace(stringSetting(cfg.Settings, "version", "2c")))
+	v := strings.ToLower(strings.TrimSpace(cfg.StringSetting("version", "2c")))
 	if v == "2" {
 		return "2c"
 	}
@@ -606,7 +660,7 @@ func pduMAC(p gosnmp.SnmpPDU) string {
 	if !ok || len(b) != 6 {
 		return ""
 	}
-	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", b[0], b[1], b[2], b[3], b[4], b[5])
+	return net.HardwareAddr(b).String()
 }
 
 func pduUint64(p gosnmp.SnmpPDU) uint64 {
@@ -633,14 +687,4 @@ func guessSnmpMedia(ifName string, speedMbps int) model.MediaType {
 	default:
 		return model.MediaOther
 	}
-}
-
-func stringSetting(m map[string]any, key, def string) string {
-	if m == nil {
-		return def
-	}
-	if v, ok := m[key].(string); ok && v != "" {
-		return v
-	}
-	return def
 }

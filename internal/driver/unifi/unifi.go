@@ -4,7 +4,6 @@ package unifi
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,18 +44,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		return nil, err
 	}
 	baseURL := strings.TrimRight(cfg.Endpoint, "/")
-	site := stringSetting(cfg.Settings, "site", "default")
-	isUniFiOS := boolSetting(cfg.Settings, "is_unifi_os", true)
-	insecure := boolSetting(cfg.Settings, "insecure_skip_verify", false)
+	site := cfg.StringSetting("site", "default")
+	isUniFiOS := cfg.BoolSetting("is_unifi_os", true)
 
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		Jar:     jar,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure}, //nolint:gosec // user-configurable for local self-signed controllers
-		},
-	}
+	client := driver.NewHTTPClient(cfg, 15*time.Second)
+	defer client.CloseIdleConnections()
+	client.Jar, _ = cookiejar.New(nil)
 
 	apiKey := cfg.ResolvedSecrets["api_key"]
 	if apiKey == "" {
@@ -222,7 +215,6 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				Duplex:    duplex,
 				Autoneg:   &autoneg,
 				Media:     media,
-				IsFiber:   model.IsFiberMedia(media),
 				StpState:  mapStp(p.StpState),
 				Counters: &model.PortCounters{
 					RxBytes:   p.RxBytes,
@@ -465,26 +457,6 @@ func mapBand(r string) string {
 	default:
 		return r
 	}
-}
-
-func stringSetting(m map[string]any, key, def string) string {
-	if m == nil {
-		return def
-	}
-	if v, ok := m[key].(string); ok && v != "" {
-		return v
-	}
-	return def
-}
-
-func boolSetting(m map[string]any, key string, def bool) bool {
-	if m == nil {
-		return def
-	}
-	if v, ok := m[key].(bool); ok {
-		return v
-	}
-	return def
 }
 
 // flexFloat decodes UniFi JSON fields that arrive as either string ("12.4") or number (12.4).

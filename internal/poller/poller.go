@@ -76,6 +76,10 @@ func (s *Scheduler) Run(ctx context.Context, targets []driver.TargetConfig) {
 	wg.Wait()
 }
 
+// offlineAfterFailures is how many consecutive failed polls mark a target's devices offline;
+// one failure alone is often a transient timeout.
+const offlineAfterFailures = 2
+
 // PollOnce executes a single synchronous poll cycle for cfg, persisting state,
 // emitting diff events, and updating the solved topology snapshot.
 func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error {
@@ -89,7 +93,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 
 	snap, err := drv.Poll(ctx, cfg)
 	if err != nil {
-		s.recordError(cfg, now, err)
+		if s.recordError(cfg, now, err) == offlineAfterFailures {
+			s.markOffline(ctx, cfg, now)
+		}
 		return err
 	}
 	if snap.TargetID == "" {
@@ -113,30 +119,53 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 		}
 	}
 
+	s.recomputeTopology(ctx, cfg.ID, now)
+	return nil
+}
+
+// markOffline flags a failing target's devices and clients offline, publishes the resulting
+// device.offline / client.left events, and re-solves the topology.
+func (s *Scheduler) markOffline(ctx context.Context, cfg driver.TargetConfig, now time.Time) {
+	prev, curr, err := s.store.MarkTargetOffline(ctx, cfg.ID, now)
+	if err != nil {
+		s.logger.Warn("mark target offline failed", "target_id", cfg.ID, "err", err)
+		return
+	}
+	if curr == nil {
+		return
+	}
+	if s.bus != nil {
+		for _, ev := range events.DiffSnapshots(prev, curr) {
+			s.bus.Publish(ev)
+		}
+	}
+	s.recomputeTopology(ctx, cfg.ID, now)
+}
+
+func (s *Scheduler) recomputeTopology(ctx context.Context, targetID string, now time.Time) {
 	// Serialize LoadState -> Solve -> SaveTopology so concurrent target pollers
 	// never overwrite a fresher topology snapshot with stale state.
 	s.topoMu.Lock()
 	state, loadErr := s.store.LoadState(ctx)
 	if loadErr != nil {
 		s.topoMu.Unlock()
-		s.logger.Warn("load state for topology failed", "target_id", cfg.ID, "err", loadErr)
-		return nil
+		s.logger.Warn("load state for topology failed", "target_id", targetID, "err", loadErr)
+		return
 	}
 	graph := topology.Solve(state, now)
 	saveErr := s.store.SaveTopology(ctx, now, graph)
 	s.topoMu.Unlock()
 	if saveErr != nil {
-		s.logger.Warn("save topology failed", "target_id", cfg.ID, "err", saveErr)
+		s.logger.Warn("save topology failed", "target_id", targetID, "err", saveErr)
 	} else if s.bus != nil {
 		s.bus.Publish(events.Event{
 			Type:      events.TopologyUpdated,
 			Severity:  events.SeverityInfo,
 			Timestamp: now,
-			TargetID:  cfg.ID,
+			TargetID:  targetID,
 			Summary:   fmt.Sprintf("Topology updated (%d nodes, %d edges)", len(graph.Nodes), len(graph.Edges)),
 		})
 	}
-	return nil
 }
 
 // Status returns a copy of all target polling statuses.
@@ -203,7 +232,8 @@ func (s *Scheduler) recordSuccess(cfg driver.TargetConfig, at time.Time) {
 	}
 }
 
-func (s *Scheduler) recordError(cfg driver.TargetConfig, at time.Time, err error) {
+// recordError records a failed attempt and returns the consecutive failure count.
+func (s *Scheduler) recordError(cfg driver.TargetConfig, at time.Time, err error) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.status[cfg.ID]
@@ -213,4 +243,5 @@ func (s *Scheduler) recordError(cfg driver.TargetConfig, at time.Time, err error
 	st.LastError = err.Error()
 	st.ConsecutiveFailures++
 	s.status[cfg.ID] = st
+	return st.ConsecutiveFailures
 }

@@ -238,3 +238,66 @@ func TestStoreTopologyAndDiagnostics(t *testing.T) {
 		t.Fatalf("ListDiagnosticRuns(all) = (%+v, %v)", allRuns, err)
 	}
 }
+
+func TestStorePruneTargetsAndStaleDevices(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	save := func(target string, devIDs ...string) {
+		t.Helper()
+		snap := &driver.Snapshot{TargetID: target}
+		for _, id := range devIDs {
+			snap.Devices = append(snap.Devices, model.Device{ID: id, TargetID: target, Online: true})
+		}
+		if _, err := st.SaveSnapshot(ctx, snap); err != nil {
+			t.Fatalf("SaveSnapshot %s: %v", target, err)
+		}
+	}
+	has := func(id string) bool {
+		t.Helper()
+		_, ok, err := st.GetDevice(ctx, id)
+		if err != nil {
+			t.Fatalf("GetDevice %s: %v", id, err)
+		}
+		return ok
+	}
+
+	save("keep", "k1", "k2")
+	save("keep", "k1") // k2 left the target's snapshot: its index row must go too
+	save("gone", "g1")
+	if has("k2") || !has("g1") {
+		t.Fatalf("after resave: k2=%v g1=%v", has("k2"), has("g1"))
+	}
+
+	if err := st.PruneTargets(ctx, map[string]bool{"keep": true}); err != nil {
+		t.Fatalf("PruneTargets: %v", err)
+	}
+	state, err := st.LoadState(ctx)
+	if err != nil || len(state.Devices) != 1 || state.Devices[0].ID != "k1" || has("g1") {
+		t.Fatalf("after prune: devices=%v err=%v g1=%v", state.Devices, err, has("g1"))
+	}
+}
+
+func TestLoadStateMergesOverlappingTargets(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	router := &driver.Snapshot{TargetID: "router", Clients: []model.Client{
+		{MAC: "aa:bb:cc:dd:ee:ff", Hostname: "phone", IPs: []string{"192.0.2.7"}, LastSeen: t0},
+	}}
+	ap := &driver.Snapshot{TargetID: "ap", Clients: []model.Client{
+		{MAC: "aa:bb:cc:dd:ee:ff", Online: true, AttachedDeviceID: "ap1", IPs: []string{"2001:db8::7"}, LastSeen: t0.Add(time.Minute)},
+	}}
+	for _, s := range []*driver.Snapshot{router, ap} {
+		if _, err := st.SaveSnapshot(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := st.LoadState(ctx)
+	if err != nil || len(state.Clients) != 1 {
+		t.Fatalf("clients = %+v err=%v", state.Clients, err)
+	}
+	c := state.Clients[0]
+	if !c.Online || c.AttachedDeviceID != "ap1" || c.Hostname != "phone" || len(c.IPs) != 2 || !c.LastSeen.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("merged client = %+v", c)
+	}
+}

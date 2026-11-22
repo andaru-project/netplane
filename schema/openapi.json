@@ -9,11 +9,13 @@
     },
     "description": "Open network configuration, information, and diagnostics plane HTTP/SSE wire contract."
   },
+  "security": [{ "bearerAuth": [] }, { "cookieAuth": [] }, {}],
   "paths": {
     "/api/v1/health": {
       "get": {
         "operationId": "getHealth",
-        "summary": "Server health and per-target polling status",
+        "summary": "Server health; per-target polling status only for authenticated callers",
+        "security": [],
         "responses": {
           "200": { "description": "Healthy" }
         }
@@ -146,6 +148,21 @@
         "responses": {
           "200": { "description": "text/event-stream" }
         }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Required on /api/v1/* (except /health) when the server has an API token configured."
+      },
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "netplane_token",
+        "description": "Same token, set by the browser UI because EventSource cannot send headers."
       }
     }
   }

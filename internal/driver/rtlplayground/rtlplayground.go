@@ -3,7 +3,6 @@ package rtlplayground
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,18 +37,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		return nil, err
 	}
 	baseURL := strings.TrimRight(cfg.Endpoint, "/")
-	insecure := false
-	if cfg.Settings != nil {
-		if v, ok := cfg.Settings["insecure_skip_verify"].(bool); ok {
-			insecure = v
-		}
-	}
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure}, //nolint:gosec
-		},
-	}
+	client := driver.NewHTTPClient(cfg, 10*time.Second)
+	defer client.CloseIdleConnections()
 
 	user := cfg.ResolvedSecrets["username"]
 	pass := cfg.ResolvedSecrets["password"]

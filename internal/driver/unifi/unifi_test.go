@@ -101,9 +101,7 @@ func TestUniFiDriverPoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
-	if err := snap.Normalize(); err != nil {
-		t.Fatalf("Normalize: %v", err)
-	}
+	snap.Normalize()
 	if len(snap.Devices) != 2 || len(snap.Links) != 2 || len(snap.LLDP) != 1 || len(snap.Radios) != 1 || len(snap.WirelessUplinks) != 1 || len(snap.Clients) != 1 {
 		t.Fatalf("unexpected counts: devs=%d links=%d lldp=%d radios=%d uplinks=%d clients=%d",
 			len(snap.Devices), len(snap.Links), len(snap.LLDP), len(snap.Radios), len(snap.WirelessUplinks), len(snap.Clients))

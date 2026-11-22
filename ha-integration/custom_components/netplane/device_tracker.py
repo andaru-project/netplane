@@ -22,7 +22,8 @@ async def async_setup_entry(
 ) -> None:
     coordinator: NetplaneCoordinator = hass.data[DOMAIN][entry.entry_id]
     clients = (coordinator.data or {}).get("clients", [])
-    async_add_entities(NetplaneClientTracker(coordinator, c["mac"]) for c in clients if c.get("mac"))
+    macs = dict.fromkeys(c["mac"] for c in clients if c.get("mac"))  # ordered, unique
+    async_add_entities(NetplaneClientTracker(coordinator, mac) for mac in macs)
 
 
 class NetplaneClientTracker(CoordinatorEntity[NetplaneCoordinator], ScannerEntity):
@@ -31,7 +32,7 @@ class NetplaneClientTracker(CoordinatorEntity[NetplaneCoordinator], ScannerEntit
     def __init__(self, coordinator: NetplaneCoordinator, mac: str) -> None:
         super().__init__(coordinator)
         self._mac = mac
-        self._attr_unique_id = f"client_{mac}"
+        self._attr_unique_id = f"{coordinator.entry_id}_client_{mac}"
 
     def _client(self) -> dict[str, Any] | None:
         for c in (self.coordinator.data or {}).get("clients", []):

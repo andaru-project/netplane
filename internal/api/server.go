@@ -9,9 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/andrebrait/netplane/internal/driver"
@@ -61,8 +61,7 @@ type Server struct {
 	mux            *http.ServeMux
 	handler        http.Handler
 	trustedIngress []netip.Prefix
-	targetsMu      sync.RWMutex
-	targets        map[string]driver.TargetConfig
+	targets        map[string]driver.TargetConfig // read-only after New
 }
 
 // New constructs a Server ready to mount on an http.Server.
@@ -112,10 +111,32 @@ func (s *Server) registerRoutes() {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
+	setJSONHeaders(w)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeRawJSON writes pre-encoded JSON with a 200 status.
+func writeRawJSON(w http.ResponseWriter, raw []byte) {
+	setJSONHeaders(w)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
+}
+
+func setJSONHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+}
+
+// filter returns the elements of xs that keep accepts, never nil (so JSON emits []).
+func filter[T any](xs []T, keep func(T) bool) []T {
+	out := []T{}
+	for _, x := range xs {
+		if keep(x) {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 func writeError(w http.ResponseWriter, status int, code, msg string) {
@@ -127,23 +148,17 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 	})
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	statuses := map[string]poller.TargetStatus{}
-	if s.opts.Poller != nil {
-		statuses = s.opts.Poller.Status()
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	body := map[string]any{"status": "ok", "version": s.opts.Version}
+	// Per-target errors can name internal hosts, so unauthenticated callers get liveness only.
+	if s.opts.Poller != nil && (s.opts.APIToken == "" || s.validToken(r)) {
+		body["targets"] = s.opts.Poller.Status()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"version": s.opts.Version,
-		"targets": statuses,
-	})
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(schema.OpenAPIJSON)
+	writeRawJSON(w, schema.OpenAPIJSON)
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
@@ -183,76 +198,23 @@ func (s *Server) handleGetDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	onDev := func(devID string) bool { return devID == id }
 	detail := DeviceDetail{
 		Device:            *found,
-		Links:             []model.Link{},
-		LagGroups:         []model.LagGroup{},
-		Segments:          []model.Segment{},
-		Zones:             []model.Zone{},
-		Gateways:          []model.GatewayStatus{},
-		Routes:            []model.Route{},
-		VPNs:              []model.VpnTunnel{},
-		Radios:            []model.WirelessRadio{},
-		WirelessUplinks:   []model.WirelessUplink{},
-		Clients:           []model.Client{},
+		Links:             filter(state.Links, func(l model.Link) bool { return onDev(l.DeviceID) }),
+		LagGroups:         filter(state.LagGroups, func(g model.LagGroup) bool { return onDev(g.DeviceID) }),
+		Segments:          filter(state.Segments, func(g model.Segment) bool { return onDev(g.DeviceID) }),
+		Zones:             filter(state.Zones, func(z model.Zone) bool { return onDev(z.DeviceID) }),
+		Gateways:          filter(state.Gateways, func(g model.GatewayStatus) bool { return onDev(g.DeviceID) }),
+		Routes:            filter(state.Routes, func(rt model.Route) bool { return onDev(rt.DeviceID) }),
+		VPNs:              filter(state.VPNs, func(v model.VpnTunnel) bool { return onDev(v.DeviceID) }),
+		Radios:            filter(state.Radios, func(r model.WirelessRadio) bool { return onDev(r.DeviceID) }),
+		WirelessUplinks:   filter(state.WirelessUplinks, func(u model.WirelessUplink) bool { return onDev(u.DeviceID) }),
+		Clients:           filter(state.Clients, func(c model.Client) bool { return onDev(c.AttachedDeviceID) }),
 		RecentDiagnostics: []model.DiagnosticResult{},
 	}
-	for _, l := range state.Links {
-		if l.DeviceID == id {
-			detail.Links = append(detail.Links, l)
-		}
-	}
-	for _, g := range state.LagGroups {
-		if g.DeviceID == id {
-			detail.LagGroups = append(detail.LagGroups, g)
-		}
-	}
-	for _, seg := range state.Segments {
-		if seg.DeviceID == id {
-			detail.Segments = append(detail.Segments, seg)
-		}
-	}
-	for _, z := range state.Zones {
-		if z.DeviceID == id {
-			detail.Zones = append(detail.Zones, z)
-		}
-	}
-	for _, gw := range state.Gateways {
-		if gw.DeviceID == id {
-			detail.Gateways = append(detail.Gateways, gw)
-		}
-	}
-	for _, rt := range state.Routes {
-		if rt.DeviceID == id {
-			detail.Routes = append(detail.Routes, rt)
-		}
-	}
-	for _, v := range state.VPNs {
-		if v.DeviceID == id {
-			detail.VPNs = append(detail.VPNs, v)
-		}
-	}
-	for i := range state.Firewalls {
-		if state.Firewalls[i].DeviceID == id {
-			fw := state.Firewalls[i]
-			detail.Firewall = &fw
-			break
-		}
-	}
-	for _, rad := range state.Radios {
-		if rad.DeviceID == id {
-			detail.Radios = append(detail.Radios, rad)
-		}
-	}
-	for _, u := range state.WirelessUplinks {
-		if u.DeviceID == id {
-			detail.WirelessUplinks = append(detail.WirelessUplinks, u)
-		}
-	}
-	for _, c := range state.Clients {
-		if c.AttachedDeviceID == id {
-			detail.Clients = append(detail.Clients, c)
-		}
+	if i := slices.IndexFunc(state.Firewalls, func(f model.FirewallState) bool { return onDev(f.DeviceID) }); i >= 0 {
+		detail.Firewall = &state.Firewalls[i]
 	}
 	if runs, err := s.opts.Store.ListDiagnosticRuns(r.Context(), id, 10); err == nil {
 		detail.RecentDiagnostics = runs
@@ -286,10 +248,7 @@ func (s *Server) handleLinkSamples(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	if raw, ok, err := s.opts.Store.LoadTopologyRaw(r.Context()); err == nil && ok {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(raw)
+		writeRawJSON(w, raw)
 		return
 	}
 	state, err := s.opts.Store.LoadState(r.Context())
@@ -334,21 +293,16 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListTargets(w http.ResponseWriter, _ *http.Request) {
-	s.targetsMu.RLock()
 	items := make([]driver.TargetConfig, 0, len(s.targets))
 	for _, t := range s.targets {
-		t.ResolvedSecrets = nil // belt-and-suspenders redaction
-		items = append(items, t)
+		items = append(items, t) // ResolvedSecrets is json:"-"
 	}
-	s.targetsMu.RUnlock()
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) handlePollTarget(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	s.targetsMu.RLock()
 	cfg, ok := s.targets[id]
-	s.targetsMu.RUnlock()
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("target %q not found", id))
 		return
@@ -418,9 +372,7 @@ func (s *Server) handleRunDiagnostic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("device %q not found", req.DeviceID))
 		return
 	}
-	s.targetsMu.RLock()
 	cfg, hasTarget := s.targets[dev.TargetID]
-	s.targetsMu.RUnlock()
 	if !hasTarget {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("target %q for device %q not found", dev.TargetID, req.DeviceID))
 		return
@@ -483,6 +435,7 @@ func (s *Server) runFdbLookup(ctx context.Context, req model.DiagnosticRequest, 
 			}
 		}
 		if targetMAC == "" {
+		clients:
 			for _, c := range state.Clients {
 				if strings.EqualFold(c.Hostname, qLower) {
 					targetMAC = c.MAC
@@ -493,7 +446,7 @@ func (s *Server) runFdbLookup(ctx context.Context, req model.DiagnosticRequest, 
 					if strings.EqualFold(ip, query) {
 						targetMAC = c.MAC
 						matchedIPs = append(matchedIPs, ip)
-						break
+						break clients
 					}
 				}
 			}

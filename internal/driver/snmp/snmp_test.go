@@ -110,9 +110,7 @@ func TestSNMPDriverPollWithFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
-	if err := snap.Normalize(); err != nil {
-		t.Fatalf("Normalize: %v", err)
-	}
+	snap.Normalize()
 	if len(snap.Devices) != 1 || snap.Devices[0].UptimeSec != 3600 || snap.Devices[0].PrimaryMAC != "aa:bb:cc:00:00:01" {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
@@ -126,6 +124,85 @@ func TestSNMPDriverPollWithFixtures(t *testing.T) {
 		t.Fatalf("unexpected FDB: %+v", snap.FDB)
 	}
 	if len(snap.LLDP) != 1 || snap.LLDP[0].ChassisID != "00:11:22:33:44:01" || snap.LLDP[0].LocalLink != "sfp25" {
+		t.Fatalf("unexpected LLDP: %+v", snap.LLDP)
+	}
+}
+
+func TestSNMPV3RejectsUnknownProtocols(t *testing.T) {
+	drv := New()
+	base := func(s map[string]any) driver.TargetConfig {
+		s["version"], s["username"] = "3", "netplane"
+		return driver.TargetConfig{ID: "s3", Endpoint: "192.0.2.30", Settings: s,
+			ResolvedSecrets: map[string]string{"auth_passphrase": "a", "priv_passphrase": "p"}}
+	}
+	if err := drv.ValidateConfig(base(map[string]any{"auth_protocol": "SHA-999"})); err == nil {
+		t.Fatal("expected error for unknown auth_protocol")
+	}
+	if err := drv.ValidateConfig(base(map[string]any{"auth_protocol": "SHA", "priv_protocol": "3DES"})); err == nil {
+		t.Fatal("expected error for unknown priv_protocol")
+	}
+	if err := drv.ValidateConfig(base(map[string]any{})); err != nil {
+		t.Fatalf("noAuthNoPriv rejected: %v", err)
+	}
+}
+
+func pollFixture(t *testing.T, trees map[string][]gosnmp.SnmpPDU) *driver.Snapshot {
+	t.Helper()
+	trees[".1.3.6.1.2.1.1"] = []gosnmp.SnmpPDU{{Name: oidSysName, Type: gosnmp.OctetString, Value: []byte("sw")}}
+	drv := NewWithFactory(func(driver.TargetConfig) (Walker, error) { return &fakeWalker{trees: trees}, nil })
+	snap, err := drv.Poll(context.Background(), driver.TargetConfig{
+		ID: "sw", Endpoint: "192.0.2.30", ResolvedSecrets: map[string]string{"community": "public"},
+	})
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	return snap
+}
+
+func TestSNMPCounter32FromIfTable(t *testing.T) {
+	snap := pollFixture(t, map[string][]gosnmp.SnmpPDU{
+		oidIfTable: {
+			{Name: oidIfTable + ".2.1", Type: gosnmp.OctetString, Value: []byte("old1")},
+			{Name: oidIfTable + ".10.1", Type: gosnmp.Counter32, Value: uint32(100)},
+			{Name: oidIfTable + ".16.1", Type: gosnmp.Counter32, Value: uint32(200)},
+			{Name: oidIfTable + ".2.2", Type: gosnmp.OctetString, Value: []byte("new2")},
+			{Name: oidIfTable + ".10.2", Type: gosnmp.Counter32, Value: uint32(100)},
+			{Name: oidIfTable + ".16.2", Type: gosnmp.Counter32, Value: uint32(200)},
+		},
+		oidIfXTable: {
+			{Name: oidIfXTable + ".6.2", Type: gosnmp.Counter64, Value: uint64(1 << 40)},
+			{Name: oidIfXTable + ".10.2", Type: gosnmp.Counter64, Value: uint64(1 << 41)},
+		},
+	})
+	if len(snap.Links) != 2 {
+		t.Fatalf("links: %+v", snap.Links)
+	}
+	if c := snap.Links[0].Counters; !c.Counter32 || c.RxBytes != 100 {
+		t.Fatalf("ifTable-only counters: %+v", c)
+	}
+	if c := snap.Links[1].Counters; c.Counter32 || c.RxBytes != 1<<40 {
+		t.Fatalf("HC counters: %+v", c)
+	}
+}
+
+func TestSNMPLLDPLocalPortNumMapsViaLocPortTable(t *testing.T) {
+	snap := pollFixture(t, map[string][]gosnmp.SnmpPDU{
+		oidIfTable: {
+			{Name: oidIfTable + ".2.10101", Type: gosnmp.OctetString, Value: []byte("GigabitEthernet1/0/1")},
+			{Name: oidIfTable + ".2.1", Type: gosnmp.OctetString, Value: []byte("Vlan1")},
+		},
+		oidIfXTable: {
+			{Name: oidIfXTable + ".1.10101", Type: gosnmp.OctetString, Value: []byte("Gi1/0/1")},
+		},
+		oidLldpLoc: {
+			{Name: oidLldpLoc + ".3.1", Type: gosnmp.OctetString, Value: []byte("Gi1/0/1")},
+			{Name: oidLldpLoc + ".4.1", Type: gosnmp.OctetString, Value: []byte("GigabitEthernet1/0/1")},
+		},
+		oidLldpRem: {
+			{Name: oidLldpRem + ".9.0.1.1", Type: gosnmp.OctetString, Value: []byte("ap1")},
+		},
+	})
+	if len(snap.LLDP) != 1 || snap.LLDP[0].LocalLink != "Gi1/0/1" {
 		t.Fatalf("unexpected LLDP: %+v", snap.LLDP)
 	}
 }

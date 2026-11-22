@@ -73,6 +73,20 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 		}
 	}
 
+	currDevs := make(map[string]bool, len(curr.Devices))
+	for _, d := range curr.Devices {
+		currDevs[d.ID] = true
+	}
+	for _, pd := range prev.Devices {
+		if pd.Online && !currDevs[pd.ID] {
+			out = append(out, Event{
+				Type: DeviceOffline, Severity: SeverityCrit, Timestamp: ts,
+				TargetID: curr.TargetID, DeviceID: pd.ID,
+				Summary: fmt.Sprintf("Device %s went offline", pd.Name),
+			})
+		}
+	}
+
 	// 2. Link up/down, STP state, and SFP optical alert transitions.
 	type linkKey struct{ devID, ifName string }
 	prevLinks := make(map[linkKey]model.Link, len(prev.Links))
@@ -183,5 +197,45 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 		}
 	}
 
+	// 5. Client join/leave, keyed by MAC; a client missing from curr has left.
+	prevOnline := make(map[string]bool, len(prev.Clients))
+	for _, c := range prev.Clients {
+		prevOnline[c.MAC] = prevOnline[c.MAC] || c.Online
+	}
+	currOnline := make(map[string]model.Client, len(curr.Clients))
+	for _, c := range curr.Clients {
+		if c.Online {
+			currOnline[c.MAC] = c
+		}
+	}
+	for _, c := range curr.Clients {
+		if c.Online && !prevOnline[c.MAC] {
+			prevOnline[c.MAC] = true // emit once per MAC
+			out = append(out, Event{
+				Type: ClientJoined, Severity: SeverityInfo, Timestamp: ts,
+				TargetID: curr.TargetID, DeviceID: c.AttachedDeviceID,
+				Summary: fmt.Sprintf("Client %s joined", clientLabel(c)),
+			})
+		}
+	}
+	left := map[string]bool{}
+	for _, c := range prev.Clients {
+		if _, ok := currOnline[c.MAC]; c.Online && !ok && !left[c.MAC] {
+			left[c.MAC] = true
+			out = append(out, Event{
+				Type: ClientLeft, Severity: SeverityInfo, Timestamp: ts,
+				TargetID: curr.TargetID, DeviceID: c.AttachedDeviceID,
+				Summary: fmt.Sprintf("Client %s left", clientLabel(c)),
+			})
+		}
+	}
+
 	return out
+}
+
+func clientLabel(c model.Client) string {
+	if c.Hostname != "" {
+		return c.Hostname + " (" + c.MAC + ")"
+	}
+	return c.MAC
 }

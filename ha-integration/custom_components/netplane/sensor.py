@@ -83,7 +83,7 @@ class NetplanePoEWattsSensor(_DeviceSensorBase):
 
     def __init__(self, coordinator: NetplaneCoordinator, device_id: str) -> None:
         super().__init__(coordinator, device_id)
-        self._attr_unique_id = f"{device_id}_poe_watts"
+        self._attr_unique_id = f"{coordinator.entry_id}_{device_id}_poe_watts"
         self._attr_name = "PoE Power Draw"
 
     @property
@@ -99,7 +99,7 @@ class NetplaneCPUSensor(_DeviceSensorBase):
 
     def __init__(self, coordinator: NetplaneCoordinator, device_id: str) -> None:
         super().__init__(coordinator, device_id)
-        self._attr_unique_id = f"{device_id}_cpu"
+        self._attr_unique_id = f"{coordinator.entry_id}_{device_id}_cpu"
         self._attr_name = "CPU Usage"
 
     @property
@@ -118,7 +118,7 @@ class NetplaneGatewayRTTSensor(_DeviceSensorBase):
     def __init__(self, coordinator: NetplaneCoordinator, device_id: str, gw_name: str) -> None:
         super().__init__(coordinator, device_id)
         self._gw_name = gw_name
-        self._attr_unique_id = f"{device_id}_gw_{gw_name}_rtt"
+        self._attr_unique_id = f"{coordinator.entry_id}_{device_id}_gw_{gw_name}_rtt"
         self._attr_name = f"Gateway {gw_name} RTT"
 
     @property

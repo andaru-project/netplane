@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/andrebrait/netplane/internal/driver"
@@ -66,9 +67,7 @@ func TestOpenWrtDriverPoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
-	if err := snap.Normalize(); err != nil {
-		t.Fatalf("Normalize: %v", err)
-	}
+	snap.Normalize()
 	if len(snap.Devices) != 1 || snap.Devices[0].MgmtIP != "192.0.2.10" {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
@@ -80,5 +79,19 @@ func TestOpenWrtDriverPoll(t *testing.T) {
 	}
 	if len(snap.Neighbors) != 1 || snap.Neighbors[0].MAC != "de:ad:be:ef:00:01" {
 		t.Fatalf("unexpected neighbors: %+v", snap.Neighbors)
+	}
+}
+
+func TestOpenWrtEmptySessionError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"result":[0,{"ubus_rpc_session":""}]}`))
+	}))
+	defer srv.Close()
+	_, err := New().Poll(context.Background(), driver.TargetConfig{
+		ID: "ow1", Endpoint: srv.URL,
+		ResolvedSecrets: map[string]string{"username": "root", "password": "pw"},
+	})
+	if err == nil || strings.Contains(err.Error(), "%!") {
+		t.Fatalf("want plain empty-session error, got %v", err)
 	}
 }

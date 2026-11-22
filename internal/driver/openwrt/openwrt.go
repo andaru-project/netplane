@@ -4,12 +4,13 @@ package openwrt
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,18 +43,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	if err := d.ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
-	insecure := false
-	if cfg.Settings != nil {
-		if v, ok := cfg.Settings["insecure_skip_verify"].(bool); ok {
-			insecure = v
-		}
-	}
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure}, //nolint:gosec
-		},
-	}
+	client := driver.NewHTTPClient(cfg, 15*time.Second)
+	defer client.CloseIdleConnections()
 
 	ubusURL := strings.TrimRight(cfg.Endpoint, "/")
 	if !strings.HasSuffix(ubusURL, "/ubus") {
@@ -67,8 +58,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		"username": cfg.ResolvedSecrets["username"],
 		"password": cfg.ResolvedSecrets["password"],
 	}, &loginRes)
-	if err != nil || loginRes.Session == "" {
+	if err != nil {
 		return nil, fmt.Errorf("openwrt ubus login: %w", err)
+	}
+	if loginRes.Session == "" {
+		return nil, errors.New("openwrt ubus login: empty session")
 	}
 	sid := loginRes.Session
 
@@ -113,11 +107,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	_ = ubusCall(ctx, client, ubusURL, sid, "luci-rpc", "getHostHints", map[string]any{}, &hostHints)
 
 	now := time.Now().UTC()
-	devNames := make([]string, 0, len(devStatus))
-	for k := range devStatus {
-		devNames = append(devNames, k)
-	}
-	sort.Strings(devNames)
+	devNames := slices.Sorted(maps.Keys(devStatus))
 
 	primaryMAC := ""
 	macs := []string{}
@@ -219,7 +209,6 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Autoneg:     nd.Autoneg,
 			MTU:         &mtu,
 			Media:       media,
-			IsFiber:     model.IsFiberMedia(media),
 			FlowControl: fc,
 			Counters: &model.PortCounters{
 				RxBytes:   nd.Statistics.RxBytes,
@@ -276,12 +265,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	// Wireless radios
-	radioNames := make([]string, 0, len(wirelessStatus))
-	for k := range wirelessStatus {
-		radioNames = append(radioNames, k)
-	}
-	sort.Strings(radioNames)
-	for _, rName := range radioNames {
+	for _, rName := range slices.Sorted(maps.Keys(wirelessStatus)) {
 		r := wirelessStatus[rName]
 		ssids := []model.Ssid{}
 		for _, vif := range r.Interfaces {

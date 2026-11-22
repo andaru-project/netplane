@@ -27,7 +27,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         session=session,
         api_token=entry.data.get(CONF_API_TOKEN) or None,
     )
-    coordinator = NetplaneCoordinator(hass, client)
+    coordinator = NetplaneCoordinator(hass, client, entry.entry_id)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator

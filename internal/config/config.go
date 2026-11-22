@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -58,6 +59,43 @@ func LoadFile(path string) (*Config, error) {
 	return Parse(raw, os.LookupEnv)
 }
 
+// TokenEnv is the environment variable read for the API token when the config names none.
+const TokenEnv = "NETPLANE_API_TOKEN"
+
+// ApplyHAOptions exports the Home Assistant add-on options file (/data/options.json) to the
+// environment: api_token as NETPLANE_API_TOKEN and each secrets entry under its own name, so
+// config secret references (${NAME}) resolve inside the add-on.
+func ApplyHAOptions(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var opts struct {
+		APIToken string `json:"api_token"`
+		Secrets  []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"secrets"`
+	}
+	if err := json.Unmarshal(raw, &opts); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	if opts.APIToken != "" {
+		if err := os.Setenv(TokenEnv, opts.APIToken); err != nil {
+			return err
+		}
+	}
+	for _, sec := range opts.Secrets {
+		if sec.Name == "" {
+			return fmt.Errorf("parse %s: secret with empty name", path)
+		}
+		if err := os.Setenv(sec.Name, sec.Value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Parse decodes YAML bytes and resolves secret references via lookupEnv.
 func Parse(data []byte, lookupEnv func(string) (string, bool)) (*Config, error) {
 	var fc FileConfig
@@ -86,6 +124,8 @@ func Parse(data []byte, lookupEnv func(string) (string, bool)) (*Config, error) 
 		} else {
 			return nil, fmt.Errorf("missing environment variable %q for server.api_token_secret", envName)
 		}
+	} else if val, ok := lookupEnv(TokenEnv); ok {
+		fc.Server.ResolvedAPIToken = val
 	}
 
 	seen := make(map[string]bool, len(fc.Targets))

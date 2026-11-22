@@ -20,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 class NetplaneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinates periodic state fetches from a netplane server."""
 
-    def __init__(self, hass: HomeAssistant, client: NetplaneClient) -> None:
+    def __init__(self, hass: HomeAssistant, client: NetplaneClient, entry_id: str) -> None:
         super().__init__(
             hass,
             _LOGGER,
@@ -28,6 +28,8 @@ class NetplaneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         )
         self.client = client
+        # Prefix for entity unique IDs, so two netplane servers never collide.
+        self.entry_id = entry_id
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:

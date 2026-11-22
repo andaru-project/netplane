@@ -3,7 +3,6 @@ package pfsense
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,7 +28,7 @@ func (d *Driver) ValidateConfig(cfg driver.TargetConfig) error {
 	if strings.TrimSpace(cfg.Endpoint) == "" {
 		return fmt.Errorf("pfsense target %q: endpoint is required", cfg.ID)
 	}
-	if cfg.ResolvedSecrets["api_key"] == "" && cfg.ResolvedSecrets["password"] == "" {
+	if cfg.ResolvedSecrets["api_key"] == "" {
 		return fmt.Errorf("pfsense target %q: api_key secret is required", cfg.ID)
 	}
 	return nil
@@ -41,18 +40,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		return nil, err
 	}
 	baseURL := strings.TrimRight(cfg.Endpoint, "/")
-	insecure := false
-	if cfg.Settings != nil {
-		if v, ok := cfg.Settings["insecure_skip_verify"].(bool); ok {
-			insecure = v
-		}
-	}
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure}, //nolint:gosec
-		},
-	}
+	client := driver.NewHTTPClient(cfg, 15*time.Second)
+	defer client.CloseIdleConnections()
 	apiKey := cfg.ResolvedSecrets["api_key"]
 
 	var sysResp struct {

@@ -89,3 +89,31 @@ func TestParseErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenEnvFallbackAndHAOptions(t *testing.T) {
+	env := map[string]string{TokenEnv: "env-tok"}
+	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	cfg, err := Parse([]byte("server: {}\n"), lookup)
+	if err != nil || cfg.Server.ResolvedAPIToken != "env-tok" {
+		t.Fatalf("token fallback = %q, %v", cfg.Server.ResolvedAPIToken, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "options.json")
+	if err := os.WriteFile(path, []byte(`{"config_file":"/config/netplane.yaml","api_token":"ha-tok","secrets":[{"name":"NP_TEST_SW_TOKEN","value":"s3cret"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(TokenEnv, "")
+	t.Setenv("NP_TEST_SW_TOKEN", "")
+	if err := ApplyHAOptions(path); err != nil {
+		t.Fatalf("ApplyHAOptions: %v", err)
+	}
+	if os.Getenv(TokenEnv) != "ha-tok" || os.Getenv("NP_TEST_SW_TOKEN") != "s3cret" {
+		t.Fatalf("env = %q / %q", os.Getenv(TokenEnv), os.Getenv("NP_TEST_SW_TOKEN"))
+	}
+	if err := os.WriteFile(path, []byte(`{"secrets":[{"name":"","value":"x"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyHAOptions(path); err == nil {
+		t.Fatal("expected error for empty secret name")
+	}
+}

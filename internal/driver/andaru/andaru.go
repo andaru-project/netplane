@@ -3,7 +3,6 @@ package andaru
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,6 +39,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	client, baseURL := buildClient(cfg)
+	defer client.CloseIdleConnections()
 	token := cfg.ResolvedSecrets["api_token"]
 
 	var linksResp struct {
@@ -193,27 +193,17 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 }
 
 func buildClient(cfg driver.TargetConfig) (*http.Client, string) {
+	client := driver.NewHTTPClient(cfg, 10*time.Second)
 	ep := strings.TrimRight(strings.TrimSpace(cfg.Endpoint), "/")
 	if strings.HasPrefix(ep, "unix://") {
 		sockPath := strings.TrimPrefix(ep, "unix://")
-		tr := &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", sockPath)
-			},
+		client.Transport.(*http.Transport).DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", sockPath)
 		}
-		return &http.Client{Timeout: 10 * time.Second, Transport: tr}, "http://andaru.local"
+		return client, "http://andaru.local"
 	}
-	insecure := false
-	if cfg.Settings != nil {
-		if v, ok := cfg.Settings["insecure_skip_verify"].(bool); ok {
-			insecure = v
-		}
-	}
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure}, //nolint:gosec
-	}
-	return &http.Client{Timeout: 10 * time.Second, Transport: tr}, ep
+	return client, ep
 }
 
 func getJSON(ctx context.Context, client *http.Client, url, token string, out any) error {

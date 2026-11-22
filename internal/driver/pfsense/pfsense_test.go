@@ -58,9 +58,7 @@ func TestPfSenseDriverPoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
-	if err := snap.Normalize(); err != nil {
-		t.Fatalf("Normalize: %v", err)
-	}
+	snap.Normalize()
 	if len(snap.Devices) != 1 || snap.Devices[0].Role != model.RoleFirewall || snap.Devices[0].MgmtIP != "192.0.2.1" {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
@@ -72,5 +70,15 @@ func TestPfSenseDriverPoll(t *testing.T) {
 	}
 	if len(snap.Firewalls) != 1 || len(snap.Firewalls[0].Services) != 2 {
 		t.Fatalf("unexpected firewall state: %+v", snap.Firewalls)
+	}
+}
+
+func TestPfSenseValidateRequiresAPIKey(t *testing.T) {
+	err := New().ValidateConfig(driver.TargetConfig{
+		ID: "pf1", Endpoint: "https://192.0.2.1",
+		ResolvedSecrets: map[string]string{"password": "unused"},
+	})
+	if err == nil {
+		t.Fatal("expected error: password alone cannot authenticate")
 	}
 }

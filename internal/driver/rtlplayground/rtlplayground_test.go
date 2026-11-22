@@ -46,9 +46,7 @@ func TestRTLPlaygroundDriverPoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
-	if err := snap.Normalize(); err != nil {
-		t.Fatalf("Normalize: %v", err)
-	}
+	snap.Normalize()
 	if len(snap.Devices) != 1 || snap.Devices[0].Model != "LG510S" || len(snap.Devices[0].Sensors) != 1 {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}

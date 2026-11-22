@@ -17,7 +17,7 @@ Expose `core-model` over a clean, documented HTTP REST + Server-Sent Events (SSE
 
 - **HTTP router:** Go stdlib `net/http` (`http.ServeMux` with method+path patterns).
 - **Config parsing:** `gopkg.in/yaml.v3`.
-- **Auth:** Optional static bearer token (`NETPLANE_API_TOKEN` / config `auth.token_secret`) with optional Ingress trusted-proxy bypass for Home Assistant Supervisor (`172.30.32.2` / loopback).
+- **Auth:** Optional static bearer token (config `server.api_token_secret`, else the `NETPLANE_API_TOKEN` environment variable; the add-on sets it from its `api_token` option). The browser UI sends it as a `SameSite=Strict` `netplane_token` cookie, because `EventSource` cannot set headers. Optional Ingress trusted-proxy bypass only for requests from Home Assistant Supervisor (`172.30.32.2`, overridable with `server.trusted_ingress_cidrs`) that carry an `X-Ingress-Path` under `/api/hassio_ingress/`; loopback is not trusted by default.
 - **Wire contract:** `schema/openapi.json` (`Apache-2.0`).
 
 ## 3. Commands

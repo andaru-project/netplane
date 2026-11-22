@@ -114,9 +114,7 @@ func TestSnapshotNormalize(t *testing.T) {
 		Clients:         []model.Client{{MAC: "112233445566"}},
 	}
 
-	if err := snap.Normalize(); err != nil {
-		t.Fatalf("Normalize: %v", err)
-	}
+	snap.Normalize()
 	if snap.Devices[0].PrimaryMAC != "02:51:0a:00:00:01" {
 		t.Fatalf("device mac = %q", snap.Devices[0].PrimaryMAC)
 	}
@@ -130,8 +128,18 @@ func TestSnapshotNormalize(t *testing.T) {
 		t.Fatalf("client mac = %q", snap.Clients[0].MAC)
 	}
 
-	bad := &Snapshot{FDB: []model.FdbEntry{{DeviceID: "d1", LinkName: "lan1", MAC: "invalid"}}}
-	if err := bad.Normalize(); err == nil {
-		t.Fatal("expected invalid MAC error")
+	// Malformed MACs (e.g. a 4-byte sit0 address) must not fail the snapshot.
+	bad := &Snapshot{
+		Devices: []model.Device{{ID: "d1", PrimaryMAC: "00:00:00:00", MACs: []string{"00:00:00:00", "02:51:0a:00:00:01"}}},
+		Links:   []model.Link{{DeviceID: "d1", IfName: "sit0", MAC: "00:00:00:00"}},
+		FDB:     []model.FdbEntry{{DeviceID: "d1", LinkName: "lan1", MAC: "invalid"}, {DeviceID: "d1", LinkName: "lan1", MAC: "02:51:0a:00:00:02"}},
+		Clients: []model.Client{{MAC: "bogus"}},
+	}
+	bad.Normalize()
+	if d := bad.Devices[0]; d.PrimaryMAC != "" || len(d.MACs) != 1 || d.MACs[0] != "02:51:0a:00:00:01" {
+		t.Fatalf("device macs = %q / %v", d.PrimaryMAC, d.MACs)
+	}
+	if bad.Links[0].MAC != "" || len(bad.FDB) != 1 || len(bad.Clients) != 0 {
+		t.Fatalf("invalid MACs kept: link=%q fdb=%v clients=%v", bad.Links[0].MAC, bad.FDB, bad.Clients)
 	}
 }

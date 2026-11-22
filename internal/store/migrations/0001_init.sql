@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS link_counter_state (
     collected_at INTEGER NOT NULL,
     rx_bytes     INTEGER NOT NULL,
     tx_bytes     INTEGER NOT NULL,
+    counter32    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (device_id, if_name)
 );
 

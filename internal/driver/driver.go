@@ -3,8 +3,8 @@ package driver
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/andrebrait/netplane/internal/model"
@@ -61,35 +61,22 @@ type Snapshot struct {
 }
 
 // Normalize canonicalizes MAC addresses, SFP alert defaults, and non-nil slices across the snapshot.
-func (s *Snapshot) Normalize() error {
+// A malformed MAC (e.g. a 4-byte tunnel address) never fails the poll: optional MAC fields are
+// cleared, and FDB/client entries, which are keyed by MAC, are dropped.
+func (s *Snapshot) Normalize() {
 	th := model.DefaultSfpThresholds()
 	for i := range s.Devices {
 		d := &s.Devices[i]
-		if d.PrimaryMAC != "" {
-			mac, err := model.NormalizeMAC(d.PrimaryMAC)
-			if err != nil {
-				return fmt.Errorf("device %s primary_mac: %w", d.ID, err)
-			}
-			d.PrimaryMAC = mac
+		normMAC(&d.PrimaryMAC)
+		for j := range d.MACs {
+			normMAC(&d.MACs[j])
 		}
-		for j, raw := range d.MACs {
-			mac, err := model.NormalizeMAC(raw)
-			if err != nil {
-				return fmt.Errorf("device %s mac[%d]: %w", d.ID, j, err)
-			}
-			d.MACs[j] = mac
-		}
+		d.MACs = slices.DeleteFunc(d.MACs, func(m string) bool { return m == "" })
 		d.NormalizeSlices()
 	}
 	for i := range s.Links {
 		l := &s.Links[i]
-		if l.MAC != "" {
-			mac, err := model.NormalizeMAC(l.MAC)
-			if err != nil {
-				return fmt.Errorf("link %s/%s mac: %w", l.DeviceID, l.IfName, err)
-			}
-			l.MAC = mac
-		}
+		normMAC(&l.MAC)
 		if l.SFP != nil {
 			l.SFP.AlertState = model.EvaluateSfpAlert(l.SFP, th)
 		}
@@ -105,36 +92,20 @@ func (s *Snapshot) Normalize() error {
 		s.Zones[i].NormalizeSlices()
 	}
 	for i := range s.FDB {
-		mac, err := model.NormalizeMAC(s.FDB[i].MAC)
-		if err != nil {
-			return fmt.Errorf("fdb %s/%s: %w", s.FDB[i].DeviceID, s.FDB[i].LinkName, err)
-		}
-		s.FDB[i].MAC = mac
+		normMAC(&s.FDB[i].MAC)
 	}
+	s.FDB = slices.DeleteFunc(s.FDB, func(f model.FdbEntry) bool { return f.MAC == "" })
 	for i := range s.LLDP {
-		if s.LLDP[i].ChassisID != "" {
-			if mac, err := model.NormalizeMAC(s.LLDP[i].ChassisID); err == nil {
-				s.LLDP[i].ChassisID = mac
-			}
+		// Chassis IDs may legitimately be non-MAC strings; keep them as reported.
+		if mac, err := model.NormalizeMAC(s.LLDP[i].ChassisID); err == nil {
+			s.LLDP[i].ChassisID = mac
 		}
 	}
 	for i := range s.Neighbors {
-		if s.Neighbors[i].MAC != "" {
-			mac, err := model.NormalizeMAC(s.Neighbors[i].MAC)
-			if err != nil {
-				return fmt.Errorf("neighbor %s/%s: %w", s.Neighbors[i].DeviceID, s.Neighbors[i].IP, err)
-			}
-			s.Neighbors[i].MAC = mac
-		}
+		normMAC(&s.Neighbors[i].MAC)
 	}
 	for i := range s.DHCP {
-		if s.DHCP[i].MAC != "" {
-			mac, err := model.NormalizeMAC(s.DHCP[i].MAC)
-			if err != nil {
-				return fmt.Errorf("dhcp %s/%s: %w", s.DHCP[i].DeviceID, s.DHCP[i].IP, err)
-			}
-			s.DHCP[i].MAC = mac
-		}
+		normMAC(&s.DHCP[i].MAC)
 	}
 	for i := range s.Firewalls {
 		s.Firewalls[i].NormalizeSlices()
@@ -143,23 +114,25 @@ func (s *Snapshot) Normalize() error {
 		s.Radios[i].NormalizeSlices()
 	}
 	for i := range s.WirelessUplinks {
-		if s.WirelessUplinks[i].PeerMAC != "" {
-			mac, err := model.NormalizeMAC(s.WirelessUplinks[i].PeerMAC)
-			if err != nil {
-				return fmt.Errorf("wireless_uplink %s: %w", s.WirelessUplinks[i].DeviceID, err)
-			}
-			s.WirelessUplinks[i].PeerMAC = mac
-		}
+		normMAC(&s.WirelessUplinks[i].PeerMAC)
 	}
 	for i := range s.Clients {
-		mac, err := model.NormalizeMAC(s.Clients[i].MAC)
-		if err != nil {
-			return fmt.Errorf("client[%d]: %w", i, err)
-		}
-		s.Clients[i].MAC = mac
+		normMAC(&s.Clients[i].MAC)
 		s.Clients[i].NormalizeSlices()
 	}
-	return nil
+	s.Clients = slices.DeleteFunc(s.Clients, func(c model.Client) bool { return c.MAC == "" })
+}
+
+// normMAC canonicalizes *p in place and clears it when it is not a valid MAC.
+func normMAC(p *string) {
+	if *p == "" {
+		return
+	}
+	mac, err := model.NormalizeMAC(*p)
+	if err != nil {
+		mac = ""
+	}
+	*p = mac
 }
 
 // Driver is implemented by every platform integration (OpenWrt, RTLPlayground, Andaru, pfSense, OPNsense, UniFi, SNMP).

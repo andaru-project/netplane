@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -190,6 +191,36 @@ func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
+// PruneTargets deletes the stored config, snapshot and devices of every target whose ID is
+// not in keep, so removed or disabled targets stop showing stale (online) devices.
+func (s *Store) PruneTargets(ctx context.Context, keep map[string]bool) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM targets UNION SELECT target_id FROM target_snapshots UNION SELECT target_id FROM devices`)
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		if !keep[id] {
+			stale = append(stale, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range stale {
+		if err := s.DeleteTarget(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SaveSnapshot normalizes snap, computes positive link bitrates from previous counter state,
 // persists the target's snapshot and indexed devices transactionally, records link_samples,
 // and prunes samples older than retention. Returns the previous snapshot for diffing (nil on first poll).
@@ -200,9 +231,7 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 	if snap.CollectedAt.IsZero() {
 		snap.CollectedAt = time.Now().UTC()
 	}
-	if err := snap.Normalize(); err != nil {
-		return nil, err
-	}
+	snap.Normalize()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -230,25 +259,28 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 		var rxBps, txBps float64
 		if l.Counters != nil {
 			var prevTs, prevRx, prevTx int64
+			var prev32 bool
 			err := tx.QueryRowContext(ctx,
-				`SELECT collected_at, rx_bytes, tx_bytes FROM link_counter_state WHERE device_id = ? AND if_name = ?`,
+				`SELECT collected_at, rx_bytes, tx_bytes, counter32 FROM link_counter_state WHERE device_id = ? AND if_name = ?`,
 				l.DeviceID, l.IfName,
-			).Scan(&prevTs, &prevRx, &prevTx)
-			if err == nil && tsNano > prevTs {
+			).Scan(&prevTs, &prevRx, &prevTx, &prev32)
+			// A counter width change (e.g. SNMP falling back from ifXTable) makes the delta meaningless.
+			if err == nil && tsNano > prevTs && prev32 == l.Counters.Counter32 {
 				elapsed := time.Duration(tsNano - prevTs)
-				rxBps = model.ComputeBitrate(uint64(prevRx), l.Counters.RxBytes, elapsed, false)
-				txBps = model.ComputeBitrate(uint64(prevTx), l.Counters.TxBytes, elapsed, false)
+				rxBps = model.ComputeBitrate(uint64(prevRx), l.Counters.RxBytes, elapsed, l.Counters.Counter32)
+				txBps = model.ComputeBitrate(uint64(prevTx), l.Counters.TxBytes, elapsed, l.Counters.Counter32)
 			}
 			l.Rates = &model.PortRates{RxBps: rxBps, TxBps: txBps}
 
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO link_counter_state (device_id, if_name, collected_at, rx_bytes, tx_bytes)
-				VALUES (?, ?, ?, ?, ?)
+				INSERT INTO link_counter_state (device_id, if_name, collected_at, rx_bytes, tx_bytes, counter32)
+				VALUES (?, ?, ?, ?, ?, ?)
 				ON CONFLICT(device_id, if_name) DO UPDATE SET
 					collected_at = excluded.collected_at,
 					rx_bytes = excluded.rx_bytes,
-					tx_bytes = excluded.tx_bytes
-			`, l.DeviceID, l.IfName, tsNano, int64(l.Counters.RxBytes), int64(l.Counters.TxBytes)); err != nil {
+					tx_bytes = excluded.tx_bytes,
+					counter32 = excluded.counter32
+			`, l.DeviceID, l.IfName, tsNano, int64(l.Counters.RxBytes), int64(l.Counters.TxBytes), l.Counters.Counter32); err != nil {
 				return nil, err
 			}
 		} else if l.Rates != nil {
@@ -339,6 +371,57 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 	return prev, nil
 }
 
+// MarkTargetOffline flags every device and client in the target's stored snapshot offline,
+// for a target that stopped answering. It returns the snapshot before and after the change
+// for diffing, or nil, nil when the target has no stored snapshot.
+func (s *Store) MarkTargetOffline(ctx context.Context, targetID string, at time.Time) (prev, curr *driver.Snapshot, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var raw string
+	err = tx.QueryRowContext(ctx, `SELECT snapshot_json FROM target_snapshots WHERE target_id = ?`, targetID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, nil, nil
+	} else if err != nil {
+		return nil, nil, err
+	}
+	prev, curr = &driver.Snapshot{}, &driver.Snapshot{}
+	if err := json.Unmarshal([]byte(raw), prev); err != nil {
+		return nil, nil, err
+	}
+	_ = json.Unmarshal([]byte(raw), curr) // same bytes, cannot fail now
+	curr.CollectedAt = at.UTC()
+	for i := range curr.Devices {
+		curr.Devices[i].Online = false
+	}
+	for i := range curr.Clients {
+		curr.Clients[i].Online = false
+	}
+	currRaw, err := json.Marshal(curr)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE target_snapshots SET snapshot_json = ? WHERE target_id = ?`, string(currRaw), targetID); err != nil {
+		return nil, nil, err
+	}
+	for _, d := range curr.Devices {
+		devRaw, err := json.Marshal(d)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE devices SET online = 0, data_json = ? WHERE id = ? AND target_id = ?`, string(devRaw), d.ID, targetID); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return prev, curr, nil
+}
+
 // LoadState merges all stored target snapshots into one sorted NetworkState.
 func (s *Store) LoadState(ctx context.Context) (*NetworkState, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT snapshot_json FROM target_snapshots ORDER BY target_id`)
@@ -396,8 +479,60 @@ func (s *Store) LoadState(ctx context.Context) (*NetworkState, error) {
 		return nil, err
 	}
 
+	state.Devices = dedupeDevices(state.Devices)
+	state.Clients = mergeClients(state.Clients)
 	sort.Slice(state.Devices, func(i, j int) bool { return state.Devices[i].ID < state.Devices[j].ID })
 	return state, nil
+}
+
+// dedupeDevices keeps one device per ID (the most recently seen) when targets overlap.
+func dedupeDevices(in []model.Device) []model.Device {
+	idx := make(map[string]int, len(in))
+	out := in[:0]
+	for _, d := range in {
+		if i, ok := idx[d.ID]; ok {
+			if d.LastSeen.After(out[i].LastSeen) {
+				out[i] = d
+			}
+			continue
+		}
+		idx[d.ID] = len(out)
+		out = append(out, d)
+	}
+	return out
+}
+
+// mergeClients folds clients reported by several targets (e.g. a router's DHCP view and an
+// AP's association list) into one record per MAC, preferring the record that knows where
+// the client is attached.
+func mergeClients(in []model.Client) []model.Client {
+	idx := make(map[string]int, len(in))
+	out := make([]model.Client, 0, len(in))
+	for _, c := range in {
+		i, ok := idx[c.MAC]
+		if !ok {
+			idx[c.MAC] = len(out)
+			out = append(out, c)
+			continue
+		}
+		m := &out[i]
+		if m.AttachedDeviceID == "" && c.AttachedDeviceID != "" {
+			*m, c = c, *m
+		}
+		m.Online = m.Online || c.Online
+		if c.LastSeen.After(m.LastSeen) {
+			m.LastSeen = c.LastSeen
+		}
+		if m.Hostname == "" {
+			m.Hostname = c.Hostname
+		}
+		for _, ip := range c.IPs {
+			if !slices.Contains(m.IPs, ip) {
+				m.IPs = append(m.IPs, ip)
+			}
+		}
+	}
+	return out
 }
 
 // GetDevice returns one indexed Device by ID.

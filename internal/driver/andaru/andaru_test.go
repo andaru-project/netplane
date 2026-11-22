@@ -3,8 +3,11 @@ package andaru
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/andrebrait/netplane/internal/driver"
@@ -52,9 +55,7 @@ func TestAndaruDriverPoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
-	if err := snap.Normalize(); err != nil {
-		t.Fatalf("Normalize: %v", err)
-	}
+	snap.Normalize()
 	if len(snap.Devices) != 1 || snap.Devices[0].Role != model.RoleFirewall || snap.Devices[0].MgmtIP != "192.0.2.1" {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
@@ -69,5 +70,36 @@ func TestAndaruDriverPoll(t *testing.T) {
 	}
 	if len(snap.Firewalls) != 1 || *snap.Firewalls[0].PolicyRuleCount != 3 || snap.Firewalls[0].SavedVersion != "7" {
 		t.Fatalf("unexpected firewall state: %+v", snap.Firewalls)
+	}
+}
+
+func TestAndaruUnixSocket(t *testing.T) {
+	dir, err := os.MkdirTemp("", "and")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "e.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/status/links" {
+			_, _ = w.Write([]byte(`{"items":[{"ifIndex":2,"name":"eth0","linkType":"ether","operState":"UP"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	srv.Listener = ln
+	srv.Start()
+	defer srv.Close()
+
+	snap, err := New().Poll(context.Background(), driver.TargetConfig{ID: "a1", Endpoint: "unix://" + sock})
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(snap.Links) != 1 || snap.Links[0].IfName != "eth0" {
+		t.Fatalf("unexpected links: %+v", snap.Links)
 	}
 }

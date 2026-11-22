@@ -103,3 +103,25 @@ func TestDiffSnapshots(t *testing.T) {
 		}
 	}
 }
+
+func TestDiffSnapshotsVanishedDevicesAndClients(t *testing.T) {
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	prev := &driver.Snapshot{
+		TargetID:    "t1",
+		CollectedAt: ts,
+		Devices:     []model.Device{{ID: "d1", Name: "sw1", Online: true}},
+		Clients:     []model.Client{{MAC: "aa:aa:aa:aa:aa:01", Online: true}, {MAC: "aa:aa:aa:aa:aa:02", Online: true}},
+	}
+	curr := &driver.Snapshot{
+		TargetID:    "t1",
+		CollectedAt: ts.Add(time.Minute),
+		Clients:     []model.Client{{MAC: "aa:aa:aa:aa:aa:02", Online: true}, {MAC: "aa:aa:aa:aa:aa:03", Hostname: "phone", Online: true}},
+	}
+	got := map[Type]int{}
+	for _, ev := range DiffSnapshots(prev, curr) {
+		got[ev.Type]++
+	}
+	if got[DeviceOffline] != 1 || got[ClientJoined] != 1 || got[ClientLeft] != 1 || len(got) != 3 {
+		t.Fatalf("events = %v", got)
+	}
+}

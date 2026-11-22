@@ -88,6 +88,9 @@ type PortCounters struct {
 	RxPause   uint64 `json:"rx_pause,omitempty"`
 	TxPause   uint64 `json:"tx_pause,omitempty"`
 	CrcErrors uint64 `json:"crc_errors,omitempty"`
+	// Counter32 marks RxBytes/TxBytes as 32-bit counters (e.g. SNMP ifInOctets without
+	// ifXTable) so bitrate deltas treat a decrease as a wrap, not a reset.
+	Counter32 bool `json:"-"`
 }
 
 // PortRates captures derived positive bitrates in bits per second.

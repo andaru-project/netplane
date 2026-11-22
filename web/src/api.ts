@@ -209,7 +209,24 @@ export interface NetplaneEvent {
   summary: string;
 }
 
-async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+// One shared prompt so parallel 401s ask for the token only once.
+let tokenPrompt: Promise<boolean> | null = null;
+
+// promptForToken stores the API token in a SameSite=Strict cookie, which fetch and
+// EventSource both send; EventSource cannot set an Authorization header.
+function promptForToken(): Promise<boolean> {
+  tokenPrompt ??= Promise.resolve().then(() => {
+    const token = window.prompt('This netplane server requires an API token:');
+    if (!token) return false;
+    document.cookie = `netplane_token=${encodeURIComponent(token)}; path=/; SameSite=Strict`;
+    return true;
+  }).finally(() => {
+    tokenPrompt = null;
+  });
+  return tokenPrompt;
+}
+
+async function fetchJSON<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const resp = await fetch(`./api/v1${path}`, {
     ...init,
     headers: {
@@ -217,6 +234,9 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
+  if (resp.status === 401 && !retried && (await promptForToken())) {
+    return fetchJSON<T>(path, init, true);
+  }
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(`HTTP ${resp.status}: ${text}`);

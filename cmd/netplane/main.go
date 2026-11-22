@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -58,11 +59,18 @@ func runServe(args []string) error {
 	cfgPath := fs.String("config", "", "Path to netplane YAML configuration file")
 	listen := fs.String("listen", "", "Override HTTP listen address (default :8099)")
 	dbPath := fs.String("db", "", "Override SQLite database path")
+	haOptions := fs.String("ha-options", "", "Home Assistant add-on options.json to export as environment (api_token, secrets)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	if *haOptions != "" {
+		if err := config.ApplyHAOptions(*haOptions); err != nil {
+			return err
+		}
+	}
 
 	var cfg *config.Config
 	var err error
@@ -77,6 +85,7 @@ func runServe(args []string) error {
 				Listen:            ":8099",
 				DBPath:            "netplane.db",
 				TrustIngressProxy: true,
+				ResolvedAPIToken:  os.Getenv(config.TokenEnv),
 			},
 			Retention: 24 * time.Hour,
 		}
@@ -98,6 +107,13 @@ func runServe(args []string) error {
 	defer func() { _ = st.Close() }()
 	st.SetRetention(cfg.Retention)
 
+	enabled := map[string]bool{}
+	for _, t := range cfg.Targets {
+		enabled[t.ID] = t.Enabled
+	}
+	if err := st.PruneTargets(ctx, enabled); err != nil {
+		return fmt.Errorf("prune stale targets: %w", err)
+	}
 	for _, t := range cfg.Targets {
 		if err := st.UpsertTarget(ctx, t); err != nil {
 			return fmt.Errorf("persist target %s: %w", t.ID, err)
@@ -128,6 +144,8 @@ func runServe(args []string) error {
 		Addr:              cfg.Server.Listen,
 		Handler:           srv,
 		ReadHeaderTimeout: 10 * time.Second,
+		// Request contexts end on SIGTERM so open SSE streams don't stall Shutdown for its full timeout.
+		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 
 	pollDone := make(chan struct{})
