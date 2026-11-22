@@ -15,7 +15,9 @@ import (
 )
 
 func TestPfSensePing(t *testing.T) {
+	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v2/diagnostics/ping" || r.Header.Get("X-API-Key") != "k" {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -36,6 +38,19 @@ func TestPfSensePing(t *testing.T) {
 	}
 	if _, err := d.RunDiagnostic(context.Background(), cfg, model.DiagnosticRequest{Kind: model.DiagTraceroute, Target: "192.0.2.1"}); !errors.Is(err, driver.ErrDiagnosticUnsupported) {
 		t.Errorf("traceroute err = %v", err)
+	}
+	// pfrest only shell-quotes the host, so "-f" would run a flood ping: the driver must refuse
+	// it before calling the device.
+	for _, req := range []model.DiagnosticRequest{
+		{Kind: model.DiagPing, Target: "-f"},
+		{Kind: model.DiagPing, Target: "192.0.2.1", Params: map[string]string{"count": "50"}},
+	} {
+		if _, err := d.RunDiagnostic(context.Background(), cfg, req); !errors.Is(err, driver.ErrDiagnosticRequest) {
+			t.Errorf("%+v: err = %v", req, err)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("device calls = %d, want 1", calls)
 	}
 	// A REST API older than v2.7.0 has no ping route.
 	cfg.ResolvedSecrets = map[string]string{"api_key": "other"}

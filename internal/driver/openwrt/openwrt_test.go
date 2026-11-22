@@ -80,6 +80,9 @@ func TestOpenWrtDriverPoll(t *testing.T) {
 	if len(snap.Devices) != 1 || snap.Devices[0].MgmtIP != "192.0.2.10" || snap.Devices[0].ID != "openwrt:ow-sw" || snap.Devices[0].PrimaryMAC != "02:51:0a:00:00:01" {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
+	if caps := snap.Devices[0].Capabilities; !slices.Contains(caps, model.CapDiagPing) || !slices.Contains(caps, model.CapDiagTraceroute) {
+		t.Fatalf("diagnostic capabilities missing: %v", caps)
+	}
 	var names []string
 	for _, l := range snap.Links {
 		names = append(names, l.IfName)

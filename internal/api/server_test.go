@@ -338,6 +338,7 @@ func TestDiagnosticsFdbLookupAndDeviceRPC(t *testing.T) {
 		{"POST", "/api/v1/diagnostics", `{"kind":"fdb_lookup","target":"nas"}`, http.StatusOK},
 		{"POST", "/api/v1/diagnostics", `{"kind":"fdb_lookup","target":"00:00:00:00:00:99"}`, http.StatusOK},
 		{"POST", "/api/v1/diagnostics", `{"kind":"cable_test","device_id":"mock:02:51:0a:00:00:01","target":"1"}`, http.StatusNotImplemented},
+		{"POST", "/api/v1/diagnostics", `{"kind":"mtr","device_id":"mock:02:51:0a:00:00:01","target":"1"}`, http.StatusBadRequest},
 		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"mock:02:51:0a:00:00:01","target":"-bad"}`, http.StatusBadRequest},
 		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"mock:02:51:0a:00:00:01","target":"unreachable"}`, http.StatusBadGateway},
 		// A run whose history write fails is reported, not returned as saved.

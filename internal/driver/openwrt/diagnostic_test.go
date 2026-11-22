@@ -150,6 +150,11 @@ func TestTracerouteResultNotReachedOrFailed(t *testing.T) {
 	if res := tracerouteResult(req, "nope.lan", 1, "traceroute: bad address 'nope.lan'"); res.OK || res.Error != "traceroute: bad address 'nope.lan'" {
 		t.Errorf("failed: %+v", res)
 	}
+	// A run that exits non-zero after its header fails even when hops were printed.
+	broken := partial + "\ntraceroute: sendto: Network unreachable"
+	if res := tracerouteResult(req, "example.com", 1, broken); res.OK || res.Structured != nil || res.Error != "traceroute: sendto: Network unreachable" {
+		t.Errorf("non-zero exit: %+v", res)
+	}
 }
 
 func TestOpenWrtDiagnosticErrors(t *testing.T) {

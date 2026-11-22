@@ -62,6 +62,9 @@ func TestPfSenseDriverPoll(t *testing.T) {
 		t.Fatalf("Poll: %v", err)
 	}
 	snap.Normalize()
+	if caps := snap.Devices[0].Capabilities; !slices.Contains(caps, model.CapDiagPing) || slices.Contains(caps, model.CapDiagTraceroute) {
+		t.Fatalf("diagnostic capabilities = %v, want ping only", caps)
+	}
 	if len(snap.Devices) != 1 || snap.Devices[0].Role != model.RoleFirewall || snap.Devices[0].MgmtIP != "192.0.2.1" {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
