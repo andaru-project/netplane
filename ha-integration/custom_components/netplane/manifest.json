@@ -1,0 +1,11 @@
+{
+  "domain": "netplane",
+  "name": "netplane",
+  "codeowners": ["@andrebrait"],
+  "config_flow": true,
+  "documentation": "https://github.com/andrebrait/netplane",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/andrebrait/netplane/issues",
+  "requirements": ["netplane-client==0.1.0"],
+  "version": "0.1.0"
+}

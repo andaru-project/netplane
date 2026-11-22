@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to netplane",
+        "description": "Enter the URL of your netplane server (standalone or Home Assistant Add-on).",
+        "data": {
+          "url": "Server URL",
+          "api_token": "API Bearer Token (optional)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to netplane",
+      "invalid_auth": "Invalid API token"
+    },
+    "abort": {
+      "already_configured": "This netplane server is already configured"
+    }
+  }
+}

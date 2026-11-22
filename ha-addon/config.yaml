@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: "netplane"
+description: "Open network configuration, information, and diagnostics plane for OpenWrt, RTLPlayground, Andaru, pfSense, OPNsense, UniFi, and SNMP gear"
+version: "0.1.0"
+slug: "netplane"
+url: "https://github.com/andrebrait/netplane"
+arch:
+  - amd64
+  - aarch64
+startup: services
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: "mdi:lan"
+panel_title: "netplane"
+host_network: true
+ports:
+  8099/tcp: null
+map:
+  - addon_config:rw
+options:
+  config_file: "/config/netplane.yaml"
+schema:
+  config_file: str
