@@ -330,7 +330,7 @@ func TestPruneTargetsDropsStoredTopology(t *testing.T) {
 	}
 }
 
-func TestMergeClientsThreeWayAndOfflineRace(t *testing.T) {
+func TestMergeClientsThreeWay(t *testing.T) {
 	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 	got := mergeClients([]model.Client{
 		{MAC: "aa:bb:cc:dd:ee:ff", AttachedDeviceID: "ap-a", LastSeen: t0},
@@ -341,34 +341,49 @@ func TestMergeClientsThreeWayAndOfflineRace(t *testing.T) {
 		t.Fatalf("merged = %+v", got)
 	}
 
-	ctx := context.Background()
-	st := openTestStore(t)
-	snap := &driver.Snapshot{TargetID: "t1", CollectedAt: t0.Add(time.Minute), Devices: []model.Device{{ID: "d1", Online: true}}}
-	if _, err := st.SaveSnapshot(ctx, snap); err != nil {
-		t.Fatal(err)
-	}
-	// A failed attempt that started before the stored (successful) snapshot must not mark it offline.
-	if prev, curr, err := st.MarkTargetOffline(ctx, "t1", t0); err != nil || prev != nil || curr != nil {
-		t.Fatalf("stale mark applied: prev=%v curr=%v err=%v", prev, curr, err)
-	}
-	if _, curr, err := st.MarkTargetOffline(ctx, "t1", t0.Add(2*time.Minute)); err != nil || curr == nil || curr.Devices[0].Online {
-		t.Fatalf("mark after snapshot: curr=%+v err=%v", curr, err)
-	}
 }
 
-func TestPruneTargetsKeepsTopologyForConfigOnlyRows(t *testing.T) {
+func TestPruneTargetsKeepsTopologyWhenNothingIsStale(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)
-	if err := st.UpsertTarget(ctx, driver.TargetConfig{ID: "disabled", Driver: "openwrt"}); err != nil {
+	if err := st.UpsertTarget(ctx, driver.TargetConfig{ID: "on", Driver: "openwrt", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SaveTopology(ctx, time.Now(), map[string]any{"nodes": []string{}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PruneTargets(ctx, map[string]bool{"disabled": false}); err != nil {
+	if err := st.PruneTargets(ctx, map[string]bool{"on": true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := st.LoadTopologyRaw(ctx); err != nil || !ok {
-		t.Fatalf("topology wiped for a target with no data: ok=%v err=%v", ok, err)
+		t.Fatalf("topology wiped with nothing stale: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestNoBitrateAcrossLongGap(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	snap := func(at time.Time, rx uint64) *driver.Snapshot {
+		return &driver.Snapshot{TargetID: "t1", CollectedAt: at, Links: []model.Link{{
+			DeviceID: "d1", IfName: "lan1", Counters: &model.PortCounters{RxBytes: rx},
+		}}}
+	}
+	if _, err := st.SaveSnapshot(ctx, snap(t0, 1000)); err != nil {
+		t.Fatal(err)
+	}
+	s2 := snap(t0.Add(2*time.Hour), 1_000_000)
+	if _, err := st.SaveSnapshot(ctx, s2); err != nil {
+		t.Fatal(err)
+	}
+	if s2.Links[0].Rates.RxBps != 0 {
+		t.Fatalf("rate across a 2h gap = %v, want 0", s2.Links[0].Rates.RxBps)
+	}
+	s3 := snap(t0.Add(2*time.Hour+30*time.Second), 1_000_000+3750)
+	if _, err := st.SaveSnapshot(ctx, s3); err != nil {
+		t.Fatal(err)
+	}
+	if s3.Links[0].Rates.RxBps != 1000 {
+		t.Fatalf("rate after the gap = %v, want 1000", s3.Links[0].Rates.RxBps)
 	}
 }

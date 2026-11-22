@@ -4,6 +4,7 @@ package driver
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -72,5 +73,23 @@ func TestNewHTTPClientRefusesDowngradeAfterUpgrade(t *testing.T) {
 	}
 	if err := c.CheckRedirect(third, []*http.Request{first, second}); err == nil {
 		t.Fatal("expected https -> http hop to be refused")
+	}
+}
+
+func TestSameHost(t *testing.T) {
+	for _, tc := range []struct {
+		next, first string
+		want        bool
+	}{
+		{"https://Router:443/login", "http://router/", true},
+		{"https://router/login", "https://router:443/", true},
+		{"http://router:8080/", "http://router/", false},
+		{"https://evil/", "https://router/", false},
+	} {
+		n, _ := url.Parse(tc.next)
+		f, _ := url.Parse(tc.first)
+		if got := sameHost(n, f); got != tc.want {
+			t.Errorf("sameHost(%s, %s) = %v, want %v", tc.next, tc.first, got, tc.want)
+		}
 	}
 }

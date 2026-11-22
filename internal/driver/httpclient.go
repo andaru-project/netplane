@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -22,7 +24,7 @@ func NewHTTPClient(cfg TargetConfig, timeout time.Duration) *http.Client {
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
 			}
-			if req.URL.Host != via[0].URL.Host {
+			if !sameHost(req.URL, via[0].URL) {
 				return fmt.Errorf("refusing redirect from %s to different host %s", via[0].URL.Host, req.URL.Host)
 			}
 			if via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
@@ -31,4 +33,25 @@ func NewHTTPClient(cfg TargetConfig, timeout time.Duration) *http.Client {
 			return nil
 		},
 	}
+}
+
+// sameHost reports whether next stays on first's host: hostnames compare case-insensitively
+// and an omitted port means the scheme default.
+func sameHost(next, first *url.URL) bool {
+	if !strings.EqualFold(next.Hostname(), first.Hostname()) {
+		return false
+	}
+	np, fp := effectivePort(next), effectivePort(first)
+	// http://h -> https://h moves from :80 to :443 without changing host.
+	return np == fp || (first.Scheme == "http" && fp == "80" && next.Scheme == "https" && np == "443")
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
 }

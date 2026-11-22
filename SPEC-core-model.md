@@ -206,7 +206,7 @@ type ConfigDriver interface {
 - Every Go file starts with `// SPDX-License-Identifier: AGPL-3.0-or-later`.
 - Every JSON Schema file under `schema/` carries `"$comment": "SPDX-License-Identifier: Apache-2.0"`.
 - Normalize all MAC addresses via `model.NormalizeMAC` (`aa:bb:cc:dd:ee:ff`); a malformed MAC never fails a poll: optional MAC fields are cleared and MAC-keyed FDB/client entries are dropped. Empty slices serialize as `[]` rather than `null` for consistent wire contracts.
-- A target whose polls fail twice in a row has its stored devices and clients marked offline (emitting `device.offline` / `client.left`); stored data of targets removed from or disabled in the config is pruned at startup.
+- A target whose polls fail twice in a row has its stored devices and clients marked offline (emitting `device.offline` / `client.left`); the stored config, snapshot and device rows of targets removed from or disabled in the config (and the stored topology) are pruned at startup, while their link and diagnostic history ages out through retention.
 - Optional hardware telemetry fields use pointers (`*bool`, `*float64`, `*SfpDom`, `*PortPoE`) so absence means "unsupported/unavailable", never a false zero.
 
 ```go

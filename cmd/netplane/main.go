@@ -115,6 +115,9 @@ func runServe(args []string) error {
 		return fmt.Errorf("prune stale targets: %w", err)
 	}
 	for _, t := range cfg.Targets {
+		if !t.Enabled {
+			continue // disabled targets keep no stored state
+		}
 		if err := st.UpsertTarget(ctx, t); err != nil {
 			return fmt.Errorf("persist target %s: %w", t.ID, err)
 		}

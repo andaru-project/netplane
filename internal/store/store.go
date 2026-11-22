@@ -171,7 +171,7 @@ func (s *Store) ListTargets(ctx context.Context) ([]driver.TargetConfig, error) 
 	return out, rows.Err()
 }
 
-// DeleteTarget removes a target, its cached snapshot and devices, and their link and diagnostic history.
+// DeleteTarget removes a target and its cached snapshot/devices; link and diagnostic history ages out via retention.
 func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -182,13 +182,7 @@ func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM targets WHERE id = ?`, id); err != nil {
 		return err
 	}
-	// Per-device history goes too: a stale counter row would otherwise yield one bitrate
-	// averaged over the whole gap if the target is added back later.
-	for _, table := range []string{"link_counter_state", "link_samples", "diagnostic_runs"} {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE device_id IN (SELECT id FROM devices WHERE target_id = ?)`, id); err != nil {
-			return err
-		}
-	}
+
 	if _, err := tx.ExecContext(ctx, `DELETE FROM target_snapshots WHERE target_id = ?`, id); err != nil {
 		return err
 	}
@@ -198,43 +192,43 @@ func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
+// maxCounterGap bounds the time between two counter readings used for a bitrate; after a
+// longer outage the average over the gap says nothing about current traffic.
+// shortcut: fixed bound, not tied to the target's poll interval; derive it if intervals exceed ~5m.
+const maxCounterGap = 15 * time.Minute
+
 // PruneTargets deletes the stored config, snapshot and devices of every target whose ID is
 // not in keep, so removed or disabled targets stop showing stale (online) devices.
 func (s *Store) PruneTargets(ctx context.Context, keep map[string]bool) error {
-	// hasData is 1 for IDs that own snapshot or device rows, which the stored topology may show.
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, 0 FROM targets UNION
-		SELECT target_id, 1 FROM target_snapshots UNION
-		SELECT target_id, 1 FROM devices`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM targets UNION SELECT target_id FROM target_snapshots UNION SELECT target_id FROM devices`)
 	if err != nil {
 		return err
 	}
-	stale := map[string]bool{}
-	hadData := false
+	var stale []string
 	for rows.Next() {
 		var id string
-		var hasData bool
-		if err := rows.Scan(&id, &hasData); err != nil {
+		if err := rows.Scan(&id); err != nil {
 			rows.Close()
 			return err
 		}
 		if !keep[id] {
-			stale[id] = true
-			hadData = hadData || hasData
+			stale = append(stale, id)
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for id := range stale {
-		if err := s.DeleteTarget(ctx, id); err != nil {
-			return err
-		}
+	if len(stale) == 0 {
+		return nil
 	}
-	if hadData {
-		// The stored graph still holds the pruned devices; readers re-solve from state without it.
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM topology_snapshots`); err != nil {
+	// Wipe the stored graph first: it may show the pruned devices, readers re-solve without
+	// it, and a failure here leaves the stale IDs in place so the next start retries.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM topology_snapshots`); err != nil {
+		return err
+	}
+	for _, id := range stale {
+		if err := s.DeleteTarget(ctx, id); err != nil {
 			return err
 		}
 	}
@@ -285,8 +279,8 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 				l.DeviceID, l.IfName,
 			).Scan(&prevTs, &prevRx, &prevTx, &prev32)
 			// A counter width change (e.g. SNMP falling back from ifXTable) makes the delta meaningless.
-			if err == nil && tsNano > prevTs && prev32 == l.Counters.Counter32 {
-				elapsed := time.Duration(tsNano - prevTs)
+			elapsed := time.Duration(tsNano - prevTs)
+			if err == nil && elapsed > 0 && elapsed <= maxCounterGap && prev32 == l.Counters.Counter32 {
 				rxBps = model.ComputeBitrate(uint64(prevRx), l.Counters.RxBytes, elapsed, l.Counters.Counter32)
 				txBps = model.ComputeBitrate(uint64(prevTx), l.Counters.TxBytes, elapsed, l.Counters.Counter32)
 			}
@@ -393,7 +387,7 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 
 // MarkTargetOffline flags every device and client in the target's stored snapshot offline,
 // for a target that stopped answering. It returns the snapshot before and after the change
-// for diffing, or nil, nil when the target has no stored snapshot or one newer than at.
+// for diffing, or nil, nil when the target has no stored snapshot.
 func (s *Store) MarkTargetOffline(ctx context.Context, targetID string, at time.Time) (prev, curr *driver.Snapshot, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -411,9 +405,6 @@ func (s *Store) MarkTargetOffline(ctx context.Context, targetID string, at time.
 	prev, curr = &driver.Snapshot{}, &driver.Snapshot{}
 	if err := json.Unmarshal([]byte(raw), prev); err != nil {
 		return nil, nil, err
-	}
-	if prev.CollectedAt.After(at) {
-		return nil, nil, nil // a concurrent poll succeeded after this failed attempt started
 	}
 	_ = json.Unmarshal([]byte(raw), curr) // same bytes, cannot fail now
 	curr.CollectedAt = at.UTC()

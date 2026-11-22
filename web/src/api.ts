@@ -209,6 +209,9 @@ export interface NetplaneEvent {
   summary: string;
 }
 
+// Fired after a token is stored, so the event stream can reconnect at once.
+export const AUTH_EVENT = 'netplane-auth';
+
 // One shared prompt so parallel 401s ask for the token only once.
 let tokenPrompt: Promise<boolean> | null = null;
 
@@ -221,6 +224,7 @@ function promptForToken(): Promise<boolean> {
     // Scope to the app's base path so other apps on the origin (e.g. other HA ingress add-ons) never get it.
     const path = new URL('.', document.baseURI).pathname;
     document.cookie = `netplane_token=${encodeURIComponent(token)}; path=${path}; SameSite=Strict`;
+    window.dispatchEvent(new Event(AUTH_EVENT));
     return true;
   }).finally(() => {
     tokenPrompt = null;

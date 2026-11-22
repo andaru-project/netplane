@@ -35,6 +35,10 @@ type Scheduler struct {
 	mu     sync.RWMutex
 	topoMu sync.Mutex
 	status map[string]TargetStatus
+
+	// pollLocks serializes polls of one target (background loop vs manual API poll), so a
+	// failed attempt can never mark offline a snapshot that a concurrent poll just saved.
+	pollLocks sync.Map // target ID -> *sync.Mutex
 }
 
 // New creates a Scheduler wired to the given Registry, Store, and EventBus.
@@ -83,6 +87,10 @@ const offlineAfterFailures = 2
 // PollOnce executes a single synchronous poll cycle for cfg, persisting state,
 // emitting diff events, and updating the solved topology snapshot.
 func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error {
+	lock, _ := s.pollLocks.LoadOrStore(cfg.ID, &sync.Mutex{})
+	lock.(*sync.Mutex).Lock()
+	defer lock.(*sync.Mutex).Unlock()
+
 	now := time.Now().UTC()
 	drv, ok := s.registry.Get(cfg.Driver)
 	if !ok {

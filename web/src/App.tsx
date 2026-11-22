@@ -22,6 +22,7 @@ import {
   Device,
   DeviceDetail,
   DiagnosticResult,
+  AUTH_EVENT,
   formatUptime,
   NetplaneEvent,
   TopologyGraph,
@@ -74,6 +75,19 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [refreshAll]);
 
+  // The stream reads refreshAll through a ref so a new client query does not reopen it.
+  const refreshRef = useRef(refreshAll);
+  refreshRef.current = refreshAll;
+
+  useEffect(() => {
+    const onAuth = () => {
+      sseFailures.current = 0;
+      setSseEpoch((n) => n + 1);
+    };
+    window.addEventListener(AUTH_EVENT, onAuth);
+    return () => window.removeEventListener(AUTH_EVENT, onAuth);
+  }, []);
+
   useEffect(() => {
     const es = new EventSource('./api/v1/events/stream');
     es.onopen = () => {
@@ -94,7 +108,7 @@ export function App() {
         const parsed = JSON.parse(e.data) as NetplaneEvent;
         setEvents((prev) => [parsed, ...prev].slice(0, 50));
         if (parsed.type === 'topology.updated') {
-          void refreshAll();
+          void refreshRef.current();
         }
       } catch {
         // ignore non-JSON frames
@@ -121,7 +135,7 @@ export function App() {
       window.clearTimeout(retry);
       es.close();
     };
-  }, [refreshAll, sseEpoch]);
+  }, [sseEpoch]);
 
   const openDevice = async (id: string) => {
     try {
