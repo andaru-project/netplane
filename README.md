@@ -9,7 +9,7 @@ An open, driver-based **network configuration, information, and diagnostics plan
 1. **Standalone Core + Embedded Web UI** (Go + React/TypeScript SPA, single static binary/container, embedded SQLite in WAL mode):
    - Capability-based canonical data model (devices, ports, media/SFP DOM, EEE/Flow Control, VLANs, FDB, ARP, LLDP, wireless radios/SSIDs, clients, gateways, DHCP leases).
    - Native API/SSH drivers (**OpenWrt**, **pfSense**, **UniFi**) plus a standards-based **SNMP v2c/v3** driver.
-   - Cross-vendor L2/L3 topology solver (LLDP + FDB + ARP + wireless associations) and diagnostics: a cross-vendor FDB/MAC/IP lookup (`fdb_lookup`), ping and traceroute run on OpenWrt devices (the account needs LuCI's `luci-mod-network-diagnostics` ACL grant), and ping run on pfSense (REST API v2.7.0 or later, with the `api-v2-diagnostics-ping-post` privilege). Cable tests are planned.
+   - Cross-vendor L2/L3 topology solver (LLDP + FDB + ARP + wireless associations) and diagnostics: a cross-vendor FDB/MAC/IP lookup (`fdb_lookup`), ping and traceroute run on OpenWrt devices (the account needs LuCI's `luci-mod-network-diagnostics` ACL grant), and ping run on pfSense (REST API v2.7.0 or later, with the `api-v2-diagnostics-ping-post` privilege). Andaru, UniFi, SNMP and RTLPlayground run no device-side diagnostic, and cable tests are planned.
 2. **Home Assistant Add-on with Ingress:**
    - Embeds the full UI directly into the Home Assistant sidebar and Android/iOS Companion Apps with SSO and zero extra exposed ports.
 3. **Thin Home Assistant Integration (`ha-integration/`):**
