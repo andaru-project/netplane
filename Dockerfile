@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Both builder stages run on the build host's platform: the UI is platform-independent and Go
-# cross-compiles, so a multi-arch build never runs a compiler under emulation.
+# Requires BuildKit (the default since Docker 23). Both builder stages run on the build host's
+# platform: the UI is platform-independent and Go cross-compiles, so a multi-arch build never
+# runs a compiler under emulation.
 FROM --platform=$BUILDPLATFORM node:22-alpine AS web-builder
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
@@ -17,7 +18,7 @@ COPY internal/ ./internal/
 COPY schema/ ./schema/
 COPY web/embed.go ./web/embed.go
 COPY --from=web-builder /src/web/dist ./web/dist
-# Value-free so BuildKit's automatic platform values apply; empty (legacy builder) builds natively.
+# Value-free so BuildKit's automatic target platform applies.
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=0.1.0
@@ -27,7 +28,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 
 FROM alpine:3.21
 ARG VERSION=0.1.0
-ARG BUILD_ARCH=amd64
+# The add-on architecture name (amd64, aarch64), set by the release workflow.
+ARG BUILD_ARCH
 # Home Assistant Supervisor reads these labels from add-on images.
 LABEL io.hass.type="addon" io.hass.version="${VERSION}" io.hass.arch="${BUILD_ARCH}" \
       org.opencontainers.image.source="https://github.com/andrebrait/netplane" \

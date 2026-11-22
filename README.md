@@ -61,7 +61,14 @@ The container reads its configuration from `/config/netplane.yaml`. Secrets the 
 
 To install the add-on, add `https://github.com/andrebrait/netplane` under Settings → Add-ons → Add-on store → Repositories, then install netplane. Supervisor pulls the published image `ghcr.io/andrebrait/netplane-{amd64,aarch64}` at the add-on's version.
 
-Releasing: set `version` in `ha-addon/config.yaml`, then push the tag `v<version>`. The [Add-on image](.github/workflows/addon-image.yml) workflow checks that the tag matches and publishes both images. The first publish creates the GHCR packages as private; make each one public once (package settings → Change visibility) so Supervisor can pull it.
+Releasing: Supervisor offers whatever `version` the default branch holds, so publish the images before the version bump reaches `main`:
+
+1. Open a pull request that sets `version` in `ha-addon/config.yaml`.
+2. Push the tag `v<version>` on that pull request's head commit. The [Add-on image](.github/workflows/addon-image.yml) workflow checks the tag against the file and publishes both images.
+3. The first time only, make both GHCR packages (`netplane-amd64`, `netplane-aarch64`) public under package settings → Change visibility, so Supervisor can pull them anonymously.
+4. Merge the pull request.
+
+Building the image locally needs BuildKit (the default since Docker 23).
 
 Home Assistant Add-on metadata lives in [ha-addon/config.yaml](ha-addon/config.yaml) (`ingress: true`, port `8099`), and the upstreamable Apache-2.0 Home Assistant integration lives in [ha-integration/custom_components/netplane](ha-integration/custom_components/netplane).
 

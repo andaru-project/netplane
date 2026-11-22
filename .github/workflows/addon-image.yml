@@ -2,15 +2,12 @@
 name: Add-on image
 
 # Publishes ghcr.io/<owner>/netplane-{amd64,aarch64}:<version> for Home Assistant, which pulls
-# the image named in ha-addon/config.yaml at the tag equal to its `version`.
+# the image named in ha-addon/config.yaml at the tag equal to its `version`. Pull requests
+# build both images without pushing: the image depends on the whole tree.
 on:
   push:
     tags: ["v*"]
   pull_request:
-    paths:
-      - Dockerfile
-      - ha-addon/**
-      - .github/workflows/addon-image.yml
 
 permissions:
   contents: read
@@ -20,18 +17,21 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      owner: ${{ steps.v.outputs.owner }}
     steps:
       - uses: actions/checkout@v4
       - id: v
         name: Read the add-on version and check it matches the tag
         run: |
-          version=$(sed -n 's/^version: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' ha-addon/config.yaml)
+          version=$(yq -r '.version // ""' ha-addon/config.yaml)
           test -n "$version" || { echo "no version in ha-addon/config.yaml"; exit 1; }
           if [ "${GITHUB_REF_TYPE}" = tag ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
             echo "tag ${GITHUB_REF_NAME} does not match ha-addon/config.yaml version ${version}"
             exit 1
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # Image names must be lowercase.
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
   image:
     needs: version
@@ -65,8 +65,6 @@ jobs:
             VERSION=${{ needs.version.outputs.version }}
             BUILD_ARCH=${{ matrix.arch }}
           push: ${{ github.event_name == 'push' }}
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/netplane-${{ matrix.arch }}:${{ needs.version.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/netplane-${{ matrix.arch }}:latest
+          tags: ghcr.io/${{ needs.version.outputs.owner }}/netplane-${{ matrix.arch }}:${{ needs.version.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
