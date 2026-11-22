@@ -375,7 +375,7 @@ func (s *Server) handleRunDiagnostic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "kind and target are required")
 		return
 	}
-	if !slices.Contains([]model.DiagnosticKind{model.DiagFdbLookup, model.DiagPing, model.DiagTraceroute, model.DiagCableTest}, req.Kind) {
+	if !req.Kind.Valid() {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", fmt.Sprintf("unknown diagnostic kind %q", req.Kind))
 		return
 	}

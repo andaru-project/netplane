@@ -99,7 +99,8 @@ func TestOpenWrtPathFallbackOnACLRefusal(t *testing.T) {
 		"only /usr/bin granted": {`{"result":[6]}`, execReply(0, "1 packets transmitted, 1 packets received, 0% packet loss"), ""},
 		"neither granted":       {`{"result":[6]}`, `{"result":[6]}`, "openwrt file.exec /usr/bin/ping: ubus call file.exec returned status 6: ubus permission denied (grant the account luci-mod-network-diagnostics)"},
 		"missing then refused":  {`{"result":[4]}`, `{"result":[6]}`, "openwrt file.exec /usr/bin/ping: ubus call file.exec returned status 6: ubus permission denied (grant the account luci-mod-network-diagnostics)"},
-		"refused then missing":  {`{"result":[6]}`, `{"result":[4]}`, "openwrt file.exec /usr/bin/ping: ubus call file.exec returned status 4: ubus not found (grant the account luci-mod-network-diagnostics)"},
+		"refused then missing":  {`{"result":[6]}`, `{"result":[4]}`, "openwrt file.exec /bin/ping: ubus call file.exec returned status 6: ubus permission denied (grant the account luci-mod-network-diagnostics)"},
+		"refused then broken":   {`{"result":[6]}`, `{"result":[2]}`, "openwrt file.exec /usr/bin/ping: ubus call file.exec returned status 2"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := execServer(t, func(cmd string, _ []string) string {
@@ -159,7 +160,9 @@ func TestTracerouteResultNotReachedOrFailed(t *testing.T) {
 
 func TestOpenWrtDiagnosticErrors(t *testing.T) {
 	// Requests refused before any call to the device.
-	d, cfg := New(), diagCfg("http://192.0.2.99:1")
+	never := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("device called") }))
+	defer never.Close()
+	d, cfg := New(), diagCfg(never.URL)
 	for _, tc := range []struct {
 		req  model.DiagnosticRequest
 		want error

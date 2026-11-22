@@ -414,8 +414,10 @@ export function App() {
                     label="Type"
                     value={diagKind}
                     onChange={(v) => {
-                      setDiagKind(v ?? 'fdb_lookup');
-                      setDiagDeviceId(''); // the new kind may hide the selected device
+                      const kind = v ?? 'fdb_lookup';
+                      setDiagKind(kind);
+                      // Keep the device only if it runs the new kind too.
+                      if (!devices.find((d) => d.id === diagDeviceId)?.capabilities.includes(`cap:diag_${kind}`)) setDiagDeviceId('');
                     }}
                     data={[
                       { value: 'fdb_lookup', label: 'FDB / MAC / IP Lookup (Cross-Vendor)' },

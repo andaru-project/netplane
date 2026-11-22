@@ -64,7 +64,7 @@ func TestPfSensePingFailures(t *testing.T) {
 		status        int
 		body, wantErr string
 	}{
-		"rejected host":  {400, `{"code":400,"status":"bad request","message":"Field host is invalid"}`, "pfsense diagnostics/ping: HTTP 400: Field host is invalid"},
+		"rejected host":  {400, `{"code":400,"status":"bad request","message":"Field host is invalid"}`, "invalid diagnostic request: pfsense diagnostics/ping: HTTP 400: Field host is invalid"},
 		"silent failure": {200, `{"code":200,"data":{"output":"","result_code":68}}`, ""},
 	} {
 		t.Run(name, func(t *testing.T) {

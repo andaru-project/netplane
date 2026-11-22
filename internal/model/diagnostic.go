@@ -13,6 +13,15 @@ const (
 	DiagFdbLookup  DiagnosticKind = "fdb_lookup"
 )
 
+// Valid reports whether k is one of the kinds above.
+func (k DiagnosticKind) Valid() bool {
+	switch k {
+	case DiagPing, DiagTraceroute, DiagCableTest, DiagFdbLookup:
+		return true
+	}
+	return false
+}
+
 // DiagnosticRequest describes a single diagnostic action to execute on a device.
 type DiagnosticRequest struct {
 	Kind     DiagnosticKind    `json:"kind"`
