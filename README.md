@@ -38,6 +38,14 @@ The example configuration requires a bearer token (`api_token_secret`). Remove i
 
 Drivers refuse to send credentials to a plain `http://` endpoint unless the target sets `allow_insecure_http: true` under `settings`. Use `https://` (or a `unix://` socket) where the device supports it.
 
+#### RTLPlayground switches
+
+The `rtlplayground` driver is built for the firmware's small 8051 MCU, which keeps one web connection (shared with its web UI), one exporter connection (shared with Prometheus) and four login sessions:
+
+- Enable the exporter on the switch (`prometheus on`). Every poll reads ports, counters, SFP DOM, temperatures and identity from `http://<host>:9100/metrics`, one request, without logging in.
+- Optionally set the `password` secret to add LLDP, LAG, the management IP and the forwarding table. The driver then keeps a single login session and refreshes that data every 5 to 15 minutes. The firmware has no TLS, so this also needs `allow_insecure_http: true`.
+- Targets are polled at most every 30 seconds, one request at a time, and the driver never calls endpoints that change the switch's state.
+
 ### Container / Home Assistant Add-on
 
 ```bash

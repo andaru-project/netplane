@@ -135,6 +135,12 @@ func normMAC(p *string) {
 	*p = mac
 }
 
+// MinIntervalDriver is implemented by drivers whose devices must not be polled more often
+// than a floor; the poller raises a target's configured interval to it.
+type MinIntervalDriver interface {
+	MinPollInterval() time.Duration
+}
+
 // Driver is implemented by every platform integration (OpenWrt, RTLPlayground, Andaru, pfSense, OPNsense, UniFi, SNMP).
 type Driver interface {
 	Kind() string

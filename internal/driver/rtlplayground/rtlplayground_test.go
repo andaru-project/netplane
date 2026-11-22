@@ -3,90 +3,316 @@ package rtlplayground
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/andrebrait/netplane/internal/driver"
 	"github.com/andrebrait/netplane/internal/model"
 )
 
-func TestRTLPlaygroundDriverPoll(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/system":
-			_, _ = w.Write([]byte(`{"hostname":"lg510s","model":"LG510S","mac":"02:51:0a:00:00:01","ip":"192.0.2.10","version":"24.10.1-rtl","uptime":900,"temp_c":46.5}`))
-		case "/api/ports":
-			_, _ = w.Write([]byte(`[
-				{"index":1,"name":"lan1","media":"2.5GE","admin_up":true,"link_up":true,"speed_mbps":2500,"duplex":"full","eee":true,"flow_rx":true,"flow_tx":true,"pvid":1,"tagged_vlans":[10,20],"stp_state":"forwarding","counters":{"rx_bytes":1000,"tx_bytes":2000}},
-				{"index":9,"name":"sfp9","media":"SFP+","admin_up":true,"link_up":true,"speed_mbps":10000,"duplex":"full","eee":true,"pvid":1,"sfp":{"present":true,"vendor":"FS","part_number":"SFP-10GSR-85","rx_power_dbm":-3.2,"temp_c":39.0}}
-			]`))
-		case "/api/fdb":
-			_, _ = w.Write([]byte(`[{"port":"lan1","mac":"de:ad:be:ef:00:01","vlan":1}]`))
-		case "/api/lag":
-			_, _ = w.Write([]byte(`[]`))
-		case "/api/lldp":
-			_, _ = w.Write([]byte(`[{"local_link":"sfp9","chassis_id":"00:11:22:33:44:01","remote_port":"sfp0","remote_sys_name":"core-fw"}]`))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
+func init() { requestGap = 0 }
 
-	drv := New()
-	if err := drv.ValidateConfig(driver.TargetConfig{ID: "r1"}); err == nil {
-		t.Fatal("expected error for missing endpoint")
+// fakeSwitch serves firmware-shaped replies and records every request.
+type fakeSwitch struct {
+	mu       sync.Mutex
+	paths    []string
+	logins   int
+	sessions map[string]bool
+	inflight int
+	maxConc  int
+	fdb      []string // l2.json rows, as JSON objects
+	metrics  []byte
+}
+
+func newFakeSwitch(t *testing.T) (*fakeSwitch, *httptest.Server) {
+	t.Helper()
+	m, err := os.ReadFile("testdata/metrics.txt")
+	if err != nil {
+		t.Fatal(err)
 	}
+	f := &fakeSwitch{sessions: map[string]bool{}, metrics: m}
+	srv := httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(srv.Close)
+	return f, srv
+}
 
-	snap, err := drv.Poll(context.Background(), driver.TargetConfig{
-		ID:       "sw-lg510s",
+func (f *fakeSwitch) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.paths = append(f.paths, r.URL.RequestURI())
+	f.inflight++
+	if f.inflight > f.maxConc {
+		f.maxConc = f.inflight
+	}
+	f.mu.Unlock()
+	defer func() { f.mu.Lock(); f.inflight--; f.mu.Unlock() }()
+
+	if r.URL.Path == "/metrics" {
+		_, _ = w.Write(f.metrics)
+		return
+	}
+	if r.URL.Path == "/login" {
+		_ = r.ParseForm()
+		if r.PostForm.Get("pwd") != "s3cret" {
+			w.Header().Set("Location", "login.html")
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		f.mu.Lock()
+		f.logins++
+		id := fmt.Sprintf("%012x", f.logins)
+		if c, err := r.Cookie("session"); err == nil && f.sessions[c.Value] {
+			id = c.Value // the firmware reuses a still-valid cookie's slot
+		}
+		f.sessions[id] = true
+		f.mu.Unlock()
+		w.Header().Set("Set-Cookie", "session="+id+"; SameSite=Strict")
+		w.Header().Set("Location", "index.html")
+		w.WriteHeader(http.StatusFound)
+		return
+	}
+	c, err := r.Cookie("session")
+	f.mu.Lock()
+	ok := err == nil && f.sessions[c.Value]
+	f.mu.Unlock()
+	if !ok {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	switch r.URL.Path {
+	case "/lldp.json":
+		_, _ = w.Write([]byte(`{"on":true,"tlv":255,"portStatus":[{"port":1,"name":"","permitted":true}],"neighbors":[` +
+			`{"port":1,"chassis":"02:00:5e:00:53:aa","portId":"lan4","sysName":"core-sw","sysDesc":"x","portDesc":"","mgmtAddr":"192.0.2.1","caps":4,"pvid":1,"mtu":1522,"agg":0,"mau":30,"aneg":2,"warn":0,"poe":null,"poeClass":null,"poeReq":null,"ttl":118},` +
+			`{"port":9,"chassis":"192.0.2.9","portId":"","sysName":"nas","sysDesc":"","portDesc":"eth0","mgmtAddr":"","caps":0,"pvid":1,"mtu":1522,"agg":0,"mau":0,"aneg":0,"warn":0,"poe":null,"poeClass":null,"poeReq":null,"ttl":90}]}`))
+	case "/lag.json":
+		_, _ = w.Write([]byte(`{"lags":[{"lagNum":0,"type":"static","members":[],"hash":"00000000"},` +
+			`{"lagNum":1,"type":"lacp","members":[1,9],"active_members":[1],"valid":true,"aggregator":"000000000000","hash":"0000003f"}],` +
+			`"ports":[{"p":1,"lag":1,"a":"3f","pt":"3f","rs":4,"rx":"0053","psys":"000000000000"}]}`))
+	case "/information.json":
+		_, _ = w.Write([]byte(`{"ip_address":"192.0.2.10","ip_gateway":"192.0.2.1","ip_netmask":"255.255.255.0","syslog_server":"0.0.0.0:514","session_timeout":3600,"ip_source":"static","mac_address":"02:00:5e:00:53:01","hostname":"switch-test","sw_ver":"v0.1.0","build_date":"2026-11-22 02:16:05","uptime":"0x0000a000","hw_ver":"MokerLink ZX-SWTGW218AS","pcb_ver":"","chip_temp":"56.5 C","flash_size":"2 MB","prometheus":true}`))
+	case "/l2.json":
+		idx, _ := strconv.Atoi(r.URL.Query().Get("idx"))
+		var page []string
+		f.mu.Lock()
+		for _, row := range f.fdb {
+			var e struct{ Idx string }
+			_, _ = fmt.Sscanf(row[strings.Index(row, `"idx":"`)+7:], "%4s", &e.Idx)
+			n, _ := strconv.ParseUint(e.Idx, 16, 16)
+			if int(n) >= idx && len(page) < 2 {
+				page = append(page, row)
+			}
+		}
+		f.mu.Unlock()
+		_, _ = w.Write([]byte("[" + strings.Join(page, ",") + "]"))
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func (f *fakeSwitch) count(prefix string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, p := range f.paths {
+		if strings.HasPrefix(p, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func cfgFor(srv *httptest.Server, password string) driver.TargetConfig {
+	cfg := driver.TargetConfig{
+		ID:       "sw1",
 		Driver:   "rtlplayground",
 		Endpoint: srv.URL,
-	})
+		Settings: map[string]any{"metrics_url": srv.URL + "/metrics", "allow_insecure_http": true},
+	}
+	if password != "" {
+		cfg.ResolvedSecrets = map[string]string{"password": password}
+	}
+	return cfg
+}
+
+func TestMetricsOnlyPoll(t *testing.T) {
+	f, srv := newFakeSwitch(t)
+	snap, err := New().Poll(context.Background(), cfgFor(srv, ""))
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if n := len(f.paths); n != 1 || f.paths[0] != "/metrics" {
+		t.Fatalf("without a password only /metrics may be fetched, got %v", f.paths)
+	}
+	snap.Normalize()
+	d := snap.Devices[0]
+	if d.ID != "rtlplayground:sw1" || d.Hostname != "switch-test" || d.Model != "MokerLink ZX-SWTGW218AS" ||
+		d.Firmware.Current != "v0.1.0-fe02652c" || d.PrimaryMAC != "02:00:5e:00:53:01" || d.UptimeSec != 40981 {
+		t.Fatalf("device = %+v", d)
+	}
+	if len(d.Sensors) != 1 || d.Sensors[0].Value != 56.546 {
+		t.Fatalf("sensors = %+v", d.Sensors)
+	}
+	if len(snap.Links) != 4 {
+		t.Fatalf("links = %d", len(snap.Links))
+	}
+	l1, l2, l3, l9 := snap.Links[0], snap.Links[1], snap.Links[2], snap.Links[3]
+	if l1.IfName != "lan1" || !l1.LinkUp || l1.SpeedMbps != 2500 || l1.Media != model.Media25GE || l1.Label != `uplink "core"` ||
+		l1.Counters.RxBytes != 1850697659 || l1.Counters.RxErrors != 3 {
+		t.Fatalf("lan1 = %+v counters %+v", l1, l1.Counters)
+	}
+	if l2.OperState != model.OperNoCarrier || !l2.AdminUp || l2.SpeedMbps != 0 {
+		t.Fatalf("lan2 = %+v", l2)
+	}
+	if l3.OperState != model.OperDisabled || l3.AdminUp {
+		t.Fatalf("lan3 = %+v", l3)
+	}
+	if l9.Counters.RxBytes != 9007199254740993 {
+		t.Fatalf("counter not exact: %d", l9.Counters.RxBytes)
+	}
+	s := l9.SFP
+	if s == nil || l9.Media != model.MediaSFPPl || !l9.IsFiber || s.Vendor != "10Gtek" || s.Serial != "TEST0001" ||
+		*s.TempC != 41.25 || *s.VoltageV != 3.3 || math.Abs(*s.BiasMa-6.5) > 1e-9 ||
+		math.Abs(*s.TxPowerDbm-(-3.0103)) > 1e-3 || s.RxPowerDbm != nil {
+		t.Fatalf("lan9 sfp = %+v", s)
+	}
+	if len(snap.LLDP) != 0 || len(snap.FDB) != 0 || len(snap.LagGroups) != 0 {
+		t.Fatal("no login data expected without a password")
+	}
+}
+
+func TestPollWithPasswordRefreshesSlowDataOnSchedule(t *testing.T) {
+	f, srv := newFakeSwitch(t)
+	f.fdb = []string{
+		`{"vlan":"001","mac":"02:00:5e:00:53:10","type":"l","port":2,"lag":0,"idx":"0010"}`,
+		`{"vlan":"00a","mac":"02:00:5e:00:53:11","type":"l","port":1,"lag":2,"idx":"0020"}`,
+		`{"vlan":"001","mac":"02:00:5e:00:53:01","type":"s","port":0,"lag":0,"idx":"0030"}`,
+	}
+	drv := New()
+	cfg := cfgFor(srv, "s3cret")
+	snap, err := drv.Poll(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
 	snap.Normalize()
-	if len(snap.Devices) != 1 || snap.Devices[0].ID != "rtlplayground:sw-lg510s" || snap.Devices[0].Model != "LG510S" || len(snap.Devices[0].Sensors) != 1 {
-		t.Fatalf("unexpected device: %+v", snap.Devices)
+	if snap.Devices[0].MgmtIP != "192.0.2.10" {
+		t.Fatalf("mgmt ip = %q", snap.Devices[0].MgmtIP)
 	}
-	if len(snap.Links) != 2 {
-		t.Fatalf("expected 2 links, got %d", len(snap.Links))
+	if len(snap.LLDP) != 2 || snap.LLDP[0].LocalLink != "lan1" || snap.LLDP[0].ChassisID != "02:00:5e:00:53:aa" ||
+		snap.LLDP[0].RemotePort != "lan4" || snap.LLDP[0].RemoteMgmtIP != "192.0.2.1" || snap.LLDP[1].RemotePort != "eth0" {
+		t.Fatalf("lldp = %+v", snap.LLDP)
 	}
-	if !*snap.Links[0].EEE || snap.Links[0].FlowControl == nil || !snap.Links[0].FlowControl.Rx {
-		t.Fatalf("expected copper EEE+FC enabled: %+v", snap.Links[0])
+	if len(snap.LagGroups) != 1 || snap.LagGroups[0].ID != "lag2" || snap.LagGroups[0].Mode != "lacp" ||
+		len(snap.LagGroups[0].MemberLinks) != 2 || !snap.LagGroups[0].LinkUp || snap.LagGroups[0].SpeedMbps != 12500 {
+		t.Fatalf("lags = %+v", snap.LagGroups)
 	}
-	// Strict SFP guard: even if raw API reported eee=true, driver forces false on fiber.
-	if !snap.Links[1].IsFiber || *snap.Links[1].EEE {
-		t.Fatalf("expected SFP+ port to have IsFiber=true and EEE=false: %+v", snap.Links[1])
+	if snap.Links[0].LagGroupID != "lag2" {
+		t.Fatalf("lan1 lag = %q", snap.Links[0].LagGroupID)
 	}
-	if snap.Links[1].SFP == nil || *snap.Links[1].SFP.RxPowerDbm != -3.2 || snap.Links[1].SFP.AlertState != model.AlertOK {
-		t.Fatalf("unexpected SFP DOM: %+v", snap.Links[1].SFP)
+	// Two pages of two and one; the CPU-port entry is dropped.
+	if len(snap.FDB) != 2 || snap.FDB[0].LinkName != "lan2" || snap.FDB[1].VLAN != 10 {
+		t.Fatalf("fdb = %+v", snap.FDB)
 	}
-	if len(snap.FDB) != 1 || len(snap.LLDP) != 1 {
-		t.Fatalf("expected 1 FDB and 1 LLDP, got %d/%d", len(snap.FDB), len(snap.LLDP))
+	if f.count("/l2.json") != 3 { // idx=0, idx=33, idx=49 (empty)
+		t.Fatalf("l2 pages = %v", f.paths)
+	}
+
+	// A second poll inside the refresh periods fetches only /metrics and replays the cache.
+	before := len(f.paths)
+	snap2, err := drv.Poll(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.paths[before:]; len(got) != 1 || got[0] != "/metrics" {
+		t.Fatalf("second poll requests = %v", got)
+	}
+	if len(snap2.LLDP) != 2 || len(snap2.FDB) != 2 || len(snap2.LagGroups) != 1 {
+		t.Fatal("cached slow data not replayed")
+	}
+	if f.logins != 1 {
+		t.Fatalf("logins = %d, want 1", f.logins)
+	}
+	if f.maxConc != 1 {
+		t.Fatalf("concurrent requests = %d, want 1", f.maxConc)
 	}
 }
 
-func TestRTLPlaygroundParseMedia(t *testing.T) {
-	for in, want := range map[string]model.MediaType{
-		" sfp+ ": model.MediaSFPPl, "2.5ge": model.Media25GE, "other": model.MediaOther,
-		"OTHER": model.MediaOther, "bogus": model.MediaOther, "": model.MediaOther,
-	} {
-		if got := parseMedia(in); got != want {
-			t.Errorf("parseMedia(%q) = %q, want %q", in, got, want)
-		}
+func TestSessionExpiryReloginsOnceAndReusesSlot(t *testing.T) {
+	f, srv := newFakeSwitch(t)
+	drv := New()
+	cfg := cfgFor(srv, "s3cret")
+	if _, err := drv.Poll(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	st := drv.state("sw1")
+	// The firmware evicted our session; force a refresh.
+	f.mu.Lock()
+	f.sessions = map[string]bool{}
+	f.mu.Unlock()
+	st.lldpAt = time.Time{}
+	if _, err := drv.Poll(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if f.logins != 2 || st.session == "" {
+		t.Fatalf("logins = %d session = %q", f.logins, st.session)
 	}
 }
 
-func TestRTLPlaygroundRefusesCredentialsOverHTTP(t *testing.T) {
-	cfg := driver.TargetConfig{ID: "r", Endpoint: "http://192.0.2.10",
-		ResolvedSecrets: map[string]string{"api_token": "t"}}
-	if err := New().ValidateConfig(cfg); err == nil {
-		t.Fatal("expected refusal to send a token over plain http")
+func TestWrongPasswordKeepsMetrics(t *testing.T) {
+	_, srv := newFakeSwitch(t)
+	snap, err := New().Poll(context.Background(), cfgFor(srv, "wrong"))
+	if err != nil {
+		t.Fatalf("a refused login must not fail the poll: %v", err)
+	}
+	if len(snap.Links) != 4 || len(snap.LLDP) != 0 {
+		t.Fatalf("links=%d lldp=%d", len(snap.Links), len(snap.LLDP))
+	}
+}
+
+func TestStaleCacheExpires(t *testing.T) {
+	st := &target{lldp: []lldpNeighbor{{Port: 1}}, lag: &lagReply{}, info: &infoReply{}, fdb: []l2Entry{{Port: 1}}}
+	now := time.Now()
+	st.lldpAt, st.infoAt, st.fdbAt = now.Add(-time.Minute), now.Add(-time.Hour), now.Add(-time.Hour)
+	st.expire(now)
+	if st.lldp == nil || st.info != nil || st.fdb != nil || !st.fdbAt.IsZero() {
+		t.Fatalf("expire: lldp=%v info=%v fdb=%v", st.lldp, st.info, st.fdb)
+	}
+}
+
+func TestValidateConfig(t *testing.T) {
+	drv := New()
+	if err := drv.ValidateConfig(driver.TargetConfig{ID: "r1"}); err == nil {
+		t.Fatal("missing endpoint accepted")
+	}
+	cfg := driver.TargetConfig{ID: "r1", Endpoint: "http://192.0.2.10", ResolvedSecrets: map[string]string{"password": "x"}}
+	if err := drv.ValidateConfig(cfg); err == nil {
+		t.Fatal("password over plain http accepted without allow_insecure_http")
 	}
 	cfg.Settings = map[string]any{"allow_insecure_http": true}
-	if err := New().ValidateConfig(cfg); err != nil {
-		t.Fatalf("opt-in rejected: %v", err)
+	if err := drv.ValidateConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := metricsURL(cfg); u != "http://192.0.2.10:9100/metrics" {
+		t.Fatalf("metrics url = %q", u)
+	}
+	if drv.MinPollInterval() < 30*time.Second {
+		t.Fatal("min poll interval too short")
+	}
+}
+
+func TestParsePromText(t *testing.T) {
+	in := "# HELP x\nfoo{a=\"q\\\"x\\\\y\\nz\",b=\"\"} 1.5 1700000000\nbar 7\nbroken{a=\"x} 1\nbaz{} NaN\n"
+	got, err := parsePromText(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].labels["a"] != "q\"x\\y\nz" || got[0].value != 1.5 || got[1].name != "bar" || !math.IsNaN(got[2].value) {
+		t.Fatalf("got %v", got)
 	}
 }
