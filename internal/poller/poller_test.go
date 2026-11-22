@@ -215,3 +215,22 @@ func TestFailingTargetGoesOffline(t *testing.T) {
 		t.Fatalf("device.offline events = %d, want 1", offline)
 	}
 }
+
+func TestCancelledPollIsNotAFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	reg := driver.NewRegistry()
+	_ = reg.Register(&mockDriver{kind: "mock", fn: func(c context.Context, _ driver.TargetConfig, _ int32) (*driver.Snapshot, error) {
+		cancel()
+		return nil, c.Err()
+	}})
+	sched := New(reg, st, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_ = sched.PollOnce(ctx, driver.TargetConfig{ID: "t1", Driver: "mock", Enabled: true})
+	if st := sched.Status()["t1"]; st.ConsecutiveFailures != 0 {
+		t.Fatalf("cancellation recorded as failure: %+v", st)
+	}
+}

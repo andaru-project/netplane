@@ -100,6 +100,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 	}
 
 	snap, err := drv.Poll(ctx, cfg)
+	if err != nil && ctx.Err() != nil {
+		return err // shutdown or caller cancellation, not a target failure
+	}
 	if err != nil {
 		// Retried on every failure past the threshold, so a failed mark is recovered; it only
 		// re-solves the topology when something went offline (a failed topology save is
@@ -118,6 +121,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 
 	prev, err := s.store.SaveSnapshot(ctx, snap)
 	if err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
 		s.recordError(cfg, now, err)
 		return err
 	}
