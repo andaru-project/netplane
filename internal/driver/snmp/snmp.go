@@ -387,14 +387,6 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		if speedMbps == 0 && a.speed > 0 {
 			speedMbps = int(a.speed / 1_000_000)
 		}
-		oper := model.OperDown
-		if !a.adminUp {
-			oper = model.OperDisabled
-		} else if a.operUp {
-			oper = model.OperUp
-		} else {
-			oper = model.OperNoCarrier
-		}
 		mtu := a.mtu
 		media := guessSnmpMedia(ifName, speedMbps)
 		// Report both directions at one width: the store compares a single width flag per link.
@@ -411,7 +403,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			MAC:       a.mac,
 			AdminUp:   a.adminUp,
 			LinkUp:    a.adminUp && a.operUp,
-			OperState: oper,
+			OperState: model.OperFromAdminLink(a.adminUp, a.operUp),
 			SpeedMbps: speedMbps,
 			MTU:       &mtu,
 			Media:     media,

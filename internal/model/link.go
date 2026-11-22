@@ -32,6 +32,18 @@ const (
 	OperUnknown   OperState = "unknown"
 )
 
+// OperFromAdminLink returns the operational state of a port from its admin and link state.
+func OperFromAdminLink(adminUp, linkUp bool) OperState {
+	switch {
+	case !adminUp:
+		return OperDisabled
+	case linkUp:
+		return OperUp
+	default:
+		return OperNoCarrier
+	}
+}
+
 // StpState reflects Spanning Tree port state.
 type StpState string
 

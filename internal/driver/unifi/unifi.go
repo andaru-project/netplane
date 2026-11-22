@@ -255,14 +255,6 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		for _, p := range ud.PortTable {
 			media := mapMedia(p.Media)
 			ifName := fmt.Sprintf("port%d", p.PortIdx)
-			oper := model.OperDown
-			if !p.Enable {
-				oper = model.OperDisabled
-			} else if p.Up {
-				oper = model.OperUp
-			} else {
-				oper = model.OperNoCarrier
-			}
 			duplex := "half"
 			if p.FullDuplex {
 				duplex = "full"
@@ -275,7 +267,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				Label:     p.Name,
 				AdminUp:   p.Enable,
 				LinkUp:    p.Up,
-				OperState: oper,
+				OperState: model.OperFromAdminLink(p.Enable, p.Up),
 				SpeedMbps: p.Speed,
 				Duplex:    duplex,
 				Autoneg:   &autoneg,
