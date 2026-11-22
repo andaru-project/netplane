@@ -386,8 +386,8 @@ func TestFdbWalkWrapsAndNullPageKeepsTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snap.FDB) != 3 || !st.jsonNext.IsZero() || time.Until(st.fdbS.next) < retryAfter-time.Second {
-		t.Fatalf("fdb after null page = %d entries", len(snap.FDB))
+	if d := time.Until(st.fdbS.next); len(snap.FDB) != 3 || !st.jsonNext.IsZero() || d < fdbEvery/2-time.Second || d > fdbEvery/2 {
+		t.Fatalf("after null page: fdb=%d jsonNext=%v fdb backoff=%v, want %v", len(snap.FDB), st.jsonNext, d, fdbEvery/2)
 	}
 }
 
@@ -442,6 +442,9 @@ func TestFailingDataSetDoesNotBlockOthersAndPasswordRemovalClears(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if d := time.Until(drv.state("sw1").lldpS.next); d < max(retryAfter, lldpEvery/2)-time.Second {
+		t.Fatalf("lldp backoff = %v", d)
+	}
 	if snap.Devices[0].MgmtIP == "" || len(snap.FDB) != 1 || len(snap.LLDP) != 0 {
 		t.Fatalf("info/fdb must refresh despite a failing /lag.json: ip=%q fdb=%d lldp=%d", snap.Devices[0].MgmtIP, len(snap.FDB), len(snap.LLDP))
 	}
@@ -453,5 +456,37 @@ func TestFailingDataSetDoesNotBlockOthersAndPasswordRemovalClears(t *testing.T) 
 	}
 	if snap.Devices[0].MgmtIP != "" || len(snap.FDB) != 0 || drv.state("sw1").session != "" {
 		t.Fatal("removing the password must drop the session and cached data")
+	}
+}
+
+func TestUnreachableWebServerPausesAllJSON(t *testing.T) {
+	_, srv := newFakeSwitch(t)
+	cfg := cfgFor(srv, "s3cret")
+	cfg.Endpoint = "http://127.0.0.1:1" // refused: the web server is down, the exporter answers
+	drv := New()
+	if _, err := drv.Poll(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	st := drv.state("sw1")
+	if st.jsonNext.IsZero() || !st.infoS.next.IsZero() {
+		t.Fatalf("a transport failure must pause all JSON work before info is tried: jsonNext=%v infoNext=%v", st.jsonNext, st.infoS.next)
+	}
+}
+
+func TestPasswordChangeResetsState(t *testing.T) {
+	_, srv := newFakeSwitch(t)
+	drv := New()
+	if _, err := drv.Poll(context.Background(), cfgFor(srv, "wrong")); err != nil {
+		t.Fatal(err)
+	}
+	if drv.state("sw1").jsonNext.IsZero() {
+		t.Fatal("expected a pause after a refused login")
+	}
+	snap, err := drv.Poll(context.Background(), cfgFor(srv, "s3cret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.LLDP) == 0 {
+		t.Fatal("a corrected password must not wait out the old pause")
 	}
 }

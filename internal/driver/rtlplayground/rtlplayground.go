@@ -11,7 +11,8 @@
 //     /metrics exporter, once per poll;
 //   - only with a password, logs in when it holds no session and refreshes LLDP, LAG,
 //     system information and the forwarding table on slow schedules, replaying the cached
-//     results in every snapshot; a failed refresh ends the poll's JSON work and backs off;
+//     results in every snapshot; a failing data set backs off on its own, and a refused login
+//     or an unreachable web server pauses all JSON work;
 //   - sends one request at a time with a pause between requests;
 //   - never calls the endpoints that change state (/l2_del.json, /reset, /cmd, /config, uploads).
 package rtlplayground
@@ -47,7 +48,8 @@ const (
 	lldpEvery = 5 * time.Minute
 	infoEvery = 10 * time.Minute
 	fdbEvery  = 15 * time.Minute
-	// After a failed refresh, the next attempt waits this long.
+	// A refused login or unreachable web server pauses all JSON work this long; a data set
+	// that fails otherwise waits half its period, at least this long.
 	retryAfter = 2 * time.Minute
 	// A full forwarding table is 4096 entries at about 29 per page.
 	maxFdbPages = 160
@@ -73,8 +75,9 @@ type schedule struct{ ok, next time.Time }
 // target, so its fields need no lock of their own. It lives in memory only, so each start of
 // netplane takes a new login slot; the old one ages out on the switch (session_timeout).
 type target struct {
+	password string    // the password this state was built with
 	session  string    // "session" cookie value
-	jsonNext time.Time // after a failure, no JSON request (or login) before this
+	jsonNext time.Time // after a global failure, no JSON request (or login) before this
 
 	lldpS, infoS, fdbS schedule
 	lldp               []lldpNeighbor
@@ -160,12 +163,16 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	st := d.state(cfg.ID)
 	now := time.Now()
-	if c.password == "" {
-		*st = target{} // password removed: drop the session and every cached data set
-	} else if !now.Before(st.jsonNext) {
-		// Best effort: a failure keeps that data set's cache. A refused login pauses all JSON
-		// work for retryAfter (one refused login per period); any other failure backs off only
-		// its own data set, by half its period and at least retryAfter.
+	if c.password != st.password {
+		// Password set, changed or removed: start over. A dropped session keeps its slot on
+		// the switch until it ages out (the firmware has no logout).
+		*st = target{password: c.password}
+	}
+	if c.password != "" && !now.Before(st.jsonNext) {
+		// Best effort: a failure keeps that data set's cache. A refused login, a rejected
+		// session or a transport failure (the web server's only slot busy or dead) pauses all
+		// JSON work for retryAfter; an HTTP or parse error backs off only its own data set,
+		// by half its period and at least retryAfter.
 		refresh := func(s *schedule, every time.Duration, fetch func() error) bool {
 			if now.Before(s.next) {
 				return true
@@ -176,7 +183,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				s.ok, s.next = now, now.Add(every)
 			case ctx.Err() != nil:
 				return false // cancelled by the caller, not the device's fault
-			case errors.Is(err, errLoginRefused):
+			case errors.Is(err, errLoginRefused), errors.Is(err, errSessionRejected), errors.As(err, new(*url.Error)):
 				st.jsonNext = now.Add(retryAfter)
 				return false
 			default:
@@ -269,7 +276,10 @@ func (c *client) scrape(ctx context.Context, u string) ([]sample, error) {
 	return nil, err
 }
 
-var errLoginRefused = errors.New("rtlplayground login refused (wrong password?)")
+var (
+	errLoginRefused    = errors.New("rtlplayground login refused (wrong password?)")
+	errSessionRejected = errors.New("rtlplayground session rejected right after login (sessions evicted?)")
+)
 
 // login takes a session. It is only called without a valid session, so the driver holds at
 // most one of the firmware's 4 slots at a time.
@@ -320,7 +330,7 @@ func (c *client) getJSON(ctx context.Context, st *target, path string, out any) 
 			return fmt.Errorf("rtlplayground %s: HTTP %d", path, resp.StatusCode)
 		}
 	}
-	return fmt.Errorf("rtlplayground %s: unauthorized after login: %w", path, errLoginRefused)
+	return fmt.Errorf("rtlplayground %s: %w", path, errSessionRejected)
 }
 
 type lldpNeighbor struct {
@@ -643,11 +653,11 @@ func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target, now ti
 		m.release = cmp.Or(m.release, info.SwVer)
 		m.machine = cmp.Or(m.machine, info.HwVer)
 		m.mac = cmp.Or(m.mac, info.MACAddress)
-		// Without NTP sync the exporter omits boot time; the cached value is not aged, since
-		// aging it would hide a reboot until the next refresh.
+		// Without NTP sync the exporter omits boot time: age the cached value. A reboot shows
+		// at the next info refresh either way.
 		if uptime == 0 {
 			if v, err := strconv.ParseUint(strings.TrimPrefix(info.Uptime, "0x"), 16, 64); err == nil {
-				uptime = v
+				uptime = v + uint64(now.Sub(st.infoS.ok).Seconds())
 			}
 		}
 	}
