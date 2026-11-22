@@ -1,7 +1,7 @@
 {
   "domain": "netplane",
   "name": "Andaru Netplane",
-  "codeowners": ["@andaru-project"],
+  "codeowners": ["@andrebrait"],
   "config_flow": true,
   "documentation": "https://github.com/andaru-project/netplane",
   "iot_class": "local_polling",
