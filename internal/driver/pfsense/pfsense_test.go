@@ -66,6 +66,9 @@ func TestPfSenseDriverPoll(t *testing.T) {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
 	}
 	// ID from the target key; PrimaryMAC is the lowest MAC, not the first listed.
+	if caps := snap.Devices[0].Capabilities; !slices.Contains(caps, model.CapDiagPing) || slices.Contains(caps, model.CapDiagTraceroute) {
+		t.Fatalf("diagnostic capabilities = %v, want ping only", caps)
+	}
 	if d := snap.Devices[0]; d.ID != "pfsense:pf-core" || d.PrimaryMAC != "00:11:22:33:44:01" || d.UptimeSec != 93784 || d.SystemStats.Load1 != 0.15 {
 		t.Fatalf("unexpected device identity/telemetry: %+v", d)
 	}

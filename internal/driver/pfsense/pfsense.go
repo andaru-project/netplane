@@ -2,6 +2,7 @@
 package pfsense
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -188,6 +189,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		model.CapNeighbors,
 		model.CapDHCP,
 		model.CapFirmwareInfo,
+		model.CapDiagPing,
 	}
 	var sensors []model.SensorReading
 	if sysResp.Data.TempC > 0 {
@@ -419,9 +421,25 @@ func parseUptime(s string) uint64 {
 }
 
 func getJSON(ctx context.Context, client *http.Client, url, apiKey string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	return doJSON(ctx, client, http.MethodGet, url, apiKey, nil, out)
+}
+
+// doJSON sends body (when not nil) as JSON and decodes the response into out.
+func doJSON(ctx context.Context, client *http.Client, method, url, apiKey string, body, out any) error {
+	var reqBody io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reqBody = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
 		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	if apiKey != "" {
 		req.Header.Set("X-API-Key", apiKey)
@@ -432,7 +450,25 @@ func getJSON(ctx context.Context, client *http.Client, url, apiKey string, out a
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		// The REST API explains a refusal (validation, privilege) in its message field.
+		var e struct {
+			Message string `json:"message"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+		return &statusError{code: resp.StatusCode, message: e.Message}
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out)
+}
+
+// statusError is a non-2xx answer from the REST API.
+type statusError struct {
+	code    int
+	message string
+}
+
+func (e *statusError) Error() string {
+	if e.message == "" {
+		return fmt.Sprintf("HTTP %d", e.code)
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.code, e.message)
 }

@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -374,6 +375,10 @@ func (s *Server) handleRunDiagnostic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "kind and target are required")
 		return
 	}
+	if !req.Kind.Valid() {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", fmt.Sprintf("unknown diagnostic kind %q", req.Kind))
+		return
+	}
 
 	started := time.Now().UTC()
 
@@ -418,7 +423,14 @@ func (s *Server) handleRunDiagnostic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := diagDrv.RunDiagnostic(r.Context(), cfg, req)
-	if err != nil {
+	switch {
+	case errors.Is(err, driver.ErrDiagnosticRequest):
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	case errors.Is(err, driver.ErrDiagnosticUnsupported):
+		writeError(w, http.StatusNotImplemented, "UNSUPPORTED", err.Error())
+		return
+	case err != nil:
 		writeError(w, http.StatusBadGateway, "DIAG_FAILED", err.Error())
 		return
 	}
