@@ -2,9 +2,6 @@
 package rtlplayground
 
 import (
-	"bufio"
-	"fmt"
-	"io"
 	"strconv"
 	"strings"
 )
@@ -18,14 +15,19 @@ type sample struct {
 }
 
 // parsePromText reads the Prometheus text exposition format (0.0.4) the firmware's exporter
-// writes. Comments, timestamps and unparsable lines are skipped: a partial scrape still
-// yields every sample it holds.
-func parsePromText(r io.Reader) ([]sample, error) {
+// writes. Comments, timestamps and unparsable lines are skipped, so a damaged scrape still
+// yields every sample it holds. A final line without its newline is dropped: a reply cut
+// mid-line could otherwise report a truncated counter.
+func parsePromText(body []byte) []sample {
+	text := string(body)
+	if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+		text = text[:i]
+	} else {
+		text = ""
+	}
 	var out []sample
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 4096), 64*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
 		if line == "" || line[0] == '#' {
 			continue
 		}
@@ -33,7 +35,7 @@ func parsePromText(r io.Reader) ([]sample, error) {
 			out = append(out, s)
 		}
 	}
-	return out, sc.Err()
+	return out
 }
 
 func parseSample(line string) (sample, bool) {
@@ -81,10 +83,9 @@ func parseLabels(in string, dst map[string]string) (string, bool) {
 			c := in[j]
 			if c == '\\' && j+1 < len(in) {
 				j++
-				switch in[j] {
-				case 'n':
+				if in[j] == 'n' {
 					b.WriteByte('\n')
-				default:
+				} else {
 					b.WriteByte(in[j])
 				}
 				continue
@@ -102,6 +103,3 @@ func parseLabels(in string, dst map[string]string) (string, bool) {
 		dst[key] = b.String()
 	}
 }
-
-// String renders a sample for test failure messages.
-func (s sample) String() string { return fmt.Sprintf("%s%v %g", s.name, s.labels, s.value) }

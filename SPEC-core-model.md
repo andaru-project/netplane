@@ -8,7 +8,7 @@ Provide the vendor-agnostic foundation of `netplane` capable of faithfully repre
 
 1. **Three-state separation (`observed`, `live`, `saved`):** Distinguish live hardware/kernel observations from currently active configuration and pending version-checked saved changes (supporting preview, timed rollback, and explicit confirmation cleanly in Phase 2—matching Andaru's safety model natively).
 2. **Canonical capability-based network model:** Model L1/L2 physical links, LAG/LACP trunks, STP state, SFP optical DOM/DDMI, PoE budgets, L3 logical segments/VLANs (dual-stack IPv4 + IPv6), security zones, FDB, LLDP, ARP/NDP neighbors, DHCP leases, gateways, routes, VPN tunnels, firewall/service runtime state, wireless radios/SSIDs/mesh uplinks, clients, multi-sensor chassis health, and diagnostics.
-3. **Driver & polling contract:** Define the Go interfaces (`Driver`, optional `DiagnosticDriver`, optional `ConfigDriver` for Phase 2) and concurrent polling scheduler.
+3. **Driver & polling contract:** Define the Go interfaces (`Driver`, optional `DiagnosticDriver`, optional `MinIntervalDriver`, optional `ConfigDriver` for Phase 2) and concurrent polling scheduler.
 4. **Embedded persistence (`SQLite` WAL):** Persist targets (with named secret references), latest normalized snapshots, rolling port/sensor telemetry samples, topology graphs, and diagnostic history in a single zero-dependency database file.
 5. **Cross-vendor L2/L3/Wi-Fi topology solver:** Correlate LLDP, LAG trunks, switch FDB, wireless uplinks, wireless client associations, and ARP/NDP/DHCP tables across mixed vendors into a deterministic directed graph with evidence and confidence scores.
 6. **Live event bus:** Fan out typed state transitions (device online/offline, link up/down, STP state change, SFP optical threshold alarm, VPN tunnel down, gateway failover, topology change, client join/leave) without blocking publishers.
@@ -167,6 +167,12 @@ type Driver interface {
 // DiagnosticDriver is implemented by drivers supporting device-side diagnostics.
 type DiagnosticDriver interface {
 	RunDiagnostic(ctx context.Context, cfg TargetConfig, req model.DiagnosticRequest) (*model.DiagnosticResult, error)
+}
+
+// MinIntervalDriver is implemented by drivers whose devices must not be polled more often
+// than a floor; the scheduler raises a target's configured interval to it (manual polls are not limited).
+type MinIntervalDriver interface {
+	MinPollInterval() time.Duration
 }
 
 // ConfigDriver is the Phase 2 contract for drivers supporting safe save -> preview -> apply -> confirm/rollback.

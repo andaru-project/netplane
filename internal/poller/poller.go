@@ -238,8 +238,8 @@ func (s *Scheduler) pollInterval(cfg driver.TargetConfig) time.Duration {
 		d = 15 * time.Second
 	}
 	if drv, ok := s.registry.Get(cfg.Driver); ok {
-		if m, ok := drv.(driver.MinIntervalDriver); ok && d < m.MinPollInterval() {
-			d = m.MinPollInterval()
+		if m, ok := drv.(driver.MinIntervalDriver); ok {
+			d = max(d, m.MinPollInterval())
 		}
 	}
 	return d

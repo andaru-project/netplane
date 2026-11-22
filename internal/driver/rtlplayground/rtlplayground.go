@@ -9,14 +9,15 @@
 // So the driver:
 //   - reads link state, speed, counters, SFP DOM, temperatures and identity from the public
 //     /metrics exporter, once per poll;
-//   - only with a password, logs in once, keeps that one session, and refreshes LLDP, LAG,
+//   - only with a password, logs in when it holds no session and refreshes LLDP, LAG,
 //     system information and the forwarding table on slow schedules, replaying the cached
-//     results in every snapshot;
+//     results in every snapshot; a failed refresh ends the poll's JSON work and backs off;
 //   - sends one request at a time with a pause between requests;
 //   - never calls the endpoints that change state (/l2_del.json, /reset, /cmd, /config, uploads).
 package rtlplayground
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,12 +47,18 @@ const (
 	lldpEvery = 5 * time.Minute
 	infoEvery = 10 * time.Minute
 	fdbEvery  = 15 * time.Minute
+	// After a failed refresh, the next attempt waits this long.
+	retryAfter = 2 * time.Minute
 	// A full forwarding table is 4096 entries at about 29 per page.
 	maxFdbPages = 160
 )
 
-// requestGap spaces consecutive requests so the device and its web UI get the slot back.
-var requestGap = 150 * time.Millisecond
+var (
+	// requestGap spaces consecutive requests so the device and its web UI get the slot back.
+	requestGap = 150 * time.Millisecond
+	// scrapeRetryGap waits out a Prometheus scrape holding the exporter's only connection.
+	scrapeRetryGap = time.Second
+)
 
 // Driver polls RTLPlayground switches. It keeps per-target session and cache state.
 type Driver struct {
@@ -58,29 +66,34 @@ type Driver struct {
 	targets map[string]*target
 }
 
-// target is the state kept between polls of one switch. The poller never polls one target
-// concurrently, so its fields need no lock of their own.
-type target struct {
-	session string // "session" cookie value
+// schedule tracks one refreshed data set: its last success and the earliest next attempt.
+type schedule struct{ ok, next time.Time }
 
-	lldpAt, infoAt, fdbAt time.Time
-	lldp                  []lldpNeighbor
-	lag                   *lagReply
-	info                  *infoReply
-	fdb                   []l2Entry
+// target is the state kept between polls of one switch. The poller serializes polls of one
+// target, so its fields need no lock of their own. It lives in memory only, so each start of
+// netplane takes a new login slot; the old one ages out on the switch (session_timeout).
+type target struct {
+	session  string    // "session" cookie value
+	jsonNext time.Time // after a failure, no JSON request (or login) before this
+
+	lldpS, infoS, fdbS schedule
+	lldp               []lldpNeighbor
+	lag                *lagReply
+	info               *infoReply
+	fdb                []l2Entry
 }
 
-// expire drops cached slow data that has failed to refresh for three periods (or whose
-// password was removed), so a broken login cannot keep stale neighbours alive forever.
+// expire drops cached data that has not refreshed for three periods (or whose password was
+// removed), so a broken login cannot keep stale neighbours alive forever.
 func (t *target) expire(now time.Time) {
-	if now.Sub(t.lldpAt) > 3*lldpEvery {
+	if now.Sub(t.lldpS.ok) > 3*lldpEvery {
 		t.lldp, t.lag = nil, nil
 	}
-	if now.Sub(t.infoAt) > 3*infoEvery {
+	if now.Sub(t.infoS.ok) > 3*infoEvery {
 		t.info = nil
 	}
-	if now.Sub(t.fdbAt) > 3*fdbEvery {
-		t.fdb, t.fdbAt = nil, time.Time{}
+	if now.Sub(t.fdbS.ok) > 3*fdbEvery {
+		t.fdb, t.fdbS.ok = nil, time.Time{}
 	}
 }
 
@@ -90,7 +103,7 @@ func New() *Driver { return &Driver{targets: map[string]*target{}} }
 // Kind returns "rtlplayground".
 func (d *Driver) Kind() string { return "rtlplayground" }
 
-// MinPollInterval keeps polls of this weak device at least 30 seconds apart.
+// MinPollInterval keeps scheduled polls of this weak device at least 30 seconds apart.
 func (d *Driver) MinPollInterval() time.Duration { return minPollInterval }
 
 // ValidateConfig checks required RTLPlayground target settings.
@@ -146,23 +159,27 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	st := d.state(cfg.ID)
-	if c.password != "" {
-		// Slow data is best effort: a failure keeps the previous cache and the poll goes on.
-		now := time.Now()
-		refresh := func(at *time.Time, every time.Duration, fetch func() error) {
-			if now.Sub(*at) < every {
-				return
+	now := time.Now()
+	if c.password != "" && !now.Before(st.jsonNext) {
+		// Best effort: a failure keeps the caches and pauses all JSON work for retryAfter,
+		// so a wrong password costs one refused login per retry period.
+		refresh := func(s *schedule, every time.Duration, fetch func() error) bool {
+			if now.Before(s.next) {
+				return true
 			}
-			if err := fetch(); err == nil {
-				*at = now
+			if err := fetch(); err != nil {
+				st.jsonNext = now.Add(retryAfter)
+				return false
 			}
+			s.ok, s.next = now, now.Add(every)
+			return true
 		}
-		refresh(&st.lldpAt, lldpEvery, func() error { return c.fetchLLDPAndLAG(ctx, st) })
-		refresh(&st.infoAt, infoEvery, func() error { return c.fetchInfo(ctx, st) })
-		refresh(&st.fdbAt, fdbEvery, func() error { return c.fetchFDB(ctx, st) })
+		_ = refresh(&st.lldpS, lldpEvery, func() error { return c.fetchLLDPAndLAG(ctx, st) }) &&
+			refresh(&st.infoS, infoEvery, func() error { return c.fetchInfo(ctx, st) }) &&
+			refresh(&st.fdbS, fdbEvery, func() error { return c.fetchFDB(ctx, st) })
 	}
-	st.expire(time.Now())
-	return buildSnapshot(cfg, samples, st), nil
+	st.expire(now)
+	return buildSnapshot(cfg, samples, st, now), nil
 }
 
 // client sends one request at a time to one switch.
@@ -184,15 +201,11 @@ func newClient(cfg driver.TargetConfig) *client {
 	return &client{http: hc, base: strings.TrimRight(cfg.Endpoint, "/"), password: cfg.ResolvedSecrets["password"]}
 }
 
-var errUnauthorized = errors.New("unauthorized")
-
 // do sends req after the pacing gap and returns the body, limited to limit bytes.
 func (c *client) do(ctx context.Context, req *http.Request, limit int64) (*http.Response, []byte, error) {
 	if c.sent {
-		select {
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
-		case <-time.After(requestGap):
+		if err := sleep(ctx, requestGap); err != nil {
+			return nil, nil, err
 		}
 	}
 	c.sent = true
@@ -205,23 +218,45 @@ func (c *client) do(ctx context.Context, req *http.Request, limit int64) (*http.
 	return resp, body, err
 }
 
-func (c *client) scrape(ctx context.Context, u string) ([]sample, error) {
-	req, err := http.NewRequest(http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
+func sleep(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
 	}
-	resp, body, err := c.do(ctx, req, 256<<10)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	return parsePromText(strings.NewReader(string(body)))
 }
 
-// login takes a session, reusing the current cookie's slot when it is still valid so the
-// driver never holds more than one of the firmware's 4 sessions.
+// scrape reads /metrics, retrying once: a busy exporter slot (a Prometheus scrape) drops
+// the connection, and two failed polls would mark a healthy switch offline.
+func (c *client) scrape(ctx context.Context, u string) ([]sample, error) {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			if serr := sleep(ctx, scrapeRetryGap); serr != nil {
+				return nil, serr
+			}
+		}
+		var req *http.Request
+		if req, err = http.NewRequest(http.MethodGet, u, nil); err != nil {
+			return nil, err
+		}
+		var resp *http.Response
+		var body []byte
+		if resp, body, err = c.do(ctx, req, 256<<10); err != nil {
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			err = fmt.Errorf("HTTP %d", resp.StatusCode)
+			continue
+		}
+		return parsePromText(body), nil
+	}
+	return nil, err
+}
+
+// login takes a session. It is only called without a valid session, so the driver holds at
+// most one of the firmware's 4 slots at a time.
 func (c *client) login(ctx context.Context, st *target) error {
 	form := url.Values{"pwd": {c.password}}.Encode()
 	req, err := http.NewRequest(http.MethodPost, c.base+"/login", strings.NewReader(form))
@@ -229,9 +264,6 @@ func (c *client) login(ctx context.Context, st *target) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if st.session != "" {
-		req.AddCookie(&http.Cookie{Name: "session", Value: st.session})
-	}
 	resp, _, err := c.do(ctx, req, 4<<10)
 	if err != nil {
 		return err
@@ -243,7 +275,6 @@ func (c *client) login(ctx context.Context, st *target) error {
 		}
 	}
 	// A failed login redirects to login.html without a cookie, whatever the status code.
-	st.session = ""
 	return errors.New("rtlplayground login refused (wrong password?)")
 }
 
@@ -269,12 +300,11 @@ func (c *client) getJSON(ctx context.Context, st *target, path string, out any) 
 			return json.Unmarshal(body, out)
 		case http.StatusUnauthorized:
 			st.session = "" // expired or evicted: log in again, once
-			continue
 		default:
 			return fmt.Errorf("rtlplayground %s: HTTP %d", path, resp.StatusCode)
 		}
 	}
-	return fmt.Errorf("rtlplayground %s: %w", path, errUnauthorized)
+	return fmt.Errorf("rtlplayground %s: unauthorized after login", path)
 }
 
 type lldpNeighbor struct {
@@ -338,36 +368,43 @@ func (c *client) fetchInfo(ctx context.Context, st *target) error {
 
 // fetchFDB walks the forwarding table the way the web UI does: each page starts after the
 // last index returned, and the walk ends on an empty page or when an index repeats (the
-// firmware's hash walk wraps around). A partial walk is discarded.
+// firmware's hash walk wraps around). Anything else (a `null` page from a busy RTL836x
+// table, an unparsable index, the page cap) fails the walk and keeps the previous table.
 func (c *client) fetchFDB(ctx context.Context, st *target) error {
 	seen := map[string]bool{}
 	var all []l2Entry
 	idx := 0
 	for page := 0; page < maxFdbPages; page++ {
-		var rows []l2Entry
+		var rows *[]l2Entry
 		if err := c.getJSON(ctx, st, "/l2.json?idx="+strconv.Itoa(idx), &rows); err != nil {
 			return err
 		}
-		if len(rows) == 0 {
-			break
+		if rows == nil {
+			return errors.New("rtlplayground /l2.json: table read failed (null page)")
 		}
-		wrapped := false
-		for _, r := range rows {
+		if len(*rows) == 0 {
+			st.fdb = all
+			return nil
+		}
+		for _, r := range *rows {
 			if seen[r.Idx] {
-				wrapped = true
-				break
+				st.fdb = all // wrapped around: the walk is complete
+				return nil
 			}
 			seen[r.Idx] = true
 			all = append(all, r)
 		}
-		last, err := strconv.ParseUint(rows[len(rows)-1].Idx, 16, 16)
-		if wrapped || err != nil || int(last)+1 <= idx {
-			break
+		last, err := strconv.ParseUint((*rows)[len(*rows)-1].Idx, 16, 16)
+		if err != nil {
+			return fmt.Errorf("rtlplayground /l2.json: bad idx: %w", err)
+		}
+		if int(last)+1 <= idx {
+			st.fdb = all // the index went backwards: wrapped
+			return nil
 		}
 		idx = int(last) + 1
 	}
-	st.fdb = all
-	return nil
+	return errors.New("rtlplayground /l2.json: page limit reached")
 }
 
 func ifName(port int) string { return "lan" + strconv.Itoa(port) }
@@ -378,155 +415,165 @@ func portOf(dev string) (int, bool) {
 	return n, err == nil && strings.HasPrefix(dev, "lan") && n > 0
 }
 
-func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target) *driver.Snapshot {
-	now := time.Now().UTC()
-	devID := "rtlplayground:" + cfg.ID
+type portData struct {
+	seen, carrier, adminDown bool
+	alias                    string
+	speedMbps                int
+	counters                 model.PortCounters
+	sfp                      *model.SfpDom
+}
 
-	type port struct {
-		seen, carrier, adminDown bool
-		alias                    string
-		speedMbps                int
-		counters                 model.PortCounters
-		sfp                      *model.SfpDom
-	}
-	ports := map[int]*port{}
-	get := func(dev string) *port {
+type metricsData struct {
+	ports                           map[int]*portData
+	hostname, release, machine, mac string
+	bootTime, nodeTime              float64
+	socTemp                         *float64
+}
+
+var counterSetters = map[string]func(*model.PortCounters, uint64){
+	"node_network_receive_bytes_total":    func(c *model.PortCounters, v uint64) { c.RxBytes = v },
+	"node_network_transmit_bytes_total":   func(c *model.PortCounters, v uint64) { c.TxBytes = v },
+	"node_network_receive_packets_total":  func(c *model.PortCounters, v uint64) { c.RxPackets = v },
+	"node_network_transmit_packets_total": func(c *model.PortCounters, v uint64) { c.TxPackets = v },
+	"node_network_receive_errs_total":     func(c *model.PortCounters, v uint64) { c.RxErrors = v },
+	"node_network_transmit_errs_total":    func(c *model.PortCounters, v uint64) { c.TxErrors = v },
+	"node_network_receive_drop_total":     func(c *model.PortCounters, v uint64) { c.RxDropped = v },
+	"node_network_transmit_drop_total":    func(c *model.PortCounters, v uint64) { c.TxDropped = v },
+	"node_network_receive_frame_total":    func(c *model.PortCounters, v uint64) { c.CrcErrors = v },
+}
+
+func parseMetrics(samples []sample) metricsData {
+	m := metricsData{ports: map[int]*portData{}}
+	port := func(dev string) *portData {
 		n, ok := portOf(dev)
 		if !ok {
 			return nil
 		}
-		if ports[n] == nil {
-			ports[n] = &port{}
+		if m.ports[n] == nil {
+			m.ports[n] = &portData{}
 		}
-		return ports[n]
+		return m.ports[n]
 	}
-	sfp := func(p *port) *model.SfpDom {
+	sfp := func(p *portData) *model.SfpDom {
 		if p.sfp == nil {
 			p.sfp = &model.SfpDom{Present: true}
 		}
 		return p.sfp
 	}
-
-	var hostname, release, machine, mac string
-	var bootTime, nodeTime float64
-	var socTemp *float64
-	counter := map[string]func(*model.PortCounters, uint64){
-		"node_network_receive_bytes_total":    func(c *model.PortCounters, v uint64) { c.RxBytes = v },
-		"node_network_transmit_bytes_total":   func(c *model.PortCounters, v uint64) { c.TxBytes = v },
-		"node_network_receive_packets_total":  func(c *model.PortCounters, v uint64) { c.RxPackets = v },
-		"node_network_transmit_packets_total": func(c *model.PortCounters, v uint64) { c.TxPackets = v },
-		"node_network_receive_errs_total":     func(c *model.PortCounters, v uint64) { c.RxErrors = v },
-		"node_network_transmit_errs_total":    func(c *model.PortCounters, v uint64) { c.TxErrors = v },
-		"node_network_receive_drop_total":     func(c *model.PortCounters, v uint64) { c.RxDropped = v },
-		"node_network_transmit_drop_total":    func(c *model.PortCounters, v uint64) { c.TxDropped = v },
-		"node_network_receive_frame_total":    func(c *model.PortCounters, v uint64) { c.CrcErrors = v },
-	}
 	for _, s := range samples {
-		dev := s.labels["device"]
+		// Samples without a device label first.
 		switch s.name {
 		case "node_uname_info":
-			hostname, release, machine = s.labels["nodename"], s.labels["release"], s.labels["machine"]
+			m.hostname, m.release, m.machine = s.labels["nodename"], s.labels["release"], s.labels["machine"]
+			continue
 		case "node_boot_time_seconds":
-			bootTime = s.value
+			m.bootTime = s.value
+			continue
 		case "node_time_seconds":
-			nodeTime = s.value
+			m.nodeTime = s.value
+			continue
 		case "node_hwmon_temp_celsius":
 			chip := s.labels["chip"]
 			if chip == "thermal_thermal_zone0" {
-				v := s.value
-				socTemp = &v
-			} else if p := get(strings.TrimPrefix(chip, "sfp_")); p != nil && strings.HasPrefix(chip, "sfp_") {
-				v := s.value
-				sfp(p).TempC = &v
-			}
-		case "node_network_info":
-			if p := get(dev); p != nil {
-				p.seen = true
-				p.alias = s.labels["ifalias"]
-				p.adminDown = s.labels["operstate"] == "down"
-				if mac == "" {
-					mac = s.labels["address"]
+				m.socTemp = new(s.value)
+			} else if dev, ok := strings.CutPrefix(chip, "sfp_"); ok {
+				if p := port(dev); p != nil {
+					sfp(p).TempC = new(s.value)
 				}
 			}
+			continue
+		}
+		p := port(s.labels["device"])
+		if p == nil {
+			continue
+		}
+		switch s.name {
+		case "node_network_info":
+			p.seen = true
+			p.alias = s.labels["ifalias"]
+			p.adminDown = s.labels["operstate"] == "down"
+			m.mac = cmp.Or(m.mac, s.labels["address"])
 		case "node_network_carrier":
-			if p := get(dev); p != nil {
-				p.seen = true
-				p.carrier = s.value == 1
-			}
+			p.seen = true
+			p.carrier = s.value == 1
 		case "node_network_speed_bytes":
-			if p := get(dev); p != nil {
-				p.speedMbps = int(s.value * 8 / 1e6)
+			if mbps := s.value * 8 / 1e6; mbps > 0 && mbps < 1e7 { // also rejects NaN
+				p.speedMbps = int(mbps)
 			}
 		case "rtlplayground_sfp_info":
-			if p := get(dev); p != nil {
-				d := sfp(p)
-				d.Vendor, d.PartNumber, d.Serial = s.labels["vendor"], s.labels["model"], s.labels["serial"]
-			}
+			d := sfp(p)
+			d.Vendor, d.PartNumber, d.Serial = s.labels["vendor"], s.labels["model"], s.labels["serial"]
 		case "rtlplayground_sfp_voltage_volts":
-			if p := get(dev); p != nil {
-				v := s.value
-				sfp(p).VoltageV = &v
-			}
+			sfp(p).VoltageV = new(s.value)
 		case "rtlplayground_sfp_tx_bias_amperes":
-			if p := get(dev); p != nil {
-				v := s.value * 1000
-				sfp(p).BiasMa = &v
-			}
+			sfp(p).BiasMa = new(s.value * 1000)
 		case "rtlplayground_sfp_tx_power_watts":
-			if p := get(dev); p != nil {
-				sfp(p).TxPowerDbm = dbm(s.value)
-			}
+			sfp(p).TxPowerDbm = dbm(s.value)
 		case "rtlplayground_sfp_rx_power_watts":
-			if p := get(dev); p != nil {
-				sfp(p).RxPowerDbm = dbm(s.value)
-			}
+			sfp(p).RxPowerDbm = dbm(s.value)
 		default:
 			// Counters are exact 64-bit integers; float64 would round them above 2^53.
-			if set, ok := counter[s.name]; ok {
+			if set, ok := counterSetters[s.name]; ok {
 				if v, err := strconv.ParseUint(s.raw, 10, 64); err == nil {
-					if p := get(dev); p != nil {
-						set(&p.counters, v)
-					}
+					set(&p.counters, v)
 				}
 			}
 		}
 	}
+	return m
+}
 
+// lagGroups maps the cached LAG reply onto groups and their member ports. A LACP group is up,
+// at the summed speed, only through the members LACP actually aggregated.
+func lagGroups(devID string, lag *lagReply, ports map[int]*portData) ([]model.LagGroup, map[int]string) {
 	lagOf := map[int]string{}
-	var lagGroups []model.LagGroup
-	if st.lag != nil {
-		for _, l := range st.lag.Lags {
-			if len(l.Members) == 0 {
-				continue
-			}
-			g := model.LagGroup{DeviceID: devID, ID: "lag" + strconv.Itoa(l.LagNum+1), Mode: l.Type}
-			g.Name = g.ID
-			for _, m := range l.Members {
-				if m == 0 {
-					continue // CPU port
-				}
-				lagOf[m] = g.ID
-				g.MemberLinks = append(g.MemberLinks, ifName(m))
-				if p := ports[m]; p != nil && p.carrier {
-					g.LinkUp = true
-					g.SpeedMbps += p.speedMbps
-				}
-			}
-			lagGroups = append(lagGroups, g)
-		}
+	if lag == nil {
+		return nil, lagOf
 	}
+	var groups []model.LagGroup
+	for _, l := range lag.Lags {
+		if len(l.Members) == 0 {
+			continue
+		}
+		g := model.LagGroup{DeviceID: devID, ID: "lag" + strconv.Itoa(l.LagNum+1), Mode: l.Type}
+		g.Name = g.ID
+		carriers := l.Members
+		if l.Type == "lacp" {
+			carriers = l.ActiveMembers
+		}
+		for _, n := range l.Members {
+			if n == 0 {
+				continue // CPU port
+			}
+			lagOf[n] = g.ID
+			g.MemberLinks = append(g.MemberLinks, ifName(n))
+			if p := ports[n]; p != nil && p.carrier && slices.Contains(carriers, n) {
+				g.LinkUp = true
+				g.SpeedMbps += p.speedMbps
+			}
+		}
+		groups = append(groups, g)
+	}
+	return groups, lagOf
+}
 
-	nums := make([]int, 0, len(ports))
-	for n, p := range ports {
+func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target, now time.Time) *driver.Snapshot {
+	devID := "rtlplayground:" + cfg.ID
+	m := parseMetrics(samples)
+	groups, lagOf := lagGroups(devID, st.lag, m.ports)
+
+	nums := make([]int, 0, len(m.ports))
+	for n, p := range m.ports {
 		if p.seen {
 			nums = append(nums, n)
 		}
 	}
 	sort.Ints(nums)
+	caps := []model.Capability{model.CapLinks, model.CapFirmwareInfo}
 	links := make([]model.Link, 0, len(nums))
+	hasSFP := false
 	for _, n := range nums {
-		p := ports[n]
-		media := mediaFor(p.speedMbps, p.carrier, p.sfp != nil)
+		p := m.ports[n]
 		oper := model.OperUp
 		switch {
 		case p.adminDown:
@@ -534,7 +581,6 @@ func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target) *drive
 		case !p.carrier:
 			oper = model.OperNoCarrier
 		}
-		counters := p.counters
 		l := model.Link{
 			DeviceID:   devID,
 			Index:      n,
@@ -543,107 +589,90 @@ func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target) *drive
 			AdminUp:    !p.adminDown,
 			LinkUp:     p.carrier,
 			OperState:  oper,
-			Media:      media,
+			Media:      mediaFor(p.speedMbps, p.carrier, p.sfp != nil),
 			LagGroupID: lagOf[n],
 			SFP:        p.sfp,
-			Counters:   &counters,
+			Counters:   &p.counters,
 		}
 		if p.carrier {
 			l.SpeedMbps = p.speedMbps
 		}
+		hasSFP = hasSFP || p.sfp != nil
 		links = append(links, l)
 	}
 
-	caps := []model.Capability{model.CapLinks, model.CapFirmwareInfo}
 	var sensors []model.SensorReading
-	if socTemp != nil {
+	if m.socTemp != nil {
 		caps = append(caps, model.CapSensors)
-		sensors = append(sensors, model.SensorReading{Name: "soc", Kind: model.SensorTempC, Value: *socTemp, Unit: "C"})
+		sensors = append(sensors, model.SensorReading{Name: "asic", Kind: model.SensorTempC, Value: *m.socTemp, Unit: "C", Status: model.AlertOK})
 	}
-	for _, l := range links {
-		if l.SFP != nil {
-			caps = append(caps, model.CapSfpDom)
-			break
-		}
+	if hasSFP {
+		caps = append(caps, model.CapSfpDom)
 	}
 	if st.lag != nil {
 		caps = append(caps, model.CapLLDP, model.CapLAG)
 	}
-	if st.fdbAt != (time.Time{}) {
+	if !st.fdbS.ok.IsZero() {
 		caps = append(caps, model.CapFDB)
 	}
 
 	var uptime uint64
-	if bootTime > 0 && nodeTime > bootTime {
-		uptime = uint64(nodeTime - bootTime)
+	if m.bootTime > 0 && m.nodeTime > m.bootTime {
+		uptime = uint64(m.nodeTime - m.bootTime)
 	}
 	var mgmtIP string
 	if info := st.info; info != nil {
 		mgmtIP = info.IPAddress
-		if hostname == "" {
-			hostname = info.Hostname
-		}
-		if release == "" {
-			release = info.SwVer
-		}
-		if machine == "" {
-			machine = info.HwVer
-		}
-		if mac == "" {
-			mac = info.MACAddress
-		}
-		if uptime == 0 { // no NTP sync: the exporter omits boot time
+		m.hostname = cmp.Or(m.hostname, info.Hostname)
+		m.release = cmp.Or(m.release, info.SwVer)
+		m.machine = cmp.Or(m.machine, info.HwVer)
+		m.mac = cmp.Or(m.mac, info.MACAddress)
+		if uptime == 0 { // no NTP sync: the exporter omits boot time; age the cached value
 			if v, err := strconv.ParseUint(strings.TrimPrefix(info.Uptime, "0x"), 16, 64); err == nil {
-				uptime = v
+				uptime = v + uint64(now.Sub(st.infoS.ok).Seconds())
 			}
 		}
 	}
-	name := cfg.Name
-	if name == "" {
-		name = hostname
-	}
 	var macs []string
-	if mac != "" {
-		macs = []string{mac}
+	if m.mac != "" {
+		macs = []string{m.mac}
 	}
 
+	utc := now.UTC()
 	snap := &driver.Snapshot{
 		TargetID:    cfg.ID,
-		CollectedAt: now,
+		CollectedAt: utc,
 		Devices: []model.Device{{
 			ID:           devID,
 			Driver:       "rtlplayground",
 			TargetID:     cfg.ID,
-			Name:         name,
-			Hostname:     hostname,
-			Model:        machine,
+			Name:         cmp.Or(cfg.Name, m.hostname, m.machine),
+			Hostname:     m.hostname,
+			Vendor:       "RTLPlayground",
+			Model:        m.machine,
 			Role:         model.RoleSwitch,
-			PrimaryMAC:   mac,
+			PrimaryMAC:   m.mac,
 			MACs:         macs,
 			MgmtIP:       mgmtIP,
-			Firmware:     model.FirmwareInfo{Current: release},
+			Firmware:     model.FirmwareInfo{Current: m.release},
 			UptimeSec:    uptime,
 			Online:       true,
-			LastSeen:     now,
+			LastSeen:     utc,
 			Capabilities: caps,
 			Sensors:      sensors,
 		}},
 		Links:     links,
-		LagGroups: lagGroups,
+		LagGroups: groups,
 	}
 	for _, n := range st.lldp {
-		ln := model.LldpNeighbor{
+		snap.LLDP = append(snap.LLDP, model.LldpNeighbor{
 			DeviceID:      devID,
 			LocalLink:     ifName(n.Port),
 			ChassisID:     n.Chassis,
-			RemotePort:    n.PortID,
+			RemotePort:    cmp.Or(n.PortID, n.PortDesc),
 			RemoteSysName: n.SysName,
 			RemoteMgmtIP:  n.MgmtAddr,
-		}
-		if ln.RemotePort == "" {
-			ln.RemotePort = n.PortDesc
-		}
-		snap.LLDP = append(snap.LLDP, ln)
+		})
 	}
 	for _, e := range st.fdb {
 		if e.Port == 0 {
@@ -660,8 +689,7 @@ func dbm(w float64) *float64 {
 	if w <= 0 || math.IsNaN(w) || math.IsInf(w, 0) {
 		return nil
 	}
-	v := 10 * math.Log10(w*1000)
-	return &v
+	return new(10 * math.Log10(w*1000))
 }
 
 // mediaFor infers the port media: the exporter reports no PHY type, only SFP modules and speed.

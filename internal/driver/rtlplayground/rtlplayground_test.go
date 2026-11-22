@@ -3,6 +3,7 @@ package rtlplayground
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -18,18 +19,21 @@ import (
 	"github.com/andrebrait/netplane/internal/model"
 )
 
-func init() { requestGap = 0 }
+func init() { requestGap, scrapeRetryGap = 0, 0 }
 
 // fakeSwitch serves firmware-shaped replies and records every request.
 type fakeSwitch struct {
-	mu       sync.Mutex
-	paths    []string
-	logins   int
-	sessions map[string]bool
-	inflight int
-	maxConc  int
-	fdb      []string // l2.json rows, as JSON objects
-	metrics  []byte
+	mu          sync.Mutex
+	paths       []string
+	logins      int
+	sessions    map[string]bool
+	inflight    int
+	maxConc     int
+	fdb         []string // l2.json rows, as JSON objects, sorted by idx
+	fdbWrap     bool     // pages continue from the table start, like the firmware's hash walk
+	fdbNull     bool     // answer `null`, like a busy RTL836x table
+	failMetrics int      // fail this many /metrics requests first
+	metrics     []byte
 }
 
 func newFakeSwitch(t *testing.T) (*fakeSwitch, *httptest.Server) {
@@ -55,6 +59,16 @@ func (f *fakeSwitch) serve(w http.ResponseWriter, r *http.Request) {
 	defer func() { f.mu.Lock(); f.inflight--; f.mu.Unlock() }()
 
 	if r.URL.Path == "/metrics" {
+		f.mu.Lock()
+		fail := f.failMetrics > 0
+		if fail {
+			f.failMetrics--
+		}
+		f.mu.Unlock()
+		if fail {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		_, _ = w.Write(f.metrics)
 		return
 	}
@@ -99,17 +113,33 @@ func (f *fakeSwitch) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ip_address":"192.0.2.10","ip_gateway":"192.0.2.1","ip_netmask":"255.255.255.0","syslog_server":"0.0.0.0:514","session_timeout":3600,"ip_source":"static","mac_address":"02:00:5e:00:53:01","hostname":"switch-test","sw_ver":"v0.1.0","build_date":"2026-11-22 02:16:05","uptime":"0x0000a000","hw_ver":"MokerLink ZX-SWTGW218AS","pcb_ver":"","chip_temp":"56.5 C","flash_size":"2 MB","prometheus":true}`))
 	case "/l2.json":
 		idx, _ := strconv.Atoi(r.URL.Query().Get("idx"))
-		var page []string
 		f.mu.Lock()
-		for _, row := range f.fdb {
-			var e struct{ Idx string }
-			_, _ = fmt.Sscanf(row[strings.Index(row, `"idx":"`)+7:], "%4s", &e.Idx)
-			n, _ := strconv.ParseUint(e.Idx, 16, 16)
-			if int(n) >= idx && len(page) < 2 {
-				page = append(page, row)
+		rows, wrap, null := f.fdb, f.fdbWrap, f.fdbNull
+		f.mu.Unlock()
+		if null {
+			_, _ = w.Write([]byte("null"))
+			return
+		}
+		var page []string
+		start := len(rows)
+		for i, row := range rows {
+			var e l2Entry
+			_ = json.Unmarshal([]byte(row), &e)
+			if n, _ := strconv.ParseUint(e.Idx, 16, 16); int(n) >= idx {
+				start = i
+				break
 			}
 		}
-		f.mu.Unlock()
+		for i := 0; i < 2 && len(rows) > 0; i++ {
+			j := start + i
+			if j >= len(rows) {
+				if !wrap {
+					break
+				}
+				j %= len(rows)
+			}
+			page = append(page, rows[j])
+		}
 		_, _ = w.Write([]byte("[" + strings.Join(page, ",") + "]"))
 	default:
 		w.WriteHeader(http.StatusNotFound)
@@ -156,7 +186,7 @@ func TestMetricsOnlyPoll(t *testing.T) {
 		d.Firmware.Current != "v0.1.0-fe02652c" || d.PrimaryMAC != "02:00:5e:00:53:01" || d.UptimeSec != 40981 {
 		t.Fatalf("device = %+v", d)
 	}
-	if len(d.Sensors) != 1 || d.Sensors[0].Value != 56.546 {
+	if len(d.Sensors) != 1 || d.Sensors[0].Value != 56.546 || d.Sensors[0].Status != model.AlertOK || d.Vendor != "RTLPlayground" {
 		t.Fatalf("sensors = %+v", d.Sensors)
 	}
 	if len(snap.Links) != 4 {
@@ -209,7 +239,7 @@ func TestPollWithPasswordRefreshesSlowDataOnSchedule(t *testing.T) {
 		t.Fatalf("lldp = %+v", snap.LLDP)
 	}
 	if len(snap.LagGroups) != 1 || snap.LagGroups[0].ID != "lag2" || snap.LagGroups[0].Mode != "lacp" ||
-		len(snap.LagGroups[0].MemberLinks) != 2 || !snap.LagGroups[0].LinkUp || snap.LagGroups[0].SpeedMbps != 12500 {
+		len(snap.LagGroups[0].MemberLinks) != 2 || !snap.LagGroups[0].LinkUp || snap.LagGroups[0].SpeedMbps != 2500 {
 		t.Fatalf("lags = %+v", snap.LagGroups)
 	}
 	if snap.Links[0].LagGroupID != "lag2" {
@@ -243,7 +273,7 @@ func TestPollWithPasswordRefreshesSlowDataOnSchedule(t *testing.T) {
 	}
 }
 
-func TestSessionExpiryReloginsOnceAndReusesSlot(t *testing.T) {
+func TestSessionEvictionReloginsOnce(t *testing.T) {
 	f, srv := newFakeSwitch(t)
 	drv := New()
 	cfg := cfgFor(srv, "s3cret")
@@ -255,7 +285,7 @@ func TestSessionExpiryReloginsOnceAndReusesSlot(t *testing.T) {
 	f.mu.Lock()
 	f.sessions = map[string]bool{}
 	f.mu.Unlock()
-	st.lldpAt = time.Time{}
+	st.lldpS.next = time.Time{}
 	if _, err := drv.Poll(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -278,9 +308,9 @@ func TestWrongPasswordKeepsMetrics(t *testing.T) {
 func TestStaleCacheExpires(t *testing.T) {
 	st := &target{lldp: []lldpNeighbor{{Port: 1}}, lag: &lagReply{}, info: &infoReply{}, fdb: []l2Entry{{Port: 1}}}
 	now := time.Now()
-	st.lldpAt, st.infoAt, st.fdbAt = now.Add(-time.Minute), now.Add(-time.Hour), now.Add(-time.Hour)
+	st.lldpS.ok, st.infoS.ok, st.fdbS.ok = now.Add(-time.Minute), now.Add(-time.Hour), now.Add(-time.Hour)
 	st.expire(now)
-	if st.lldp == nil || st.info != nil || st.fdb != nil || !st.fdbAt.IsZero() {
+	if st.lldp == nil || st.info != nil || st.fdb != nil || !st.fdbS.ok.IsZero() {
 		t.Fatalf("expire: lldp=%v info=%v fdb=%v", st.lldp, st.info, st.fdb)
 	}
 }
@@ -307,12 +337,90 @@ func TestValidateConfig(t *testing.T) {
 }
 
 func TestParsePromText(t *testing.T) {
-	in := "# HELP x\nfoo{a=\"q\\\"x\\\\y\\nz\",b=\"\"} 1.5 1700000000\nbar 7\nbroken{a=\"x} 1\nbaz{} NaN\n"
-	got, err := parsePromText(strings.NewReader(in))
+	in := "# HELP x\nfoo{a=\"q\\\"x\\\\y\\nz\",b=\"\"} 1.5 1700000000\nbar 7\nbroken{a=\"x} 1\nbaz{} NaN\ncut 185"
+	got := parsePromText([]byte(in))
+	if len(got) != 3 || got[0].labels["a"] != "q\"x\\y\nz" || got[0].value != 1.5 || got[1].name != "bar" || !math.IsNaN(got[2].value) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestWrongPasswordBacksOff(t *testing.T) {
+	f, srv := newFakeSwitch(t)
+	drv := New()
+	cfg := cfgFor(srv, "wrong")
+	for i := 0; i < 3; i++ {
+		if _, err := drv.Poll(context.Background(), cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := f.count("/login"); n != 1 {
+		t.Fatalf("refused logins over 3 polls = %d, want 1 (stop the poll, then back off)", n)
+	}
+}
+
+func TestFdbWalkWrapsAndNullPageKeepsTable(t *testing.T) {
+	f, srv := newFakeSwitch(t)
+	f.fdbWrap = true
+	f.fdb = []string{
+		`{"vlan":"001","mac":"02:00:5e:00:53:10","type":"l","port":2,"lag":0,"idx":"0010"}`,
+		`{"vlan":"001","mac":"02:00:5e:00:53:11","type":"l","port":3,"lag":0,"idx":"0020"}`,
+		`{"vlan":"001","mac":"02:00:5e:00:53:12","type":"l","port":4,"lag":0,"idx":"0030"}`,
+	}
+	drv := New()
+	cfg := cfgFor(srv, "s3cret")
+	snap, err := drv.Poll(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got[0].labels["a"] != "q\"x\\y\nz" || got[0].value != 1.5 || got[1].name != "bar" || !math.IsNaN(got[2].value) {
-		t.Fatalf("got %v", got)
+	if len(snap.FDB) != 3 || f.count("/l2.json") != 2 {
+		t.Fatalf("fdb = %d entries in %d pages, want 3 in 2", len(snap.FDB), f.count("/l2.json"))
+	}
+
+	// A busy table answers `null`: the walk fails and the previous table stays.
+	f.mu.Lock()
+	f.fdbNull = true
+	f.mu.Unlock()
+	st := drv.state("sw1")
+	st.lldpS.next, st.infoS.next, st.fdbS.next = time.Time{}, time.Time{}, time.Time{}
+	snap, err = drv.Poll(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.FDB) != 3 || st.jsonNext.IsZero() {
+		t.Fatalf("fdb after null page = %d entries", len(snap.FDB))
+	}
+}
+
+func TestScrapeRetriesOnce(t *testing.T) {
+	f, srv := newFakeSwitch(t)
+	f.failMetrics = 1
+	if _, err := New().Poll(context.Background(), cfgFor(srv, "")); err != nil {
+		t.Fatalf("one busy scrape must be retried: %v", err)
+	}
+	f.failMetrics = 2
+	if _, err := New().Poll(context.Background(), cfgFor(srv, "")); err == nil {
+		t.Fatal("two failed scrapes must fail the poll")
+	}
+}
+
+func TestClientIsGentle(t *testing.T) {
+	c := newClient(driver.TargetConfig{Endpoint: "http://192.0.2.10"})
+	tr := c.http.Transport.(*http.Transport)
+	if !tr.DisableKeepAlives || tr.MaxConnsPerHost != 1 {
+		t.Fatalf("transport keepalive=%v maxconns=%d", !tr.DisableKeepAlives, tr.MaxConnsPerHost)
+	}
+	_, srv := newFakeSwitch(t)
+	defer func(g time.Duration) { requestGap = g }(requestGap)
+	requestGap = 30 * time.Millisecond
+	c = newClient(driver.TargetConfig{Endpoint: srv.URL})
+	start := time.Now()
+	for i := 0; i < 3; i++ {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/metrics", nil)
+		if _, _, err := c.do(context.Background(), req, 1<<20); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if el := time.Since(start); el < 60*time.Millisecond {
+		t.Fatalf("3 requests took %v, want at least two pacing gaps", el)
 	}
 }
