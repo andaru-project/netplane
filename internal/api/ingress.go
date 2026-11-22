@@ -127,11 +127,17 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
+// fromIngressProxy reports whether r was forwarded by the trusted ingress proxy: a trusted
+// peer address and a Supervisor ingress path. Auth and the browser guards both exempt it.
+func (s *Server) fromIngressProxy(r *http.Request) bool {
+	return s.isTrustedIngressPeer(r.RemoteAddr) && sanitizeIngressPath(r.Header.Get("X-Ingress-Path")) != ""
+}
+
 // authenticated reports whether r may use token-protected routes: no token is configured,
 // it comes from the trusted ingress proxy, or it carries the token.
 func (s *Server) authenticated(r *http.Request) bool {
 	return s.opts.APIToken == "" ||
-		(s.isTrustedIngressPeer(r.RemoteAddr) && sanitizeIngressPath(r.Header.Get("X-Ingress-Path")) != "") ||
+		s.fromIngressProxy(r) ||
 		s.validToken(r)
 }
 

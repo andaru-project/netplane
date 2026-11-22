@@ -25,7 +25,7 @@ var privateSuffixes = []string{".local", ".lan", ".home.arpa", ".internal", ".lo
 // exempt. A reverse proxy in front of netplane must pass the browser's Host through.
 func (s *Server) withBrowserGuards(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.isTrustedIngressPeer(r.RemoteAddr) && sanitizeIngressPath(r.Header.Get("X-Ingress-Path")) != "" {
+		if s.fromIngressProxy(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -59,9 +59,9 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 	}
 	oHost, oPort := u.Hostname(), u.Port()
 	if oPort == "" {
-		oPort = map[string]string{"https": "443"}[u.Scheme]
-		if oPort == "" {
-			oPort = "80"
+		oPort = "80"
+		if u.Scheme == "https" {
+			oPort = "443"
 		}
 	}
 	rHost, rPort, err := net.SplitHostPort(r.Host)
