@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: "netplane"
+description: "Open network configuration, information, and diagnostics plane for OpenWrt, RTLPlayground, Andaru, pfSense, UniFi, and SNMP gear"
+version: "0.1.0"
+slug: "netplane"
+url: "https://github.com/andrebrait/netplane"
+arch:
+  - amd64
+  - aarch64
+startup: services
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: "mdi:lan"
+panel_title: "netplane"
+ports:
+  8099/tcp: null
+map:
+  - addon_config:rw
+options:
+  config_file: "/config/netplane.yaml"
+  api_token: ""
+  secrets: []
+schema:
+  config_file: str
+  # Bearer token for the HA integration and other non-ingress clients; ingress needs none.
+  api_token: password?
+  # Exported as environment variables so netplane.yaml can reference them as ${NAME}.
+  secrets:
+    - name: str
+      value: password

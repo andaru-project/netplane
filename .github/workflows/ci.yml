@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted Go files:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Vet and test with race detector
+        run: |
+          go vet ./...
+          go test -race -coverprofile=coverage.txt ./...
+          go tool cover -func=coverage.txt | tail -n 1
+      - name: Cross-compile static Linux binaries (amd64 + arm64)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/netplane
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./cmd/netplane
+
+  web-and-embed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build web SPA
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Build Go binary with embedded UI
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags embedui ./cmd/netplane
+
+  python-and-license-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify Apache-2.0 license boundary
+        run: |
+          # grep exits 0 on a match, 1 on a clean scan, 2 when it could not read something.
+          rc=0
+          grep -rn "AGPL" schema/ clients/python/ ha-integration/ || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "ERROR: AGPL reference found inside Apache-2.0 boundary!"
+            exit 1
+          elif [ "$rc" -ne 1 ]; then
+            echo "ERROR: license boundary scan failed (grep exit $rc)"
+            exit 1
+          fi
+      - name: Syntax-check HA integration and run Python client tests
+        run: |
+          python3 -m py_compile ha-integration/custom_components/netplane/*.py
+          python3 -m pip install --quiet aiohttp
+          PYTHONPATH=clients/python python3 -m unittest discover -s clients/python/tests -v

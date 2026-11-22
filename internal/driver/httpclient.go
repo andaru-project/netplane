@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package driver
+
+import (
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+)
+
+// NewHTTPClient returns a per-poll HTTP client honouring the insecure_skip_verify setting.
+// It refuses redirects to another host or from https to http so API key headers and login bodies stay on the target.
+// Callers must call CloseIdleConnections when done.
+func NewHTTPClient(cfg TargetConfig, timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.BoolSetting("insecure_skip_verify", false)}, //nolint:gosec // user-configurable for local self-signed devices
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			if !sameHost(req.URL, via[0].URL) {
+				return fmt.Errorf("refusing redirect from %s to different host %s", via[0].URL.Host, req.URL.Host)
+			}
+			if via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
+				return fmt.Errorf("refusing redirect from https to %s", req.URL.Scheme)
+			}
+			return nil
+		},
+	}
+}
+
+// CheckCredentialTransport refuses to send credentials to a plain http:// endpoint unless the
+// target opts in with allow_insecure_http: true. https:// and unix:// endpoints pass.
+func CheckCredentialTransport(cfg TargetConfig) error {
+	u, err := url.Parse(strings.TrimSpace(cfg.Endpoint))
+	if err != nil {
+		return fmt.Errorf("target %q: invalid endpoint: %w", cfg.ID, err)
+	}
+	if strings.EqualFold(u.Scheme, "http") && !cfg.BoolSetting("allow_insecure_http", false) {
+		return fmt.Errorf("target %q: refusing to send credentials over plain http; use https or set allow_insecure_http: true", cfg.ID)
+	}
+	return nil
+}
+
+// sameHost reports whether next stays on first's host: hostnames compare case-insensitively
+// and an omitted port means the scheme default.
+func sameHost(next, first *url.URL) bool {
+	if !strings.EqualFold(next.Hostname(), first.Hostname()) {
+		return false
+	}
+	np, fp := effectivePort(next), effectivePort(first)
+	// http://h -> https://h moves from :80 to :443 without changing host.
+	return np == fp || (first.Scheme == "http" && fp == "80" && next.Scheme == "https" && np == "443")
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
