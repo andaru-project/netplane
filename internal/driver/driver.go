@@ -99,7 +99,7 @@ func (s *Snapshot) MarkUnavailable(sec Section) {
 }
 
 // CarryOver fills each unavailable section from prev. Data fresh in prev is carried once, if
-// prev is at most three poll intervals (and at least maxAge) old, so a single failed call never
+// prev is no older than three poll intervals or maxAge, whichever is longer, so a single failed call never
 // looks like everything leaving however slow the interval, but a snapshot left from before a
 // long stop is not revived. Data prev itself carried keeps its original freshness and expires
 // after maxAge, so a permanently failing call cannot freeze it.

@@ -133,16 +133,16 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 	}
 
 	s.recordSuccess(cfg, now)
-	// Warn once when a section stops refreshing, not on every poll of a permanent failure.
-	var newly []driver.Section
+	// Log when a section stops refreshing and when its carried data runs out, not on every
+	// poll of a permanent failure.
 	for _, sec := range snap.Unavailable {
-		if prev == nil || !slices.Contains(prev.Unavailable, sec) {
-			newly = append(newly, sec)
+		_, carried := snap.Stale[sec]
+		switch {
+		case prev == nil || !slices.Contains(prev.Unavailable, sec):
+			s.logger.Warn("target section stopped refreshing", "target_id", cfg.ID, "section", sec, "keeping_last_data", carried)
+		case !carried && prev.Stale[sec] != (time.Time{}):
+			s.logger.Warn("target section still not refreshing; dropped its last data", "target_id", cfg.ID, "section", sec)
 		}
-	}
-	if len(newly) > 0 {
-		s.logger.Warn("target sections stopped refreshing; carrying their last data for a while",
-			"target_id", cfg.ID, "sections", newly, "carried", snap.Stale)
 	}
 
 	if s.bus != nil {

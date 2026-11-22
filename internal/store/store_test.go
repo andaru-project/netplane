@@ -464,3 +464,17 @@ func TestSaveSnapshotCarriesUnavailableSections(t *testing.T) {
 		t.Fatalf("state clients = %v, %v", state.Clients, err)
 	}
 }
+
+func TestSaveSnapshotCarryWindowFollowsPollInterval(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	if _, err := st.SaveSnapshot(ctx, &driver.Snapshot{TargetID: "u1", CollectedAt: t0, Clients: []model.Client{{MAC: "aa:aa:aa:aa:aa:01"}}}); err != nil {
+		t.Fatal(err)
+	}
+	// 40 minutes later on a 20-minute interval: within three intervals, so carried.
+	s := &driver.Snapshot{TargetID: "u1", CollectedAt: t0.Add(40 * time.Minute), PollInterval: 20 * time.Minute, Unavailable: []driver.Section{driver.SectionClients}}
+	if _, err := st.SaveSnapshot(ctx, s); err != nil || len(s.Clients) != 1 {
+		t.Fatalf("clients = %v, %v", s.Clients, err)
+	}
+}

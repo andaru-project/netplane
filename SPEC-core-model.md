@@ -159,6 +159,7 @@ type Snapshot struct {
 	Unavailable   []Section             // sections the driver could not refresh (MarkUnavailable)
 	Stale         map[Section]time.Time // carried sections -> when their data was last fresh
 	MarkedOffline bool                  // rewritten by MarkTargetOffline; never a carry-over source
+	PollInterval  time.Duration         // set by the poller; sizes the one-time carry window
 }
 
 // Section names a snapshot slice by its JSON field ("segments", "zones", "fdb", "lldp",
@@ -166,7 +167,7 @@ type Snapshot struct {
 type Section string
 
 // CarryOver (called by the store before saving) fills unavailable sections from the previous
-// snapshot: data fresh there is carried once (if that poll is at most three poll intervals, and at least 15 minutes, old); data it had
+// snapshot: data fresh there is carried once (if that poll is no older than three poll intervals or 15 minutes, whichever is longer); data it had
 // itself carried keeps its original freshness and expires after 15 minutes.
 func (s *Snapshot) CarryOver(prev *Snapshot, maxAge time.Duration)
 

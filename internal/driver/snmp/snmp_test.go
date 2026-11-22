@@ -301,20 +301,26 @@ func TestSNMPPoEAmbiguousAcrossGroupsNotAttached(t *testing.T) {
 }
 
 func TestSNMPFailedWalksMarkSections(t *testing.T) {
-	for oid, want := range map[string]driver.Section{
-		oidDot1qFdb: driver.SectionFDB, oidBasePortIf: driver.SectionFDB, oidVlanFdbID: driver.SectionFDB,
-		oidLldpRem: driver.SectionLLDP, oidLldpLoc: driver.SectionLLDP, oidIfXTable: driver.SectionLLDP,
-	} {
+	poll := func(failOID string) (*driver.Snapshot, error) {
 		fw := &fakeWalker{trees: map[string][]gosnmp.SnmpPDU{
 			".1.3.6.1.2.1.1": {{Name: oidSysName, Type: gosnmp.OctetString, Value: []byte("sw")}},
-		}, fail: map[string]bool{oid: true}}
+		}, fail: map[string]bool{failOID: true}}
 		drv := NewWithFactory(func(context.Context, driver.TargetConfig) (Walker, error) { return fw, nil })
-		snap, err := drv.Poll(context.Background(), driver.TargetConfig{ID: "s1", Endpoint: "192.0.2.1", Settings: map[string]any{"version": "2c"}, ResolvedSecrets: map[string]string{"community": "public"}})
+		return drv.Poll(context.Background(), driver.TargetConfig{ID: "s1", Endpoint: "192.0.2.1", Settings: map[string]any{"version": "2c"}, ResolvedSecrets: map[string]string{"community": "public"}})
+	}
+	for oid, want := range map[string][]driver.Section{
+		oidDot1qFdb: {driver.SectionFDB}, oidBasePortIf: {driver.SectionFDB}, oidVlanFdbID: {driver.SectionFDB},
+		oidLldpRem: {driver.SectionLLDP}, oidLldpLoc: {driver.SectionLLDP},
+	} {
+		snap, err := poll(oid)
 		if err != nil {
 			t.Fatalf("%s: %v", oid, err)
 		}
-		if !slices.Contains(snap.Unavailable, want) {
-			t.Errorf("failed walk %s: unavailable=%v, want %s", oid, snap.Unavailable, want)
+		if !slices.Equal(snap.Unavailable, want) {
+			t.Errorf("failed walk %s: unavailable=%v, want %v", oid, snap.Unavailable, want)
 		}
+	}
+	if _, err := poll(oidIfXTable); err == nil {
+		t.Error("a failed ifXTable walk must fail the poll (it renames every port)")
 	}
 }
