@@ -38,6 +38,15 @@ type Driver struct {
 	// spelling remembers, per target and endpoint, the path variant that answered, so a
 	// 25.1 box is not sent (and does not log) a refused snake_case request on every poll.
 	spelling sync.Map
+	// now is the clock (tests set it); nil means time.Now.
+	now func() time.Time
+}
+
+func (d *Driver) clock() time.Time {
+	if d.now != nil {
+		return d.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // New returns a new OPNsense REST API driver.
@@ -153,6 +162,15 @@ func (a *api) get(ctx context.Context, out any, paths ...string) error {
 		}
 	}
 	return fmt.Errorf("%s: %w", p, err)
+}
+
+// search reads every row of a search endpoint: a GET returns at most 9999 rows, so the
+// request asks for all of them (rowCount -1) in a POST body.
+func (a *api) search(ctx context.Context, out any, path string) error {
+	if err := a.do(ctx, http.MethodPost, path, map[string]any{"rowCount": -1}, out); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
 }
 
 // absent reports a refusal (403: the API user lacks the privilege) or a missing endpoint
@@ -320,8 +338,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		Rows []neighborRow `json:"rows"`
 	}
 	// search_arp and search_ndp keep one spelling in every release.
-	optional(driver.SectionNeighbors, a.get(ctx, &arpResp, "/api/diagnostics/interface/search_arp"))
-	optional(driver.SectionNeighbors, a.get(ctx, &ndpResp, "/api/diagnostics/interface/search_ndp"))
+	optional(driver.SectionNeighbors, a.search(ctx, &arpResp, "/api/diagnostics/interface/search_arp"))
+	optional(driver.SectionNeighbors, a.search(ctx, &ndpResp, "/api/diagnostics/interface/search_ndp"))
 
 	// Kea, dnsmasq (25.7 and later) and ISC (core up to 25.7, then a plugin) may each serve
 	// leases. A failed one marks the whole section unavailable rather than drop its leases.
@@ -330,7 +348,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		var r struct {
 			Rows []leaseRow `json:"rows"`
 		}
-		err := a.get(ctx, &r, p)
+		err := a.search(ctx, &r, p)
 		optional(driver.SectionDHCP, err)
 		leases = append(leases, r.Rows...)
 	}
@@ -338,8 +356,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	var pfStates struct {
 		Current numStr `json:"current"`
 		Limit   numStr `json:"limit"`
+		Result  string `json:"result"` // "failed" when configd gave no answer
 	}
 	errPF := a.get(ctx, &pfStates, "/api/diagnostics/firewall/pf_states")
+	if errPF == nil && pfStates.Result == "failed" {
+		errPF = errors.New("pf_states: failed")
+	}
 
 	var wgResp struct {
 		Rows []struct {
@@ -353,10 +375,10 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Name            string `json:"name"`
 		} `json:"rows"`
 	}
-	errWG := a.get(ctx, &wgResp, "/api/wireguard/service/show")
+	errWG := a.search(ctx, &wgResp, "/api/wireguard/service/show")
 	optional(driver.SectionVPNs, errWG)
 
-	now := time.Now().UTC()
+	now := d.clock()
 	devID := "opnsense:" + cfg.ID
 	product, version := parseVersion(sysInfo.Versions)
 	name := cmp.Or(cfg.Name, sysInfo.Name, cfg.ID)
@@ -527,7 +549,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	addNeighbors(ndpResp.Rows, model.IPv6)
 
 	for _, l := range leases {
-		mac, err := model.NormalizeMAC(cmp.Or(l.HWAddr, l.MAC))
+		// A DHCPv6 client identified by a DUID-UUID has no MAC; keep its lease without one.
+		mac, err := "", error(nil)
+		if raw := cmp.Or(l.HWAddr, l.MAC); raw != "" {
+			mac, err = model.NormalizeMAC(raw)
+		}
 		st, hasState := l.State.int64()
 		exp, hasExpire := l.Expire.int64()
 		// Kea also lists deleted (valid lifetime 0) and unreclaimed expired leases at state 0.

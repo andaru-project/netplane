@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/andaru-project/netplane/internal/driver"
@@ -33,7 +34,7 @@ type pingJob struct {
 // removed, so the driver reads its counters until count replies came back, or one probe past
 // count went out (giving the last counted probe its second), then removes it. Creating a job saves an in-memory model, which a
 // user with user-config-readonly is refused. A DNS name is pinged over IPv4.
-func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req model.DiagnosticRequest) (*model.DiagnosticResult, error) {
+func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req model.DiagnosticRequest) (res *model.DiagnosticResult, err error) {
 	if err := d.ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -69,10 +70,13 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 	}
 	defer func() {
 		// Always remove the job, even after a timeout: it would otherwise ping for a day.
-		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		var ignored map[string]any // remove also kills the job's ping
-		_ = a.do(dctx, http.MethodPost, "/api/diagnostics/ping/remove/"+set.UUID, map[string]any{}, &ignored)
+		if rerr := removeJob(ctx, a, set.UUID); rerr != nil {
+			if res != nil {
+				res.Error = strings.TrimPrefix(res.Error+"; "+rerr.Error(), "; ")
+			} else if err == nil {
+				err = rerr
+			}
+		}
 	}()
 	var started struct {
 		Status    string `json:"status"`
@@ -113,9 +117,13 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 
 	// The job's loss text differs between IPv4 ("0.00 %") and IPv6 ("100.0%"), so loss is
 	// computed here.
+	// The job reports only totals, so which probe a reply answered is unknown. When a probe
+	// past count went out and one reply is missing, it is taken to be that newest probe's,
+	// still on its way (the common case); a counted probe lost while the extra one replied
+	// then reads as no loss, an error of one probe.
 	sent, got := int(job.Send.uint()), int(job.Received.uint())
 	if job.Status == "running" && sent > n && got < sent {
-		sent-- // the newest probe went out past count and its reply may still be on its way
+		sent--
 	}
 	stats := driver.PingStats{Transmitted: sent, Received: min(got, sent)}
 	if sent > 0 {
@@ -124,11 +132,31 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 	if stats.Received > 0 {
 		stats.RTTMinMs, stats.RTTAvgMs, stats.RTTMaxMs = job.Min, job.Avg, job.Max
 	}
-	res := driver.PingStatsResult(req, host, stats, "", cmp.Or(job.LastError, "no replies"))
+	res = driver.PingStatsResult(req, host, stats, "", cmp.Or(job.LastError, "no replies"))
 	if sent == 0 {
 		res.Summary, res.Structured = fmt.Sprintf("ping %s failed", host), nil
 	}
 	return res, nil
+}
+
+// removeJob removes a ping job, retrying once, without the caller's cancellation. The job
+// would otherwise keep pinging for a day, so a failure is reported, naming the job.
+func removeJob(ctx context.Context, a *api, id string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	var err error
+	for range 2 {
+		var out struct {
+			Status string `json:"status"`
+		}
+		if err = a.do(ctx, http.MethodPost, "/api/diagnostics/ping/remove/"+id, map[string]any{}, &out); err == nil {
+			if out.Status == "ok" {
+				return nil
+			}
+			err = fmt.Errorf("status %q", out.Status)
+		}
+	}
+	return fmt.Errorf("opnsense ping job %s may still be running (remove it under Diagnostics: Ping): %w", id, err)
 }
 
 // pingError explains a refused ping call: a 400 is a bad request, a 403 a missing privilege.

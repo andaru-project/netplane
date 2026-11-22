@@ -15,6 +15,15 @@ import (
 	"github.com/andaru-project/netplane/internal/model"
 )
 
+// fixed is the test clock: fixture times are relative to it.
+var fixed = time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+
+func testDriver() *Driver {
+	d := New()
+	d.now = func() time.Time { return fixed }
+	return d
+}
+
 func target(url string) driver.TargetConfig {
 	return driver.TargetConfig{
 		ID:              "opn",
@@ -54,7 +63,8 @@ func fixtureServer(t *testing.T, routes map[string]string) *httptest.Server {
 }
 
 func baseRoutes() map[string]string {
-	hs := strconv.FormatInt(time.Now().Unix()-30, 10)
+	hs := strconv.FormatInt(fixed.Unix()-30, 10)
+	exp := strconv.FormatInt(fixed.Unix()+86400, 10)
 	return map[string]string{
 		"/api/diagnostics/system/system_information": `{"name":"fw.example.lan","versions":["OPNsense 26.7.9-amd64","FreeBSD 14.3-RELEASE-p5"]}`,
 		"/api/diagnostics/system/system_time":        `{"uptime":"12 days, 03:04:05","loadavg":"0.21, 0.30, 0.28"}`,
@@ -73,23 +83,24 @@ func baseRoutes() map[string]string {
 			{"name":"LTE","address":"~","status":"delay","loss":"0.0 %","delay":"180.5 ms","monitor":"2001:db8:9::1"}],"status":"ok"}`,
 		"/api/diagnostics/interface/search_arp": `{"rows":[{"mac":"DE:AD:BE:EF:00:01","ip":"192.0.2.50","intf":"igc1","expired":false,"permanent":false},{"mac":"00:0d:b9:00:00:02","ip":"192.0.2.1","intf":"igc1","permanent":true}]}`,
 		"/api/diagnostics/interface/search_ndp": `{"rows":[{"mac":"de:ad:be:ef:00:01","ip":"fe80::50%igc1","intf":"igc1"}]}`,
-		"/api/kea/leases4/search": `{"rows":[{"address":"192.0.2.50","hwaddr":"de:ad:be:ef:00:01","hostname":"nas","expire":"1895000000","if_name":"lan","state":"0"},
-			{"address":"192.0.2.51","hwaddr":"de:ad:be:ef:00:09","hostname":"gone","expire":"1895000000","if_name":"lan","state":"2"},
+		"/api/kea/leases4/search": `{"rows":[{"address":"192.0.2.50","hwaddr":"de:ad:be:ef:00:01","hostname":"nas","expire":"` + exp + `","if_name":"lan","state":"0"},
+			{"address":"192.0.2.51","hwaddr":"de:ad:be:ef:00:09","hostname":"gone","expire":"` + exp + `","if_name":"lan","state":"2"},
 			{"address":"192.0.2.52","hwaddr":"de:ad:be:ef:00:0a","hostname":"deleted","expire":"1000","if_name":"lan","state":"0"}]}`,
-		"/api/dnsmasq/leases/search": `{"rows":[{"address":"192.0.2.60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":1895000001,"if_name":"lan"},
-			{"address":"2001:db8::60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":1895000001,"if_name":"lan"}]}`,
+		"/api/dnsmasq/leases/search": `{"rows":[{"address":"192.0.2.60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":` + exp + `,"if_name":"lan"},
+			{"address":"2001:db8::60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":` + exp + `,"if_name":"lan"},
+			{"address":"2001:db8::61","hwaddr":"","hostname":"uuid-client","expire":` + exp + `,"if_name":"lan"}]}`,
 		"/api/dhcpv4/leases/search_lease":     `{"rows":[{"address":"192.0.2.70","mac":"de:ad:be:ef:00:03","hostname":"printer","type":"static","if":"lan"}]}`,
 		"/api/diagnostics/firewall/pf_states": `{"current":"1234","limit":"812000"}`,
 		"/api/wireguard/service/show": `{"rows":[
 			{"if":"wg0","type":"interface","public-key":"srv=","status":"up","name":"HomeVPN"},
 			{"if":"wg0","type":"peer","public-key":"abc=","endpoint":"203.0.113.5:51820","latest-handshake":` + hs + `,"transfer-rx":1024,"transfer-tx":2048,"name":"phone"},
 			{"if":"wg0","type":"peer","public-key":"old=","endpoint":"(none)","latest-handshake":0,"transfer-rx":0,"transfer-tx":0},
-			{"if":"wg0","type":"peer","public-key":"idle=","endpoint":"203.0.113.6:51820","latest-handshake":` + strconv.FormatInt(time.Now().Unix()-400, 10) + `,"transfer-rx":0,"transfer-tx":0}]}`,
+			{"if":"wg0","type":"peer","public-key":"idle=","endpoint":"203.0.113.6:51820","latest-handshake":` + strconv.FormatInt(fixed.Unix()-400, 10) + `,"transfer-rx":0,"transfer-tx":0}]}`,
 	}
 }
 
 func TestOpnsensePoll(t *testing.T) {
-	drv := New()
+	drv := testDriver()
 	if err := drv.ValidateConfig(driver.TargetConfig{ID: "x", Endpoint: "https://fw", ResolvedSecrets: map[string]string{"api_key": "k"}}); err == nil {
 		t.Fatal("expected an error without api_secret")
 	}
@@ -163,9 +174,9 @@ func TestOpnsensePoll(t *testing.T) {
 	}
 	// The reclaimed (state 2) and the deleted (expired) Kea leases are left out.
 	dh := snap.DHCP
-	if len(dh) != 4 || dh[0].Hostname != "nas" || dh[0].ExpiresAt == nil || dh[0].ExpiresAt.Unix() != 1895000000 || dh[0].Pool != "lan" ||
-		dh[1].ExpiresAt == nil || dh[1].ExpiresAt.Unix() != 1895000001 || dh[2].Family != model.IPv6 ||
-		!dh[3].Static || dh[3].MAC != "de:ad:be:ef:00:03" || dh[0].Static {
+	if len(dh) != 5 || dh[3].MAC != "" || dh[3].IP != "2001:db8::61" || dh[0].Hostname != "nas" || dh[0].ExpiresAt == nil || dh[0].ExpiresAt.Unix() != fixed.Unix()+86400 || dh[0].Pool != "lan" ||
+		dh[1].ExpiresAt == nil || dh[1].ExpiresAt.Unix() != fixed.Unix()+86400 || dh[2].Family != model.IPv6 ||
+		!dh[4].Static || dh[4].MAC != "de:ad:be:ef:00:03" || dh[0].Static {
 		t.Fatalf("dhcp = %+v", dh)
 	}
 	if fw := snap.Firewalls; len(fw) != 1 || *fw[0].StatesUsed != 1234 || *fw[0].StatesMax != 812000 {
@@ -194,7 +205,7 @@ func TestOpnsenseCamelCaseFallback(t *testing.T) {
 		}
 		inner.ServeHTTP(w, req)
 	})
-	drv := New()
+	drv := testDriver()
 	for range 2 {
 		snap, err := drv.Poll(context.Background(), target(srv.URL))
 		if err != nil {
@@ -217,7 +228,7 @@ func TestOpnsenseSectionsUnavailableOrAbsent(t *testing.T) {
 	delete(r, "/api/dnsmasq/leases/search")
 	delete(r, "/api/dhcpv4/leases/search_lease")
 	delete(r, "/api/wireguard/service/show")
-	snap, err := New().Poll(context.Background(), target(fixtureServer(t, r).URL))
+	snap, err := testDriver().Poll(context.Background(), target(fixtureServer(t, r).URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +241,7 @@ func TestOpnsenseSectionsUnavailableOrAbsent(t *testing.T) {
 	for _, p := range []string{"/api/kea/leases4/search", "/api/dnsmasq/leases/search", "/api/diagnostics/interface/search_ndp", "/api/wireguard/service/show"} {
 		r[p] = "403"
 	}
-	snap, err = New().Poll(context.Background(), target(fixtureServer(t, r).URL))
+	snap, err = testDriver().Poll(context.Background(), target(fixtureServer(t, r).URL))
 	if err != nil || len(snap.Unavailable) != 0 || len(snap.Neighbors) != 2 || len(snap.DHCP) != 1 {
 		t.Fatalf("refused sections: err=%v unavailable=%v neighbors=%d dhcp=%d", err, snap.Unavailable, len(snap.Neighbors), len(snap.DHCP))
 	}
@@ -240,7 +251,7 @@ func TestOpnsenseSectionsUnavailableOrAbsent(t *testing.T) {
 	for _, p := range []string{"/api/dnsmasq/leases/search", "/api/routes/gateway/status", "/api/diagnostics/interface/search_ndp", "/api/diagnostics/firewall/pf_states", "/api/wireguard/service/show"} {
 		r[p] = "500"
 	}
-	snap, err = New().Poll(context.Background(), target(fixtureServer(t, r).URL))
+	snap, err = testDriver().Poll(context.Background(), target(fixtureServer(t, r).URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,22 +265,29 @@ func TestOpnsenseSectionsUnavailableOrAbsent(t *testing.T) {
 		t.Error("a transient WireGuard failure dropped the VPN capability")
 	}
 
+	// pf_states answers 200 with result "failed" when configd gave no answer.
+	r = baseRoutes()
+	r["/api/diagnostics/firewall/pf_states"] = `{"result":"failed"}`
+	if snap, err = testDriver().Poll(context.Background(), target(fixtureServer(t, r).URL)); err != nil || len(snap.Firewalls) != 0 || !slices.Contains(snap.Unavailable, driver.SectionFirewalls) {
+		t.Fatalf("pf failed: err=%v firewalls=%v unavailable=%v", err, snap.Firewalls, snap.Unavailable)
+	}
+
 	// Status "failed" (configd gave no answer) keeps the last gateways.
 	r = baseRoutes()
 	r["/api/routes/gateway/status"] = `{"items":[],"status":"failed"}`
-	if snap, err = New().Poll(context.Background(), target(fixtureServer(t, r).URL)); err != nil || !slices.Equal(snap.Unavailable, []driver.Section{driver.SectionGateways}) {
+	if snap, err = testDriver().Poll(context.Background(), target(fixtureServer(t, r).URL)); err != nil || !slices.Equal(snap.Unavailable, []driver.Section{driver.SectionGateways}) {
 		t.Fatalf("gateways failed: err=%v unavailable=%v", err, snap.Unavailable)
 	}
 
 	// The required calls fail the poll, with the reason.
 	r = baseRoutes()
 	r["/api/interfaces/overview/interfaces_info/1"] = "403"
-	if _, err := New().Poll(context.Background(), target(fixtureServer(t, r).URL)); err == nil || !strings.Contains(err.Error(), "403") {
+	if _, err := testDriver().Poll(context.Background(), target(fixtureServer(t, r).URL)); err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("err = %v, want a 403", err)
 	}
 	cfg := target(fixtureServer(t, baseRoutes()).URL)
 	cfg.ResolvedSecrets["api_secret"] = "wrong"
-	if _, err := New().Poll(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "Authentication Failed") {
+	if _, err := testDriver().Poll(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "Authentication Failed") {
 		t.Fatalf("err = %v, want the auth failure", err)
 	}
 }

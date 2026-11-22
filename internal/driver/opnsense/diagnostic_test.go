@@ -25,6 +25,7 @@ type pingServer struct {
 	received func(sent int) int
 	setReply string
 	running  bool
+	removeOK bool
 	exits    bool // the ping exits at once, as when its name does not resolve
 }
 
@@ -56,8 +57,10 @@ func (p *pingServer) handler(w http.ResponseWriter, r *http.Request) {
 			row["loss"], row["last_error"] = "100.00 %", "ping: sendto: No route to host"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"rows": append(rows, row)})
-	case path == "remove/job1":
+	case path == "remove/job1" && p.removeOK:
 		_, _ = w.Write([]byte(`{"status":"ok","stopped_processes":0}`))
+	case path == "remove/job1":
+		_, _ = w.Write([]byte(`{"status":"failed"}`))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -78,7 +81,7 @@ func runPing(t *testing.T, p *pingServer, host, count string) (*model.Diagnostic
 }
 
 func TestOpnsensePing(t *testing.T) {
-	p := &pingServer{setReply: `{"result":"ok","uuid":"job1"}`, received: func(s int) int { return s }}
+	p := &pingServer{removeOK: true, setReply: `{"result":"ok","uuid":"job1"}`, received: func(s int) int { return s }}
 	res, err := runPing(t, p, "2001:db8::1", "2")
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +99,7 @@ func TestOpnsensePing(t *testing.T) {
 	}
 
 	// No replies: the job's own error explains it; the probe past count is not counted.
-	p = &pingServer{setReply: `{"result":"ok","uuid":"job1"}`, received: func(int) int { return 0 }}
+	p = &pingServer{removeOK: true, setReply: `{"result":"ok","uuid":"job1"}`, received: func(int) int { return 0 }}
 	res, err = runPing(t, p, "192.0.2.99", "1")
 	st, _ = res.Structured.(driver.PingStats)
 	if err != nil || res.OK || res.Error != "ping: sendto: No route to host" || st.Transmitted != 1 || st.LossPct != 100 || st.RTTAvgMs != nil {
@@ -104,15 +107,22 @@ func TestOpnsensePing(t *testing.T) {
 	}
 
 	// The last reply arrives a poll late: wait for it rather than count a loss.
-	p = &pingServer{setReply: `{"result":"ok","uuid":"job1"}`, received: func(s int) int { return min(s-1, 3) }}
+	p = &pingServer{removeOK: true, setReply: `{"result":"ok","uuid":"job1"}`, received: func(s int) int { return min(s-1, 3) }}
 	res, err = runPing(t, p, "192.0.2.1", "3")
 	st, _ = res.Structured.(driver.PingStats)
 	if err != nil || !res.OK || st.Transmitted != 3 || st.Received != 3 || st.LossPct != 0 {
 		t.Fatalf("late reply: result = %+v, err = %v", res, err)
 	}
 
+	// A failed removal is reported after one retry, naming the job.
+	p = &pingServer{setReply: `{"result":"ok","uuid":"job1"}`, received: func(s int) int { return s }}
+	res, err = runPing(t, p, "192.0.2.1", "1")
+	if err != nil || !strings.Contains(res.Error, "job1 may still be running") || strings.Count(strings.Join(p.calls, ","), "remove/job1") != 2 {
+		t.Fatalf("failed removal: result = %+v, err = %v, calls = %v", res, err, p.calls)
+	}
+
 	// The ping exits before sending (unresolvable name): failed, with no statistics.
-	p = &pingServer{setReply: `{"result":"ok","uuid":"job1"}`, received: func(int) int { return 0 }, exits: true}
+	p = &pingServer{removeOK: true, setReply: `{"result":"ok","uuid":"job1"}`, received: func(int) int { return 0 }, exits: true}
 	res, err = runPing(t, p, "nowhere.invalid", "3")
 	if err != nil || res.OK || res.Structured != nil || !strings.HasPrefix(res.Summary, "ping nowhere.invalid failed") {
 		t.Fatalf("exited job: result = %+v, err = %v", res, err)
@@ -122,12 +132,12 @@ func TestOpnsensePing(t *testing.T) {
 func TestOpnsensePingRefusals(t *testing.T) {
 	// Guards run before any call: OPNsense must never see an option-like target.
 	for _, tc := range []struct{ target, count string }{{"-f", ""}, {"192.0.2.1 -c 5", ""}, {"192.0.2.1", "11"}} {
-		p := &pingServer{received: func(int) int { return 0 }}
+		p := &pingServer{removeOK: true, received: func(int) int { return 0 }}
 		if _, err := runPing(t, p, tc.target, tc.count); !errors.Is(err, driver.ErrDiagnosticRequest) || len(p.calls) != 0 {
 			t.Errorf("%q/%q: err = %v, calls = %v", tc.target, tc.count, err, p.calls)
 		}
 	}
-	p := &pingServer{setReply: `{"result":"failed","validations":{"ping.settings.hostname":"bad"}}`, received: func(int) int { return 0 }}
+	p := &pingServer{removeOK: true, setReply: `{"result":"failed","validations":{"ping.settings.hostname":"bad"}}`, received: func(int) int { return 0 }}
 	if _, err := runPing(t, p, "example.com", ""); !errors.Is(err, driver.ErrDiagnosticRequest) || strings.Join(p.calls, ",") != "set" {
 		t.Fatalf("validation failure: err = %v, calls = %v", err, p.calls)
 	}
