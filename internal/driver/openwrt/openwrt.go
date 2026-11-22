@@ -139,6 +139,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 		err = ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out)
 		verified = err == nil
+		if errors.Is(err, errAccessDenied) {
+			sess.sid = "" // denied right after a fresh login, as above
+		}
 		return err
 	}
 

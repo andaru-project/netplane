@@ -249,6 +249,9 @@ func TestOpenWrtSessionLossAndReloginFailure(t *testing.T) {
 	if _, err := drv.Poll(context.Background(), cfg); err == nil {
 		t.Fatal("a session lost right after login must fail the poll")
 	}
+	if sid := drv.sessions["ow2"].sid; sid != "" {
+		t.Fatalf("a dead sid must be dropped, kept %q", sid)
+	}
 	mu.Lock()
 	killAfterLogin = false
 	mu.Unlock()
