@@ -253,3 +253,20 @@ type ConfigDriver interface {
 	ConfirmApply(ctx context.Context, cfg TargetConfig, sessionID string) error
 	RollbackApply(ctx context.Context, cfg TargetConfig, sessionID string) error
 }
+
+// CollectMACs normalizes a device's interface MACs in order, dropping invalid, all-zero and
+// repeated ones. primary is the first one kept, or "" when none is.
+func CollectMACs(raw []string) (macs []string, primary string) {
+	macs = []string{}
+	for _, r := range raw {
+		m, err := model.NormalizeMAC(r)
+		if err != nil || m == "00:00:00:00:00:00" || slices.Contains(macs, m) {
+			continue
+		}
+		macs = append(macs, m)
+	}
+	if len(macs) > 0 {
+		primary = macs[0]
+	}
+	return macs, primary
+}

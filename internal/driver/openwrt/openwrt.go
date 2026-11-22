@@ -179,22 +179,13 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	now := time.Now().UTC()
 	devNames := slices.SortedFunc(maps.Keys(devStatus), comparePortNames)
 
-	primaryMAC := ""
-	macs := []string{}
-	seenMAC := map[string]bool{}
+	var rawMACs []string
 	for _, k := range devNames {
-		nd := devStatus[k]
-		if k == "lo" || nd.MacAddr == "" || nd.MacAddr == "00:00:00:00:00:00" {
-			continue
-		}
-		if m, err := model.NormalizeMAC(nd.MacAddr); err == nil && !seenMAC[m] {
-			seenMAC[m] = true
-			if primaryMAC == "" {
-				primaryMAC = m
-			}
-			macs = append(macs, m)
+		if k != "lo" {
+			rawMACs = append(rawMACs, devStatus[k].MacAddr)
 		}
 	}
+	macs, primaryMAC := driver.CollectMACs(rawMACs)
 
 	// Keyed by target so added interfaces never change identity; MACs stay join metadata.
 	devID := "openwrt:" + cfg.ID

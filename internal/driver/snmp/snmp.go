@@ -302,9 +302,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	idxs := slices.Sorted(maps.Keys(ifaces))
 
-	primaryMAC := ""
-	macs := []string{}
-	seenMAC := map[string]bool{}
+	var rawMACs []string
 	ifIdxToName := map[int]string{}
 
 	for _, idx := range idxs {
@@ -317,14 +315,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			ifName = fmt.Sprintf("if%d", idx)
 		}
 		ifIdxToName[idx] = ifName
-		if a.mac != "" && a.mac != "00:00:00:00:00:00" && !seenMAC[a.mac] {
-			seenMAC[a.mac] = true
-			if primaryMAC == "" {
-				primaryMAC = a.mac
-			}
-			macs = append(macs, a.mac)
-		}
+		rawMACs = append(rawMACs, a.mac)
 	}
+	macs, primaryMAC := driver.CollectMACs(rawMACs)
 
 	now := time.Now().UTC()
 	devID := "snmp:" + cfg.ID

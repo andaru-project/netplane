@@ -154,21 +154,17 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	now := time.Now().UTC()
-	macs := []string{}
-	seenMAC := map[string]bool{}
+	var rawMACs []string
 	mgmtIP := ""
 	for _, iface := range ifResp.Data {
-		if m, err := model.NormalizeMAC(iface.MAC); err == nil && !seenMAC[m] {
-			seenMAC[m] = true
-			macs = append(macs, m)
-		}
+		rawMACs = append(rawMACs, iface.MAC)
 		if mgmtIP == "" && strings.EqualFold(iface.Name, "lan") && iface.IPAddr != "" {
 			mgmtIP = iface.IPAddr
 		}
 	}
 
 	// Lowest MAC keeps PrimaryMAC independent of interface response order.
-	primaryMAC := ""
+	macs, primaryMAC := driver.CollectMACs(rawMACs)
 	if len(macs) > 0 {
 		primaryMAC = slices.Min(macs)
 	}
