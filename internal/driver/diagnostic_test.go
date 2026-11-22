@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/model"
 )
 
 func TestDiagnosticHost(t *testing.T) {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/driver"
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/driver"
+	"github.com/andaru-project/netplane/internal/model"
 )
 
 // RunDiagnostic runs ping through POST /api/v2/diagnostics/ping (REST API package v2.7.0 or

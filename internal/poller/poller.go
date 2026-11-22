@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/driver"
-	"github.com/andrebrait/netplane/internal/events"
-	"github.com/andrebrait/netplane/internal/store"
-	"github.com/andrebrait/netplane/internal/topology"
+	"github.com/andaru-project/netplane/internal/driver"
+	"github.com/andaru-project/netplane/internal/events"
+	"github.com/andaru-project/netplane/internal/store"
+	"github.com/andaru-project/netplane/internal/topology"
 )
 
 // TargetStatus captures runtime health for one polled target.

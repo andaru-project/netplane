@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/driver"
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/driver"
+	"github.com/andaru-project/netplane/internal/model"
 )
 
 // Driver polls an OpenWrt router, AP, or DSA switch via uhttpd-mod-ubus HTTP JSON-RPC (/ubus).

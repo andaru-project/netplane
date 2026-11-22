@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/model"
-	"github.com/andrebrait/netplane/internal/store"
+	"github.com/andaru-project/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/store"
 )
 
 // NodeKind distinguishes infrastructure devices from end-user clients.

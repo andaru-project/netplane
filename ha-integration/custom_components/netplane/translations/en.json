@@ -2,27 +2,27 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to netplane",
-        "description": "Enter the URL of your netplane server (standalone or Home Assistant Add-on).",
+        "title": "Connect to Andaru Netplane",
+        "description": "Enter the URL of your Andaru Netplane server (standalone or Home Assistant Add-on).",
         "data": {
           "url": "Server URL",
           "api_token": "API Bearer Token (optional)"
         }
       },
       "reauth_confirm": {
-        "title": "Reauthenticate with netplane",
-        "description": "The netplane server at {url} rejected the stored API token. Enter the current token.",
+        "title": "Reauthenticate with Andaru Netplane",
+        "description": "The Andaru Netplane server at {url} rejected the stored API token. Enter the current token.",
         "data": {
           "api_token": "API Bearer Token"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to netplane",
+      "cannot_connect": "Failed to connect to Andaru Netplane",
       "invalid_auth": "Invalid API token"
     },
     "abort": {
-      "already_configured": "This netplane server is already configured",
+      "already_configured": "This Andaru Netplane server is already configured",
       "reauth_successful": "Reauthentication was successful"
     }
   }

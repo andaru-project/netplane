@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/driver"
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/driver"
+	"github.com/andaru-project/netplane/internal/model"
 )
 
 // Driver polls a UniFi Network controller (UniFi OS Server or standalone) over its local REST API.

@@ -201,7 +201,7 @@ export function App() {
       <AppShell.Header px="md" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Group gap="sm">
           <Burger opened={navOpened} onClick={toggleNav} hiddenFrom="sm" size="sm" aria-label="Toggle navigation" />
-          <Title order={4}>netplane</Title>
+          <Title order={4}>Andaru Netplane</Title>
           <Badge variant="light" color="blue">Control · Info · Diagnostics</Badge>
         </Group>
         <Group gap="xs">
