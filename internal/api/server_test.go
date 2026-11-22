@@ -110,6 +110,8 @@ func newTestServer(t *testing.T, token string) (*Server, *events.Bus) {
 		Targets:           []driver.TargetConfig{target},
 		APIToken:          token,
 		TrustIngressProxy: true,
+		AllowedHosts:      []string{"example.com"}, // httptest.NewRequest's default Host
+		TrustedOrigins:    []string{"https://netplane.example"},
 		WebFS:             webFS,
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -439,5 +441,82 @@ func TestDiagnosticBodyReadTimeout(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestBrowserGuards(t *testing.T) {
+	open, _ := newTestServer(t, "")
+	for host, want := range map[string]int{
+		"192.0.2.10:8099": http.StatusOK, "[2001:db8::1]:8099": http.StatusOK, "netplane": http.StatusOK,
+		"netplane.lan": http.StatusOK, "nas.home.arpa": http.StatusOK, "Example.COM.": http.StatusOK,
+		"NAS.LAN": http.StatusOK, "[2001:db8::1]": http.StatusOK, "netplane.localhost:8099": http.StatusOK,
+		"evil.example.net": http.StatusMisdirectedRequest, "": http.StatusMisdirectedRequest,
+	} {
+		req := httptest.NewRequest("GET", "/api/v1/devices", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		open.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("token-less Host %q: got %d, want %d", host, rec.Code, want)
+		}
+	}
+
+	// With a token, public names are fine (DNS rebinding cannot carry the token).
+	tok, _ := newTestServer(t, "secret-api-tok")
+	req := httptest.NewRequest("GET", "/api/v1/health", nil)
+	req.Host = "netplane.example.net"
+	rec := httptest.NewRecorder()
+	tok.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public Host with a token: %d", rec.Code)
+	}
+
+	// Cross-origin writes are refused, with or without a token.
+	type wcase struct{ host, origin, fetchSite string }
+	for c, refused := range map[wcase]bool{
+		{"192.0.2.10:8099", "http://evil.example", ""}:              true,
+		{"192.0.2.10:8099", "null", ""}:                             true,
+		{"192.0.2.10", "http://192.0.2.10:8080", ""}:                true, // another port
+		{"192.0.2.10:8099", "http://192.0.2.10:8099", "cross-site"}: true,
+		{"192.0.2.10:8099", "http://192.0.2.10:8099", ""}:           false,
+		{"192.0.2.10:8099", "", ""}:                                 false, // non-browser client
+		{"127.0.0.1:8099", "http://evil.example", "same-origin"}:    false,
+		{"127.0.0.1:8099", "https://netplane.example", "same-site"}: false, // trusted origin
+		{"127.0.0.1:8099", "https://netplane.example", ""}:          false, // trusted, older browser
+		{"127.0.0.1:8099", "https://other.example", ""}:             true,
+		{"192.0.2.10:80", "http://192.0.2.10", ""}:                  true, // exact Host compare without Sec-Fetch-Site
+		{"127.0.0.1:8099", "https://example.com", ""}:               true, // allowed_hosts is not an origin list
+	} {
+		for _, srv := range []http.Handler{open, tok} {
+			req := httptest.NewRequest("POST", "/api/v1/diagnostics", strings.NewReader(`{"kind":"fdb_lookup","target":"192.0.2.55"}`))
+			req.Host = c.host
+			req.Header.Set("Authorization", "Bearer secret-api-tok")
+			if c.origin != "" {
+				req.Header.Set("Origin", c.origin)
+			}
+			if c.fetchSite != "" {
+				req.Header.Set("Sec-Fetch-Site", c.fetchSite)
+			}
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+			if got := rec.Code == http.StatusForbidden; got != refused {
+				t.Errorf("POST %+v: got %d", c, rec.Code)
+			}
+		}
+	}
+
+	// The ingress exemption needs the trusted peer and a Supervisor ingress path.
+	for path, want := range map[string]int{"/api/hassio_ingress/abc": http.StatusOK, "": http.StatusMisdirectedRequest} {
+		req := httptest.NewRequest("GET", "/api/v1/devices", nil)
+		req.Host = "evil.example.net"
+		req.RemoteAddr = "172.30.32.2:40000"
+		if path != "" {
+			req.Header.Set("X-Ingress-Path", path)
+		}
+		rec := httptest.NewRecorder()
+		open.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("trusted peer with ingress path %q: got %d, want %d", path, rec.Code, want)
+		}
 	}
 }

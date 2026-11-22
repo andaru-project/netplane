@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,6 +26,8 @@ type ServerConfig struct {
 	Retention           string   `yaml:"retention"`
 	TrustIngressProxy   bool     `yaml:"trust_ingress_proxy"`
 	TrustedIngressCIDRs []string `yaml:"trusted_ingress_cidrs"`
+	AllowedHosts        []string `yaml:"allowed_hosts"`
+	TrustedOrigins      []string `yaml:"trusted_origins"`
 	APITokenSecret      string   `yaml:"api_token_secret"`
 	ResolvedAPIToken    string   `yaml:"-"`
 }
@@ -60,6 +64,31 @@ func LoadFile(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}
 	return Parse(raw, os.LookupEnv)
+}
+
+// hostNameRe matches a bare DNS host name: dot-separated labels of letters, digits, '-'
+// and '_', not starting or ending with '-'.
+var hostNameRe = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$`)
+
+// canonicalOrigin returns o as a browser serializes an Origin (lowercase scheme and host, no
+// default port), because trusted origins are compared to the Origin header byte for byte.
+func canonicalOrigin(o string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(o))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("want scheme://host[:port] with an http or https scheme")
+	}
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	return u.Scheme + "://" + host, nil
 }
 
 // TokenEnv is the environment variable read for the API token when the config names none.
@@ -124,6 +153,20 @@ func Parse(data []byte, lookupEnv func(string) (string, bool)) (*Config, error) 
 			return nil, fmt.Errorf("invalid server.retention %q", fc.Server.Retention)
 		}
 		retention = d
+	}
+	for i, h := range fc.Server.AllowedHosts {
+		n := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+		if !hostNameRe.MatchString(n) {
+			return nil, fmt.Errorf("server.allowed_hosts[%d] %q: want a bare ASCII host name (punycode for IDNs; no scheme, port, path or wildcard)", i, h)
+		}
+		fc.Server.AllowedHosts[i] = n
+	}
+	for i, o := range fc.Server.TrustedOrigins {
+		c, err := canonicalOrigin(o)
+		if err != nil {
+			return nil, fmt.Errorf("server.trusted_origins[%d] %q: %w", i, o, err)
+		}
+		fc.Server.TrustedOrigins[i] = c
 	}
 	if fc.Server.APITokenSecret != "" {
 		envName := stripEnvSyntax(fc.Server.APITokenSecret)

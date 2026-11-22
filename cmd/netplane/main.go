@@ -139,6 +139,8 @@ func runServe(args []string) error {
 		APIToken:            cfg.Server.ResolvedAPIToken,
 		TrustIngressProxy:   cfg.Server.TrustIngressProxy,
 		TrustedIngressCIDRs: cfg.Server.TrustedIngressCIDRs,
+		AllowedHosts:        cfg.Server.AllowedHosts,
+		TrustedOrigins:      cfg.Server.TrustedOrigins,
 		WebFS:               embeddedWebFS(),
 		Logger:              logger,
 	})

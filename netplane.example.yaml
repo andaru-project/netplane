@@ -9,6 +9,12 @@ server:
   # NETPLANE_API_TOKEN before starting; in the add-on, set the api_token option).
   # Remove this line only when the server listens on loopback (listen: "127.0.0.1:8099").
   api_token_secret: "${NETPLANE_API_TOKEN}"
+  # Without a token, only IP addresses, single-label names and private suffixes (.local,
+  # .lan, .home.arpa, .internal, .localhost) are accepted as Host; list other names here
+  # as bare host names (no scheme, port or wildcard).
+  # allowed_hosts: ["netplane.example.net"]
+  # Origins allowed to send writes when a reverse proxy rewrites Host:
+  # trusted_origins: ["https://netplane.example.net"]
 
 targets:
   - id: core-pfsense
