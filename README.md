@@ -49,7 +49,7 @@ The `opnsense` driver reads OPNsense 25.1 or later through its core REST API. Cr
   - `Diagnostics: ARP Table` and `Diagnostics: NDP Table`.
   - `System: Gateways` (also allows editing gateways).
   - One of these per DHCP server in use, each of which also allows editing that server: `Services: DHCP: Kea(v4)`, `Services: Dnsmasq DNS/DHCP: Settings`, or `Status: DHCP leases` for ISC dhcpd.
-  - `VPN: WireGuard: Status` (25.7 or later; on 25.1 only `VPN: WireGuard: Configuration` grants it).
+  - `VPN: WireGuard: Status` (25.7 or later; on 25.1 `VPN: WireGuard` grants it, together with WireGuard configuration).
   - `Diagnostics: Ping` for the ping diagnostic.
 - **Missing privileges and services:** a section whose privilege is missing, or whose service is not installed, stays empty. Any other failure keeps the section's last data.
 - **Ping:** it runs as an OPNsense ping job, which the driver removes afterwards. A user with `System: Deny config write` cannot create the job, and a DNS name is pinged over IPv4.

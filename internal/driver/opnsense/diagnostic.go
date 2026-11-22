@@ -30,8 +30,8 @@ type pingJob struct {
 }
 
 // RunDiagnostic runs ping through OPNsense's ping jobs: a job pings once a second until it is
-// removed, so the driver reads its counters until count probes went out and their replies
-// had a second to arrive, then removes it. Creating a job saves an in-memory model, which a
+// removed, so the driver reads its counters until count replies came back, or one probe past
+// count went out (giving the last counted probe its second), then removes it. Creating a job saves an in-memory model, which a
 // user with user-config-readonly is refused. A DNS name is pinged over IPv4.
 func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req model.DiagnosticRequest) (*model.DiagnosticResult, error) {
 	if err := d.ValidateConfig(cfg); err != nil {
@@ -111,10 +111,13 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 		}
 	}
 
-	// The job keeps pinging, so count only the probes asked for. The job's loss text differs
-	// between IPv4 ("0.00 %") and IPv6 ("100.0%"), so loss is computed here.
-	sent := min(int(job.Send.uint()), n)
-	stats := driver.PingStats{Transmitted: sent, Received: min(int(job.Received.uint()), sent)}
+	// The job's loss text differs between IPv4 ("0.00 %") and IPv6 ("100.0%"), so loss is
+	// computed here.
+	sent, got := int(job.Send.uint()), int(job.Received.uint())
+	if job.Status == "running" && sent > n && got < sent {
+		sent-- // the newest probe went out past count and its reply may still be on its way
+	}
+	stats := driver.PingStats{Transmitted: sent, Received: min(got, sent)}
 	if sent > 0 {
 		stats.LossPct = 100 * float64(sent-stats.Received) / float64(sent)
 	}

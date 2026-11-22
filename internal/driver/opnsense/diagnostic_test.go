@@ -95,7 +95,7 @@ func TestOpnsensePing(t *testing.T) {
 		t.Fatalf("calls = %s", got)
 	}
 
-	// No replies: the job's own error explains it; one probe asked, one counted.
+	// No replies: the job's own error explains it; the probe past count is not counted.
 	p = &pingServer{setReply: `{"result":"ok","uuid":"job1"}`, received: func(int) int { return 0 }}
 	res, err = runPing(t, p, "192.0.2.99", "1")
 	st, _ = res.Structured.(driver.PingStats)

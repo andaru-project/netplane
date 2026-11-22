@@ -138,8 +138,8 @@ func (a *api) do(ctx context.Context, method, path string, body, out any) error 
 // when the API refuses or lacks it.
 func (a *api) get(ctx context.Context, out any, paths ...string) error {
 	key := a.target + "|" + paths[0]
-	if v, ok := a.spelling.Load(key); ok {
-		paths = append([]string{v.(string)}, paths...)
+	if v, ok := a.spelling.Load(key); ok && v != paths[0] {
+		paths = append([]string{v.(string)}, slices.DeleteFunc(slices.Clone(paths), func(p string) bool { return p == v })...)
 	}
 	var err error
 	var p string
@@ -244,7 +244,7 @@ type leaseRow struct {
 	IfName   string `json:"if_name"`
 	If       string `json:"if"`
 	Type     string `json:"type"`  // ISC: dynamic or static
-	State    numStr `json:"state"` // Kea: 0 is a current lease; declined and reclaimed ones differ
+	State    numStr `json:"state"` // Kea: non-zero is declined or reclaimed
 }
 
 // Poll reads identity, interfaces, gateways, ARP/NDP, DHCP leases, pf states and WireGuard.
@@ -300,9 +300,14 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Delay   numStr `json:"delay"`
 			Monitor string `json:"monitor"`
 		} `json:"items"`
+		Status string `json:"status"`
 	}
-	// An empty gateway list also answers status "failed", so only the HTTP error counts.
-	optional(driver.SectionGateways, a.get(ctx, &gwResp, "/api/routes/gateway/status"))
+	// "failed" means configd gave no answer (a box without gateways also reads so, rarely).
+	if err := a.get(ctx, &gwResp, "/api/routes/gateway/status"); err != nil {
+		optional(driver.SectionGateways, err)
+	} else if gwResp.Status == "failed" {
+		snap.MarkUnavailable(driver.SectionGateways)
+	}
 
 	type neighborRow struct {
 		IP        string `json:"ip"`
@@ -453,16 +458,15 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			continue // unassigned: a port, not a logical interface
 		}
 		seg := model.Segment{
-			DeviceID:     devID,
-			ID:           r.Identifier,
-			Name:         r.Description,
-			Kind:         segmentKind(r.Device),
-			ParentLink:   r.Device,
-			MTU:          mtu,
-			AdminUp:      adminUp,
-			OperState:    oper,
-			Addresses:    []model.IPAddress{},
-			IsManagement: r.Identifier == "lan",
+			DeviceID:   devID,
+			ID:         r.Identifier,
+			Name:       r.Description,
+			Kind:       segmentKind(r.Device),
+			ParentLink: r.Device,
+			MTU:        mtu,
+			AdminUp:    adminUp,
+			OperState:  oper,
+			Addresses:  []model.IPAddress{},
 		}
 		if r.VLAN != nil {
 			seg.Kind, seg.ParentLink = "vlan", r.VLAN.Parent
@@ -524,7 +528,10 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	for _, l := range leases {
 		mac, err := model.NormalizeMAC(cmp.Or(l.HWAddr, l.MAC))
-		if st, ok := l.State.int64(); err != nil || l.Address == "" || (ok && st != 0) {
+		st, hasState := l.State.int64()
+		exp, hasExpire := l.Expire.int64()
+		// Kea also lists deleted (valid lifetime 0) and unreclaimed expired leases at state 0.
+		if err != nil || l.Address == "" || (hasState && st != 0) || (hasExpire && exp > 0 && exp < now.Unix()) {
 			continue
 		}
 		lease := model.DhcpLease{
@@ -536,8 +543,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Pool:     cmp.Or(l.IfName, l.If),
 			Static:   l.Type == "static",
 		}
-		if v, ok := l.Expire.int64(); ok && v > 0 {
-			t := time.Unix(v, 0).UTC()
+		if hasExpire && exp > 0 {
+			t := time.Unix(exp, 0).UTC()
 			lease.ExpiresAt = &t
 		}
 		snap.DHCP = append(snap.DHCP, lease)
@@ -595,12 +602,17 @@ func familyOf(s string) model.IPFamily {
 	return model.IPv4
 }
 
-// segmentKind maps an interface's device name to a segment kind; VLANs are set from vlan.
+// segmentKinds maps device name prefixes to segment kinds, longest prefix first; VLANs are
+// set from the vlan field.
+var segmentKinds = []struct{ prefix, kind string }{
+	{"pppoe", "pppoe"}, {"lagg", "lag"}, {"bridge", "bridge"}, {"wg", "wireguard"}, {"lo", "loopback"},
+	{"ppp", "other"}, {"pptp", "other"}, {"l2tp", "other"}, {"ovpn", "other"}, {"gif", "other"}, {"gre", "other"},
+}
+
 func segmentKind(device string) string {
-	kinds := map[string]string{"lagg": "lag", "bridge": "bridge", "wg": "wireguard", "pppoe": "pppoe", "lo": "loopback", "ovpn": "other", "gif": "other", "gre": "other"}
-	for prefix, kind := range kinds {
-		if strings.HasPrefix(device, prefix) {
-			return kind
+	for _, k := range segmentKinds {
+		if strings.HasPrefix(device, k.prefix) {
+			return k.kind
 		}
 	}
 	return "ethernet"

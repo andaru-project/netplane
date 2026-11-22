@@ -73,10 +73,11 @@ func baseRoutes() map[string]string {
 			{"name":"LTE","address":"~","status":"delay","loss":"0.0 %","delay":"180.5 ms","monitor":"2001:db8:9::1"}],"status":"ok"}`,
 		"/api/diagnostics/interface/search_arp": `{"rows":[{"mac":"DE:AD:BE:EF:00:01","ip":"192.0.2.50","intf":"igc1","expired":false,"permanent":false},{"mac":"00:0d:b9:00:00:02","ip":"192.0.2.1","intf":"igc1","permanent":true}]}`,
 		"/api/diagnostics/interface/search_ndp": `{"rows":[{"mac":"de:ad:be:ef:00:01","ip":"fe80::50%igc1","intf":"igc1"}]}`,
-		"/api/kea/leases4/search": `{"rows":[{"address":"192.0.2.50","hwaddr":"de:ad:be:ef:00:01","hostname":"nas","expire":"1795000000","if_name":"lan","state":"0"},
-			{"address":"192.0.2.51","hwaddr":"de:ad:be:ef:00:09","hostname":"gone","expire":"1795000000","if_name":"lan","state":"2"}]}`,
-		"/api/dnsmasq/leases/search": `{"rows":[{"address":"192.0.2.60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":1795000001,"if_name":"lan"},
-			{"address":"2001:db8::60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":1795000001,"if_name":"lan"}]}`,
+		"/api/kea/leases4/search": `{"rows":[{"address":"192.0.2.50","hwaddr":"de:ad:be:ef:00:01","hostname":"nas","expire":"1895000000","if_name":"lan","state":"0"},
+			{"address":"192.0.2.51","hwaddr":"de:ad:be:ef:00:09","hostname":"gone","expire":"1895000000","if_name":"lan","state":"2"},
+			{"address":"192.0.2.52","hwaddr":"de:ad:be:ef:00:0a","hostname":"deleted","expire":"1000","if_name":"lan","state":"0"}]}`,
+		"/api/dnsmasq/leases/search": `{"rows":[{"address":"192.0.2.60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":1895000001,"if_name":"lan"},
+			{"address":"2001:db8::60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":1895000001,"if_name":"lan"}]}`,
 		"/api/dhcpv4/leases/search_lease":     `{"rows":[{"address":"192.0.2.70","mac":"de:ad:be:ef:00:03","hostname":"printer","type":"static","if":"lan"}]}`,
 		"/api/diagnostics/firewall/pf_states": `{"current":"1234","limit":"812000"}`,
 		"/api/wireguard/service/show": `{"rows":[
@@ -139,8 +140,8 @@ func TestOpnsensePoll(t *testing.T) {
 		if s.ID == "opt1" {
 			iot = s
 		}
-		if (s.ID == "opt2") != (s.Kind == "lag") || (s.ID == "lan") != s.IsManagement {
-			t.Errorf("segment %s: kind %s, management %v", s.ID, s.Kind, s.IsManagement)
+		if (s.ID == "opt2") != (s.Kind == "lag") {
+			t.Errorf("segment %s: kind %s", s.ID, s.Kind)
 		}
 		if s.ID == "lan" && (len(s.Addresses) != 2 || s.Addresses[1].Address != "fe80::1" || s.Addresses[1].PrefixLength != 64) {
 			t.Fatalf("lan addresses = %+v", s.Addresses)
@@ -160,10 +161,10 @@ func TestOpnsensePoll(t *testing.T) {
 		snap.Neighbors[1].State != "permanent" || snap.Neighbors[2].IP != "fe80::50" || snap.Neighbors[2].Family != model.IPv6 {
 		t.Fatalf("neighbors = %+v", snap.Neighbors)
 	}
-	// The reclaimed Kea lease (state 2) is left out.
+	// The reclaimed (state 2) and the deleted (expired) Kea leases are left out.
 	dh := snap.DHCP
-	if len(dh) != 4 || dh[0].Hostname != "nas" || dh[0].ExpiresAt == nil || dh[0].ExpiresAt.Unix() != 1795000000 || dh[0].Pool != "lan" ||
-		dh[1].ExpiresAt == nil || dh[1].ExpiresAt.Unix() != 1795000001 || dh[2].Family != model.IPv6 ||
+	if len(dh) != 4 || dh[0].Hostname != "nas" || dh[0].ExpiresAt == nil || dh[0].ExpiresAt.Unix() != 1895000000 || dh[0].Pool != "lan" ||
+		dh[1].ExpiresAt == nil || dh[1].ExpiresAt.Unix() != 1895000001 || dh[2].Family != model.IPv6 ||
 		!dh[3].Static || dh[3].MAC != "de:ad:be:ef:00:03" || dh[0].Static {
 		t.Fatalf("dhcp = %+v", dh)
 	}
@@ -253,11 +254,11 @@ func TestOpnsenseSectionsUnavailableOrAbsent(t *testing.T) {
 		t.Error("a transient WireGuard failure dropped the VPN capability")
 	}
 
-	// A box without gateways answers status "failed" with no items: empty, not stale.
+	// Status "failed" (configd gave no answer) keeps the last gateways.
 	r = baseRoutes()
 	r["/api/routes/gateway/status"] = `{"items":[],"status":"failed"}`
-	if snap, err = New().Poll(context.Background(), target(fixtureServer(t, r).URL)); err != nil || len(snap.Unavailable) != 0 {
-		t.Fatalf("no gateways: err=%v unavailable=%v", err, snap.Unavailable)
+	if snap, err = New().Poll(context.Background(), target(fixtureServer(t, r).URL)); err != nil || !slices.Equal(snap.Unavailable, []driver.Section{driver.SectionGateways}) {
+		t.Fatalf("gateways failed: err=%v unavailable=%v", err, snap.Unavailable)
 	}
 
 	// The required calls fail the poll, with the reason.
@@ -280,6 +281,11 @@ func TestParseHelpers(t *testing.T) {
 	for in, want := range map[string]uint64{"1 day, 00:00:01": 86401, "12 Tage, 03:04:05": 12*86400 + 11045, "03:04:05": 11045, "soon": 0} {
 		if got := parseUptime(in); got != want {
 			t.Errorf("parseUptime(%q) = %d, want %d", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{"pppoe0": "pppoe", "ppp0": "other", "igc0": "ethernet", "wg1": "wireguard"} {
+		if got := segmentKind(in); got != want {
+			t.Errorf("segmentKind(%q) = %s, want %s", in, got, want)
 		}
 	}
 	for in, want := range map[string]model.MediaType{
