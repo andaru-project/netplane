@@ -68,6 +68,9 @@ type Snapshot struct {
 	// MarkedOffline is set when the store rewrote this snapshot for an unreachable target;
 	// its sections are not fresh and are never carried over.
 	MarkedOffline bool `json:"marked_offline,omitempty"`
+	// PollInterval is the target's poll interval, set by the poller so the store can size the
+	// one-time carry-over window; zero means unknown.
+	PollInterval time.Duration `json:"-"`
 }
 
 // Section names a snapshot slice by its JSON field name.
@@ -95,13 +98,10 @@ func (s *Snapshot) MarkUnavailable(sec Section) {
 	}
 }
 
-// maxGap bounds how old the previous poll may be for its fresh data to be carried once: it
-// covers slow poll intervals, but not a snapshot left from before a long stop.
-const maxGap = time.Hour
-
-// CarryOver fills each unavailable section from prev. Data fresh in prev is carried once
-// (prev within maxGap), so a single failed call never looks like everything leaving, however
-// slow the poll interval. Data prev itself carried keeps its original freshness and expires
+// CarryOver fills each unavailable section from prev. Data fresh in prev is carried once, if
+// prev is at most three poll intervals (and at least maxAge) old, so a single failed call never
+// looks like everything leaving however slow the interval, but a snapshot left from before a
+// long stop is not revived. Data prev itself carried keeps its original freshness and expires
 // after maxAge, so a permanently failing call cannot freeze it.
 func (s *Snapshot) CarryOver(prev *Snapshot, maxAge time.Duration) {
 	if prev == nil || prev.MarkedOffline {
@@ -114,7 +114,7 @@ func (s *Snapshot) CarryOver(prev *Snapshot, maxAge time.Duration) {
 			if slices.Contains(prev.Unavailable, sec) {
 				continue // prev had nothing fresh to give either
 			}
-			freshAt, limit = prev.CollectedAt, max(maxAge, maxGap)
+			freshAt, limit = prev.CollectedAt, max(maxAge, 3*s.PollInterval)
 		}
 		// A negative age means the clock stepped back: treat the data as expired.
 		if age := s.CollectedAt.Sub(freshAt); age < 0 || age > limit {

@@ -191,12 +191,15 @@ func TestCarryOverFreshnessRules(t *testing.T) {
 		t.Fatal("+20m: chained carry outlived 15 minutes")
 	}
 
-	// Data fresh in the previous poll is carried once even with a slow interval, not after a long stop.
-	if s := carry(fresh, 40*time.Minute); len(s.Clients) != 1 {
+	// Data fresh in the previous poll is carried once within three poll intervals: a slow
+	// interval keeps it, a restart after a long stop does not revive it.
+	slow := &Snapshot{CollectedAt: t0.Add(40 * time.Minute), Unavailable: []Section{SectionClients}, PollInterval: 20 * time.Minute}
+	if slow.CarryOver(fresh, 15*time.Minute); len(slow.Clients) != 1 {
 		t.Fatal("slow interval: one failed poll dropped fresh data")
 	}
-	if s := carry(fresh, 2*time.Hour); len(s.Clients) != 0 {
-		t.Fatal("carried data from a snapshot two hours old")
+	restart := &Snapshot{CollectedAt: t0.Add(50 * time.Minute), Unavailable: []Section{SectionClients}, PollInterval: time.Minute}
+	if restart.CarryOver(fresh, 15*time.Minute); len(restart.Clients) != 0 {
+		t.Fatal("carried 50-minute-old data on a 1-minute interval")
 	}
 
 	// prev marked the section unavailable and carried nothing: its leftover data is not fresh.

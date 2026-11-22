@@ -303,7 +303,7 @@ func TestSNMPPoEAmbiguousAcrossGroupsNotAttached(t *testing.T) {
 func TestSNMPFailedWalksMarkSections(t *testing.T) {
 	for oid, want := range map[string]driver.Section{
 		oidDot1qFdb: driver.SectionFDB, oidBasePortIf: driver.SectionFDB, oidVlanFdbID: driver.SectionFDB,
-		oidLldpRem: driver.SectionLLDP, oidLldpLoc: driver.SectionLLDP,
+		oidLldpRem: driver.SectionLLDP, oidLldpLoc: driver.SectionLLDP, oidIfXTable: driver.SectionLLDP,
 	} {
 		fw := &fakeWalker{trees: map[string][]gosnmp.SnmpPDU{
 			".1.3.6.1.2.1.1": {{Name: oidSysName, Type: gosnmp.OctetString, Value: []byte("sw")}},

@@ -133,7 +133,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	if err != nil {
 		return nil, fmt.Errorf("snmp walk ifTable: %w", err)
 	}
-	ifXPDUs, _ := w.Walk(ctx, oidIfXTable)
+	ifXPDUs, ifXErr := w.Walk(ctx, oidIfXTable)
 	basePortPDUs, basePortErr := w.Walk(ctx, oidBasePortIf)
 	fdbPDUs, fdbErr := w.Walk(ctx, oidDot1qFdb)
 	vlanFdbPDUs, vlanFdbErr := w.Walk(ctx, oidVlanFdbID)
@@ -368,10 +368,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 	// A failed walk (as opposed to a table the device lacks) keeps the last FDB or LLDP data,
 	// including the walks their port and VLAN mapping depends on.
-	if fdbErr != nil || basePortErr != nil || vlanFdbErr != nil {
+	// ifXTable names the ports both map onto; LLDP falls back to bridge ports for local ports.
+	if fdbErr != nil || basePortErr != nil || vlanFdbErr != nil || ifXErr != nil {
 		snap.MarkUnavailable(driver.SectionFDB)
 	}
-	if lldpErr != nil || lldpLocErr != nil {
+	if lldpErr != nil || lldpLocErr != nil || basePortErr != nil || ifXErr != nil {
 		snap.MarkUnavailable(driver.SectionLLDP)
 	}
 

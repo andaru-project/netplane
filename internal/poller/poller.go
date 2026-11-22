@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -121,6 +122,7 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 		snap.CollectedAt = now
 	}
 
+	snap.PollInterval = s.pollInterval(cfg)
 	prev, err := s.store.SaveSnapshot(ctx, snap)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -131,8 +133,16 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 	}
 
 	s.recordSuccess(cfg, now)
-	if len(snap.Unavailable) > 0 {
-		s.logger.Warn("target polled with sections unavailable; keeping their last data", "target_id", cfg.ID, "sections", snap.Unavailable)
+	// Warn once when a section stops refreshing, not on every poll of a permanent failure.
+	var newly []driver.Section
+	for _, sec := range snap.Unavailable {
+		if prev == nil || !slices.Contains(prev.Unavailable, sec) {
+			newly = append(newly, sec)
+		}
+	}
+	if len(newly) > 0 {
+		s.logger.Warn("target sections stopped refreshing; carrying their last data for a while",
+			"target_id", cfg.ID, "sections", newly, "carried", snap.Stale)
 	}
 
 	if s.bus != nil {

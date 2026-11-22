@@ -166,7 +166,7 @@ type Snapshot struct {
 type Section string
 
 // CarryOver (called by the store before saving) fills unavailable sections from the previous
-// snapshot: data fresh there is carried once (if that poll is under an hour old); data it had
+// snapshot: data fresh there is carried once (if that poll is at most three poll intervals, and at least 15 minutes, old); data it had
 // itself carried keeps its original freshness and expires after 15 minutes.
 func (s *Snapshot) CarryOver(prev *Snapshot, maxAge time.Duration)
 
