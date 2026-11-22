@@ -35,7 +35,7 @@ type Options struct {
 	APIToken            string
 	TrustIngressProxy   bool
 	TrustedIngressCIDRs []string
-	AllowedHosts        []string // extra public host names accepted without an API token
+	AllowedHosts        []string // extra public host names accepted as Host without an API token
 	WebFS               fs.FS    // optional embedded SPA root containing index.html
 	Logger              *slog.Logger
 }
@@ -74,6 +74,11 @@ func New(opts Options) *Server {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	hosts := make([]string, 0, len(opts.AllowedHosts))
+	for _, h := range opts.AllowedHosts {
+		hosts = append(hosts, strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), ".")))
+	}
+	opts.AllowedHosts = hosts
 
 	s := &Server{
 		opts:           opts,

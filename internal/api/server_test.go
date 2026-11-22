@@ -479,7 +479,8 @@ func TestBrowserGuards(t *testing.T) {
 		{"192.0.2.10:8099", "http://192.0.2.10:8099", ""}:             false,
 		{"192.0.2.10:80", "http://192.0.2.10", ""}:                    false, // default port filled in
 		{"192.0.2.10:8099", "", ""}:                                   false,
-		{"127.0.0.1:8099", "https://example.com", ""}:                 false, // allowed host behind a proxy
+		{"192.0.2.10", "http://192.0.2.10:8080", ""}:                  true, // another port on the same host
+		{"127.0.0.1:8099", "https://example.com", ""}:                 true, // allowed_hosts is not an origin list
 		{"127.0.0.1:8099", "https://netplane.example", "same-origin"}: false,
 	} {
 		for _, srv := range []http.Handler{open, tok} {

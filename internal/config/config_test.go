@@ -155,7 +155,7 @@ func TestAllowedHostsNormalizedAndValidated(t *testing.T) {
 	if err != nil || cfg.Server.AllowedHosts[0] != "netplane.example.net" {
 		t.Fatalf("allowed_hosts = %v, %v", cfg, err)
 	}
-	for _, bad := range []string{"netplane.example.net:8099", "https://netplane.example.net", "*.example.net", ""} {
+	for _, bad := range []string{"netplane.example.net:8099", "https://netplane.example.net", "*.example.net", "", ".example.net", "a..example.net", "a@b.net", "-x.net"} {
 		if _, err := Parse([]byte("server:\n  allowed_hosts: [\""+bad+"\"]\n"), lookup); err == nil {
 			t.Errorf("allowed_hosts %q accepted", bad)
 		}

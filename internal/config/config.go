@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -62,6 +63,10 @@ func LoadFile(path string) (*Config, error) {
 	}
 	return Parse(raw, os.LookupEnv)
 }
+
+// hostNameRe matches a bare DNS host name: dot-separated labels of letters, digits, '-'
+// and '_', not starting or ending with '-'.
+var hostNameRe = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$`)
 
 // TokenEnv is the environment variable read for the API token when the config names none.
 const TokenEnv = "NETPLANE_API_TOKEN"
@@ -128,7 +133,7 @@ func Parse(data []byte, lookupEnv func(string) (string, bool)) (*Config, error) 
 	}
 	for i, h := range fc.Server.AllowedHosts {
 		n := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
-		if n == "" || strings.ContainsAny(n, ":/*[] \t") {
+		if !hostNameRe.MatchString(n) {
 			return nil, fmt.Errorf("server.allowed_hosts[%d] %q: want a bare host name (no scheme, port, path or wildcard)", i, h)
 		}
 		fc.Server.AllowedHosts[i] = n

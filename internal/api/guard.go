@@ -2,6 +2,7 @@
 package api
 
 import (
+	"cmp"
 	"net"
 	"net/http"
 	"net/netip"
@@ -47,7 +48,8 @@ func (s *Server) withBrowserGuards(next http.Handler) http.Handler {
 }
 
 // sameOrigin accepts a write without Origin (non-browser clients), one the browser marks
-// same-origin, or one whose Origin names this Host (default ports filled in) or an allowed host.
+// same-origin (which also covers proxies that rewrite Host), or one whose Origin is exactly
+// this Host, a port-less Host meaning the scheme's default port.
 func (s *Server) sameOrigin(r *http.Request) bool {
 	o := r.Header.Get("Origin")
 	if o == "" || r.Header.Get("Sec-Fetch-Site") == "same-origin" {
@@ -57,21 +59,16 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 	if err != nil || u.User != nil || u.Host == "" {
 		return false // includes "null"
 	}
-	oHost, oPort := u.Hostname(), u.Port()
-	if oPort == "" {
-		oPort = "80"
-		if u.Scheme == "https" {
-			oPort = "443"
-		}
+	defaultPort := "80"
+	if u.Scheme == "https" {
+		defaultPort = "443"
 	}
+	oPort := cmp.Or(u.Port(), defaultPort)
 	rHost, rPort, err := net.SplitHostPort(r.Host)
 	if err != nil {
-		rHost, rPort = r.Host, oPort // no port in Host: the scheme default
+		rHost, rPort = r.Host, defaultPort
 	}
-	if strings.EqualFold(oHost, strings.Trim(rHost, "[]")) && oPort == rPort {
-		return true
-	}
-	return slices.Contains(s.opts.AllowedHosts, strings.ToLower(oHost))
+	return strings.EqualFold(u.Hostname(), strings.Trim(rHost, "[]")) && oPort == rPort
 }
 
 // allowedHost accepts IP literals, single-label names, private suffixes and allowed_hosts.
@@ -92,5 +89,5 @@ func (s *Server) allowedHost(hostport string) bool {
 			return true
 		}
 	}
-	return slices.Contains(s.opts.AllowedHosts, host) // normalized by config.Parse
+	return slices.Contains(s.opts.AllowedHosts, host) // normalized by New
 }

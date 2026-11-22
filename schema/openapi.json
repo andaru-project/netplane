@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "description": "Open network configuration, information, and diagnostics plane HTTP/SSE wire contract."
+    "description": "Open network configuration, information, and diagnostics plane HTTP/SSE wire contract. Browser guards apply to every operation: a write from another origin gets 403 CROSS_ORIGIN, and without an API token a request whose Host is a public DNS name not in server.allowed_hosts gets 421 HOST_NOT_ALLOWED."
   },
   "security": [{ "bearerAuth": [] }, { "cookieAuth": [] }, {}],
   "paths": {
