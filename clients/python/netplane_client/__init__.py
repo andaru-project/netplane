@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 
@@ -64,7 +65,7 @@ class NetplaneClient:
         return list(data.get("items", []))
 
     async def get_device(self, device_id: str) -> dict[str, Any]:
-        return await self._get(f"/devices/{device_id}")
+        return await self._get(f"/devices/{quote(device_id, safe='')}")
 
     async def get_topology(self) -> dict[str, Any]:
         return await self._get("/topology")

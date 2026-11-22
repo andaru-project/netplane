@@ -188,7 +188,9 @@ func TestSolveLLDPByIPAndHostnameAndDualStackClients(t *testing.T) {
 			{DeviceID: "gw1", Family: model.IPv6, IP: "2001:db8::50", MAC: "bb:00:00:00:00:50", State: "reachable"},
 		},
 		FDB: []model.FdbEntry{
-			// Wired IPv6 client seen on sw2 leaf port eth2 and also on sw1 uplink (smaller cardinality wins).
+			// Wired IPv6 client seen on sw2 leaf port eth2 AND on sw1 transit uplink eth9 (which also sees sw2's MAC).
+			{DeviceID: "sw1", LinkName: "eth9", MAC: "aa:00:00:00:00:03", VLAN: 1},
+			{DeviceID: "sw1", LinkName: "eth9", MAC: "bb:00:00:00:00:50", VLAN: 1},
 			{DeviceID: "sw2", LinkName: "eth2", MAC: "bb:00:00:00:00:50", VLAN: 1},
 		},
 		Clients: []model.Client{

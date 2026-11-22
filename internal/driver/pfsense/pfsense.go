@@ -299,28 +299,30 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	for _, a := range arpResp.Data {
-		if a.MAC == "" || a.MAC == "(incomplete)" {
+		normMAC, err := model.NormalizeMAC(a.MAC)
+		if err != nil {
 			continue
 		}
 		snap.Neighbors = append(snap.Neighbors, model.NeighborEntry{
 			DeviceID:    devID,
 			Family:      model.IPv4,
 			IP:          a.IP,
-			MAC:         a.MAC,
+			MAC:         normMAC,
 			SegmentName: a.Interface,
 			State:       strings.ToLower(a.Status),
 		})
 	}
 
 	for _, l := range dhcpResp.Data {
-		if l.MAC == "" {
+		normMAC, err := model.NormalizeMAC(l.MAC)
+		if err != nil {
 			continue
 		}
 		snap.DHCP = append(snap.DHCP, model.DhcpLease{
 			DeviceID: devID,
 			Family:   model.IPv4,
 			IP:       l.IP,
-			MAC:      l.MAC,
+			MAC:      normMAC,
 			Hostname: l.Hostname,
 			Static:   strings.EqualFold(l.Type, "static"),
 		})

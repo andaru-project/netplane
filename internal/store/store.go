@@ -61,14 +61,24 @@ type Store struct {
 
 // Open opens (or creates) a SQLite database at path in WAL mode and runs embedded migrations.
 func Open(ctx context.Context, path string) (*Store, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)", path)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
 	}
 	// Single connection eliminates SQLITE_BUSY under concurrent poller goroutines.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+
+	for _, pragma := range []string{
+		"PRAGMA journal_mode = WAL;",
+		"PRAGMA foreign_keys = ON;",
+		"PRAGMA busy_timeout = 5000;",
+	} {
+		if _, err := db.ExecContext(ctx, pragma); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("apply %q: %w", pragma, err)
+		}
+	}
 
 	s := &Store{
 		db:        db,

@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func TestPfSenseDriverPoll(t *testing.T) {
 		case "/api/v2/status/services":
 			_, _ = w.Write([]byte(`{"data":[{"name":"unbound","description":"DNS Resolver","status":true},{"name":"pfblockerng","description":"pfBlockerNG","status":true}]}`))
 		case "/api/v2/status/wireguard/peers":
-			_, _ = w.Write([]byte(`{"data":[{"tun":"tun_wg0","descr":"mobile","public_key":"abc=","endpoint":"203.0.113.5:51820","latest_handshake":` + formatInt64(nowUnix-10) + `,"transfer_rx":1024,"transfer_tx":2048}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"tun":"tun_wg0","descr":"mobile","public_key":"abc=","endpoint":"203.0.113.5:51820","latest_handshake":` + strconv.FormatInt(nowUnix-10, 10) + `,"transfer_rx":1024,"transfer_tx":2048}]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -72,16 +73,4 @@ func TestPfSenseDriverPoll(t *testing.T) {
 	if len(snap.Firewalls) != 1 || len(snap.Firewalls[0].Services) != 2 {
 		t.Fatalf("unexpected firewall state: %+v", snap.Firewalls)
 	}
-}
-
-func formatInt64(v int64) string {
-	b := make([]byte, 0, 20)
-	if v == 0 {
-		return "0"
-	}
-	for v > 0 {
-		b = append([]byte{byte('0' + v%10)}, b...)
-		v /= 10
-	}
-	return string(b)
 }

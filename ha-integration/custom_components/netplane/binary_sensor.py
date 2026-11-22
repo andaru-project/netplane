@@ -39,6 +39,8 @@ async def async_setup_entry(
 
 
 class _NetplaneDeviceBase(CoordinatorEntity[NetplaneCoordinator]):
+    _attr_has_entity_name = True
+
     def __init__(self, coordinator: NetplaneCoordinator, device_id: str) -> None:
         super().__init__(coordinator)
         self._device_id = device_id

@@ -138,8 +138,31 @@ func TestAPIEndpointsAndIngressAndAuth(t *testing.T) {
 		t.Fatalf("devices = %d %s", rec.Code, rec.Body.String())
 	}
 
-	// Home Assistant Ingress prefix works and injects <base href> for SPA.
+	// Untrusted peer sending forged X-Ingress-Path MUST be rejected with 401.
+	req = httptest.NewRequest("GET", "/api/hassio_ingress/abc123/api/v1/devices", nil)
+	req.RemoteAddr = "198.51.100.9:54321"
+	req.Header.Set("X-Ingress-Path", "/api/hassio_ingress/abc123")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("forged X-Ingress-Path from untrusted IP should return 401, got %d", rec.Code)
+	}
+
+	// Hostile X-Ingress-Path (protocol-relative or URL) MUST be rejected and never injected into <base href>.
+	for _, evil := range []string{"//evil.example", "https://evil.example", "/api/../evil"} {
+		req = httptest.NewRequest("GET", "/topology", nil)
+		req.RemoteAddr = "172.30.32.2:40000"
+		req.Header.Set("X-Ingress-Path", evil)
+		rec = httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if strings.Contains(rec.Body.String(), "evil") || !strings.Contains(rec.Body.String(), `<base href="./">`) {
+			t.Fatalf("hostile X-Ingress-Path %q leaked into base href: %s", evil, rec.Body.String())
+		}
+	}
+
+	// Trusted Home Assistant Supervisor peer (172.30.32.2) with valid X-Ingress-Path succeeds.
 	req = httptest.NewRequest("GET", "/api/hassio_ingress/abc123/api/v1/devices/mock:02:51:0a:00:00:01", nil)
+	req.RemoteAddr = "172.30.32.2:40000"
 	req.Header.Set("X-Ingress-Path", "/api/hassio_ingress/abc123")
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
@@ -148,6 +171,7 @@ func TestAPIEndpointsAndIngressAndAuth(t *testing.T) {
 	}
 
 	req = httptest.NewRequest("GET", "/api/hassio_ingress/abc123/topology", nil)
+	req.RemoteAddr = "172.30.32.2:40000"
 	req.Header.Set("X-Ingress-Path", "/api/hassio_ingress/abc123")
 	rec = httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)

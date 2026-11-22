@@ -33,6 +33,7 @@ type Scheduler struct {
 	maxBackoff time.Duration
 
 	mu     sync.RWMutex
+	topoMu sync.Mutex
 	status map[string]TargetStatus
 }
 
@@ -112,17 +113,28 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 		}
 	}
 
-	if state, err := s.store.LoadState(ctx); err == nil {
-		graph := topology.Solve(state, now)
-		if err := s.store.SaveTopology(ctx, now, graph); err == nil && s.bus != nil {
-			s.bus.Publish(events.Event{
-				Type:      events.TopologyUpdated,
-				Severity:  events.SeverityInfo,
-				Timestamp: now,
-				TargetID:  cfg.ID,
-				Summary:   fmt.Sprintf("Topology updated (%d nodes, %d edges)", len(graph.Nodes), len(graph.Edges)),
-			})
-		}
+	// Serialize LoadState -> Solve -> SaveTopology so concurrent target pollers
+	// never overwrite a fresher topology snapshot with stale state.
+	s.topoMu.Lock()
+	state, loadErr := s.store.LoadState(ctx)
+	if loadErr != nil {
+		s.topoMu.Unlock()
+		s.logger.Warn("load state for topology failed", "target_id", cfg.ID, "err", loadErr)
+		return nil
+	}
+	graph := topology.Solve(state, now)
+	saveErr := s.store.SaveTopology(ctx, now, graph)
+	s.topoMu.Unlock()
+	if saveErr != nil {
+		s.logger.Warn("save topology failed", "target_id", cfg.ID, "err", saveErr)
+	} else if s.bus != nil {
+		s.bus.Publish(events.Event{
+			Type:      events.TopologyUpdated,
+			Severity:  events.SeverityInfo,
+			Timestamp: now,
+			TargetID:  cfg.ID,
+			Summary:   fmt.Sprintf("Topology updated (%d nodes, %d edges)", len(graph.Nodes), len(graph.Edges)),
+		})
 	}
 	return nil
 }

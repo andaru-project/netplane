@@ -8,7 +8,8 @@ interface Props {
 }
 
 export function PortFaceplate({ links }: Props) {
-  const [selected, setSelected] = useState<Link | null>(links[0] ?? null);
+  const [selectedIfName, setSelectedIfName] = useState<string | null>(links[0]?.if_name ?? null);
+  const selected = links.find((l) => l.if_name === selectedIfName) ?? links[0] ?? null;
 
   if (links.length === 0) {
     return <Text c="dimmed" size="sm">No physical links reported.</Text>;
@@ -36,7 +37,7 @@ export function PortFaceplate({ links }: Props) {
                 label={`${l.if_name} (${l.media}) ${l.link_up ? formatSpeed(l.speed_mbps) : l.oper_state}`}
               >
                 <Paper
-                  onClick={() => setSelected(l)}
+                  onClick={() => setSelectedIfName(l.if_name)}
                   p="xs"
                   radius="sm"
                   style={{

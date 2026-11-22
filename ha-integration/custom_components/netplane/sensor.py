@@ -53,6 +53,8 @@ class NetplaneActiveClientsSensor(CoordinatorEntity[NetplaneCoordinator], Sensor
 
 
 class _DeviceSensorBase(CoordinatorEntity[NetplaneCoordinator], SensorEntity):
+    _attr_has_entity_name = True
+
     def __init__(self, coordinator: NetplaneCoordinator, device_id: str) -> None:
         super().__init__(coordinator)
         self._device_id = device_id

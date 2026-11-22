@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,16 +25,17 @@ import (
 
 // Options configures the HTTP/SSE API server.
 type Options struct {
-	Version           string
-	Store             *store.Store
-	Registry          *driver.Registry
-	Poller            *poller.Scheduler
-	Bus               *events.Bus
-	Targets           []driver.TargetConfig
-	APIToken          string
-	TrustIngressProxy bool
-	WebFS             fs.FS // optional embedded SPA root containing index.html
-	Logger            *slog.Logger
+	Version             string
+	Store               *store.Store
+	Registry            *driver.Registry
+	Poller              *poller.Scheduler
+	Bus                 *events.Bus
+	Targets             []driver.TargetConfig
+	APIToken            string
+	TrustIngressProxy   bool
+	TrustedIngressCIDRs []string
+	WebFS               fs.FS // optional embedded SPA root containing index.html
+	Logger              *slog.Logger
 }
 
 // DeviceDetail aggregates a device with all its associated observed entities.
@@ -55,11 +57,12 @@ type DeviceDetail struct {
 
 // Server serves the netplane REST API, SSE stream, OpenAPI contract, and embedded SPA.
 type Server struct {
-	opts      Options
-	mux       *http.ServeMux
-	handler   http.Handler
-	targetsMu sync.RWMutex
-	targets   map[string]driver.TargetConfig
+	opts           Options
+	mux            *http.ServeMux
+	handler        http.Handler
+	trustedIngress []netip.Prefix
+	targetsMu      sync.RWMutex
+	targets        map[string]driver.TargetConfig
 }
 
 // New constructs a Server ready to mount on an http.Server.
@@ -72,9 +75,10 @@ func New(opts Options) *Server {
 	}
 
 	s := &Server{
-		opts:    opts,
-		mux:     http.NewServeMux(),
-		targets: make(map[string]driver.TargetConfig, len(opts.Targets)),
+		opts:           opts,
+		mux:            http.NewServeMux(),
+		trustedIngress: parseTrustedCIDRs(opts.TrustedIngressCIDRs),
+		targets:        make(map[string]driver.TargetConfig, len(opts.Targets)),
 	}
 	for _, t := range opts.Targets {
 		s.targets[t.ID] = t

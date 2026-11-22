@@ -105,7 +105,7 @@ func ComputeBitrate(prevBytes, currBytes uint64, elapsed time.Duration, counter3
 		// Device reboot / counter reset: treat current counter as bytes since reset.
 		delta = currBytes
 	}
-	return float64(delta*8) / secs
+	return float64(delta) * 8 / secs
 }
 
 // NormalizeSlices ensures non-nil empty slices so wire JSON emits [] instead of null.

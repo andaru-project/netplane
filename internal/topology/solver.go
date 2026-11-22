@@ -371,14 +371,14 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 	})
 
 	for _, c := range cands {
-		if connected(c.srcID, c.dstID) {
-			continue
-		}
-		// Skip if srcPort is already used to reach another infrastructure device.
-		if infraPorts[devPortKey{c.srcID, c.srcPort}] {
-			continue
-		}
 		normName, isLag, members, spd := normalizePort(c.srcID, c.srcPort)
+		// Any port seeing another infrastructure device's MAC is a transit/uplink port,
+		// never a leaf client access port — mark it even if an LLDP/earlier path already exists.
+		alreadyInfra := infraPorts[devPortKey{c.srcID, normName}]
+		infraPorts[devPortKey{c.srcID, normName}] = true
+		if connected(c.srcID, c.dstID) || alreadyInfra {
+			continue
+		}
 		kind := EdgeWired
 		if isLag {
 			kind = EdgeLAG
@@ -394,7 +394,6 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 			SpeedMbps:   spd,
 			MemberLinks: members,
 		}
-		infraPorts[devPortKey{c.srcID, normName}] = true
 	}
 
 	// 4. Identify root devices and orient edges away from roots via BFS.

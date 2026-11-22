@@ -111,16 +111,17 @@ func runServe(args []string) error {
 	sched := poller.New(reg, st, bus, logger)
 
 	srv := api.New(api.Options{
-		Version:           Version,
-		Store:             st,
-		Registry:          reg,
-		Poller:            sched,
-		Bus:               bus,
-		Targets:           cfg.Targets,
-		APIToken:          cfg.Server.ResolvedAPIToken,
-		TrustIngressProxy: cfg.Server.TrustIngressProxy,
-		WebFS:             embeddedWebFS(),
-		Logger:            logger,
+		Version:             Version,
+		Store:               st,
+		Registry:            reg,
+		Poller:              sched,
+		Bus:                 bus,
+		Targets:             cfg.Targets,
+		APIToken:            cfg.Server.ResolvedAPIToken,
+		TrustIngressProxy:   cfg.Server.TrustIngressProxy,
+		TrustedIngressCIDRs: cfg.Server.TrustedIngressCIDRs,
+		WebFS:               embeddedWebFS(),
+		Logger:              logger,
 	})
 
 	httpSrv := &http.Server{
