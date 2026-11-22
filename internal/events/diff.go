@@ -17,23 +17,20 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 	}
 	ts := curr.CollectedAt.UTC()
 	var out []Event
+	emit := func(typ Type, sev Severity, devID, link, summary string) *Event {
+		out = append(out, Event{Type: typ, Severity: sev, Timestamp: ts, TargetID: curr.TargetID, DeviceID: devID, LinkName: link, Summary: summary})
+		return &out[len(out)-1]
+	}
+	sfpAlert := func(l model.Link, alert model.AlertState) {
+		if sev, ok := sfpSeverity(alert); ok {
+			emit(SfpAlert, sev, l.DeviceID, l.IfName, fmt.Sprintf("SFP optical alert (%s) on %s/%s", alert, l.DeviceID, l.IfName))
+		}
+	}
 
 	if prev == nil {
 		for _, l := range curr.Links {
-			if l.SFP != nil && l.SFP.Present && (l.SFP.AlertState == model.AlertWarn || l.SFP.AlertState == model.AlertCrit) {
-				sev := SeverityWarn
-				if l.SFP.AlertState == model.AlertCrit {
-					sev = SeverityCrit
-				}
-				out = append(out, Event{
-					Type:      SfpAlert,
-					Severity:  sev,
-					Timestamp: ts,
-					TargetID:  curr.TargetID,
-					DeviceID:  l.DeviceID,
-					LinkName:  l.IfName,
-					Summary:   fmt.Sprintf("SFP optical alert (%s) on %s/%s", l.SFP.AlertState, l.DeviceID, l.IfName),
-				})
+			if l.SFP != nil && l.SFP.Present {
+				sfpAlert(l, l.SFP.AlertState)
 			}
 		}
 		return out
@@ -46,30 +43,11 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 	}
 	for _, d := range curr.Devices {
 		pd, ok := prevDevs[d.ID]
-		if !ok {
-			if d.Online {
-				out = append(out, Event{
-					Type: DeviceOnline, Severity: SeverityInfo, Timestamp: ts,
-					TargetID: curr.TargetID, DeviceID: d.ID,
-					Summary: fmt.Sprintf("Device %s came online", d.Name),
-				})
-			}
-			continue
-		}
-		if pd.Online != d.Online {
-			if d.Online {
-				out = append(out, Event{
-					Type: DeviceOnline, Severity: SeverityInfo, Timestamp: ts,
-					TargetID: curr.TargetID, DeviceID: d.ID,
-					Summary: fmt.Sprintf("Device %s came online", d.Name),
-				})
-			} else {
-				out = append(out, Event{
-					Type: DeviceOffline, Severity: SeverityCrit, Timestamp: ts,
-					TargetID: curr.TargetID, DeviceID: d.ID,
-					Summary: fmt.Sprintf("Device %s went offline", d.Name),
-				})
-			}
+		switch {
+		case d.Online && (!ok || !pd.Online):
+			emit(DeviceOnline, SeverityInfo, d.ID, "", fmt.Sprintf("Device %s came online", d.Name))
+		case !d.Online && ok && pd.Online:
+			emit(DeviceOffline, SeverityCrit, d.ID, "", fmt.Sprintf("Device %s went offline", d.Name))
 		}
 	}
 
@@ -79,11 +57,7 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 	}
 	for _, pd := range prev.Devices {
 		if pd.Online && !currDevs[pd.ID] {
-			out = append(out, Event{
-				Type: DeviceOffline, Severity: SeverityCrit, Timestamp: ts,
-				TargetID: curr.TargetID, DeviceID: pd.ID,
-				Summary: fmt.Sprintf("Device %s went offline", pd.Name),
-			})
+			emit(DeviceOffline, SeverityCrit, pd.ID, "", fmt.Sprintf("Device %s went offline", pd.Name))
 		}
 	}
 
@@ -102,17 +76,9 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 		}
 		if pl.LinkUp != l.LinkUp {
 			if l.LinkUp {
-				out = append(out, Event{
-					Type: LinkUp, Severity: SeverityInfo, Timestamp: ts,
-					TargetID: curr.TargetID, DeviceID: l.DeviceID, LinkName: l.IfName,
-					Summary: fmt.Sprintf("Link %s/%s is up (%d Mbps)", l.DeviceID, l.IfName, l.SpeedMbps),
-				})
+				emit(LinkUp, SeverityInfo, l.DeviceID, l.IfName, fmt.Sprintf("Link %s/%s is up (%d Mbps)", l.DeviceID, l.IfName, l.SpeedMbps))
 			} else {
-				out = append(out, Event{
-					Type: LinkDown, Severity: SeverityWarn, Timestamp: ts,
-					TargetID: curr.TargetID, DeviceID: l.DeviceID, LinkName: l.IfName,
-					Summary: fmt.Sprintf("Link %s/%s went down", l.DeviceID, l.IfName),
-				})
+				emit(LinkDown, SeverityWarn, l.DeviceID, l.IfName, fmt.Sprintf("Link %s/%s went down", l.DeviceID, l.IfName))
 			}
 		}
 		if pl.StpState != l.StpState && l.StpState != "" {
@@ -120,12 +86,8 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 			if l.StpState == model.StpBlocking || l.StpState == model.StpDiscarding {
 				sev = SeverityWarn
 			}
-			out = append(out, Event{
-				Type: LinkStpChanged, Severity: sev, Timestamp: ts,
-				TargetID: curr.TargetID, DeviceID: l.DeviceID, LinkName: l.IfName,
-				Summary: fmt.Sprintf("STP state changed on %s/%s: %s -> %s", l.DeviceID, l.IfName, pl.StpState, l.StpState),
-				Details: map[string]any{"old": pl.StpState, "new": l.StpState},
-			})
+			e := emit(LinkStpChanged, sev, l.DeviceID, l.IfName, fmt.Sprintf("STP state changed on %s/%s: %s -> %s", l.DeviceID, l.IfName, pl.StpState, l.StpState))
+			e.Details = map[string]any{"old": pl.StpState, "new": l.StpState}
 		}
 		prevAlert := model.AlertOK
 		if pl.SFP != nil {
@@ -135,16 +97,8 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 		if l.SFP != nil {
 			currAlert = l.SFP.AlertState
 		}
-		if prevAlert != currAlert && (currAlert == model.AlertWarn || currAlert == model.AlertCrit) {
-			sev := SeverityWarn
-			if currAlert == model.AlertCrit {
-				sev = SeverityCrit
-			}
-			out = append(out, Event{
-				Type: SfpAlert, Severity: sev, Timestamp: ts,
-				TargetID: curr.TargetID, DeviceID: l.DeviceID, LinkName: l.IfName,
-				Summary: fmt.Sprintf("SFP optical alert (%s) on %s/%s", currAlert, l.DeviceID, l.IfName),
-			})
+		if prevAlert != currAlert {
+			sfpAlert(l, currAlert)
 		}
 	}
 
@@ -160,17 +114,9 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 			continue
 		}
 		if v.Up {
-			out = append(out, Event{
-				Type: VpnUp, Severity: SeverityInfo, Timestamp: ts,
-				TargetID: curr.TargetID, DeviceID: v.DeviceID,
-				Summary: fmt.Sprintf("VPN tunnel %s came up", v.Name),
-			})
+			emit(VpnUp, SeverityInfo, v.DeviceID, "", fmt.Sprintf("VPN tunnel %s came up", v.Name))
 		} else {
-			out = append(out, Event{
-				Type: VpnDown, Severity: SeverityWarn, Timestamp: ts,
-				TargetID: curr.TargetID, DeviceID: v.DeviceID,
-				Summary: fmt.Sprintf("VPN tunnel %s went down", v.Name),
-			})
+			emit(VpnDown, SeverityWarn, v.DeviceID, "", fmt.Sprintf("VPN tunnel %s went down", v.Name))
 		}
 	}
 
@@ -185,17 +131,9 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 			continue
 		}
 		if g.Online {
-			out = append(out, Event{
-				Type: GatewayUp, Severity: SeverityInfo, Timestamp: ts,
-				TargetID: curr.TargetID, DeviceID: g.DeviceID,
-				Summary: fmt.Sprintf("Gateway %s is back online", g.Name),
-			})
+			emit(GatewayUp, SeverityInfo, g.DeviceID, "", fmt.Sprintf("Gateway %s is back online", g.Name))
 		} else {
-			out = append(out, Event{
-				Type: GatewayDown, Severity: SeverityCrit, Timestamp: ts,
-				TargetID: curr.TargetID, DeviceID: g.DeviceID,
-				Summary: fmt.Sprintf("Gateway %s went offline", g.Name),
-			})
+			emit(GatewayDown, SeverityCrit, g.DeviceID, "", fmt.Sprintf("Gateway %s went offline", g.Name))
 		}
 	}
 
@@ -213,26 +151,29 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 	for _, c := range curr.Clients {
 		if c.Online && !prevOnline[c.MAC] {
 			prevOnline[c.MAC] = true // emit once per MAC
-			out = append(out, Event{
-				Type: ClientJoined, Severity: SeverityInfo, Timestamp: ts,
-				TargetID: curr.TargetID, DeviceID: c.AttachedDeviceID,
-				Summary: fmt.Sprintf("Client %s joined", clientLabel(c)),
-			})
+			emit(ClientJoined, SeverityInfo, c.AttachedDeviceID, "", fmt.Sprintf("Client %s joined", clientLabel(c)))
 		}
 	}
 	left := map[string]bool{}
 	for _, c := range prev.Clients {
 		if _, ok := currOnline[c.MAC]; c.Online && !ok && !left[c.MAC] {
 			left[c.MAC] = true
-			out = append(out, Event{
-				Type: ClientLeft, Severity: SeverityInfo, Timestamp: ts,
-				TargetID: curr.TargetID, DeviceID: c.AttachedDeviceID,
-				Summary: fmt.Sprintf("Client %s left", clientLabel(c)),
-			})
+			emit(ClientLeft, SeverityInfo, c.AttachedDeviceID, "", fmt.Sprintf("Client %s left", clientLabel(c)))
 		}
 	}
 
 	return out
+}
+
+// sfpSeverity maps an active SFP optical alert to its event severity; ok is false for none.
+func sfpSeverity(a model.AlertState) (sev Severity, ok bool) {
+	switch a {
+	case model.AlertWarn:
+		return SeverityWarn, true
+	case model.AlertCrit:
+		return SeverityCrit, true
+	}
+	return "", false
 }
 
 func clientLabel(c model.Client) string {
