@@ -182,20 +182,88 @@ func TestOpenWrtReusesSession(t *testing.T) {
 	poll()
 	poll()
 	poll()
-	// The ACL-denied call costs one re-login the first time, then is remembered.
-	if logins != 2 {
-		t.Fatalf("logins after 3 polls = %d, want 2 (one to learn the ACL denial)", logins)
+	// The ACL-denied call is learned with the poll's own login, so no extra login.
+	if logins != 1 {
+		t.Fatalf("logins after 3 polls = %d, want 1", logins)
 	}
 	mu.Lock()
 	valid = map[string]bool{} // rpcd expired the session
 	mu.Unlock()
 	poll()
-	if logins != 3 {
-		t.Fatalf("logins after expiry = %d, want 3", logins)
+	if logins != 2 {
+		t.Fatalf("logins after expiry = %d, want 2", logins)
 	}
 	cfg.ResolvedSecrets = map[string]string{"username": "root", "password": "new"}
 	poll()
-	if logins != 5 { // new session, and the ACL denial is learned again for it
-		t.Fatalf("logins after a password change = %d, want 5", logins)
+	if logins != 3 {
+		t.Fatalf("logins after a password change = %d, want 3", logins)
+	}
+}
+
+// TestOpenWrtReloginFailureAndACLHeal checks that a failed mid-poll re-login is reported, and
+// that a call once refused by the ACL is retried normally after it succeeds again.
+func TestOpenWrtReloginFailureAndACLHeal(t *testing.T) {
+	var mu sync.Mutex
+	logins, loginOK, deny := 0, true, true
+	valid := map[string]bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		var sid, obj, method string
+		_ = json.Unmarshal(req.Params[0], &sid)
+		_ = json.Unmarshal(req.Params[1], &obj)
+		_ = json.Unmarshal(req.Params[2], &method)
+		mu.Lock()
+		defer mu.Unlock()
+		denied := `{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"Access denied"}}`
+		switch {
+		case obj+"."+method == "session.login":
+			logins++
+			if !loginOK {
+				_, _ = w.Write([]byte(`{"result":[6]}`))
+				return
+			}
+			sid := fmt.Sprintf("sid-%d", logins)
+			valid[sid] = true
+			_, _ = fmt.Fprintf(w, `{"result":[0,{"ubus_rpc_session":%q}]}`, sid)
+		case !valid[sid], obj == "system" && method == "board" && deny:
+			_, _ = w.Write([]byte(denied))
+		case obj+"."+method == "network.device.status":
+			_, _ = w.Write([]byte(`{"result":[0,{"lan1":{"up":true,"carrier":true}}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"result":[0,{}]}`))
+		}
+	}))
+	defer srv.Close()
+	drv := New()
+	cfg := driver.TargetConfig{
+		ID: "ow2", Driver: "openwrt", Endpoint: srv.URL,
+		Settings:        map[string]any{"allow_insecure_http": true},
+		ResolvedSecrets: map[string]string{"username": "u", "password": "p"},
+	}
+	if _, err := drv.Poll(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	sess := drv.sessions["ow2"]
+	if !sess.denied["system.board"] {
+		t.Fatal("system.board should be remembered as ACL-refused")
+	}
+	mu.Lock()
+	deny = false // the admin widened the ACL
+	mu.Unlock()
+	if _, err := drv.Poll(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if sess.denied["system.board"] {
+		t.Fatal("a succeeding call must leave the denied set")
+	}
+	mu.Lock()
+	valid, loginOK = map[string]bool{}, false // session expired and the password now fails
+	mu.Unlock()
+	_, err := drv.Poll(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "login") {
+		t.Fatalf("want the re-login error, got %v", err)
 	}
 }

@@ -90,7 +90,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	sess := d.session(cfg)
 	client := sess.client
-	// Keep the login cookie, not the connections (see the OpenWrt driver).
+	// Keep the login cookie, not the connections: polls are far apart anyway.
 	defer client.CloseIdleConnections()
 	apiKey := cfg.ResolvedSecrets["api_key"]
 	login := func() error {
@@ -120,17 +120,19 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		sess.loggedIn = true
 		return nil
 	}
-	if apiKey == "" && !sess.loggedIn {
+	// A poll logs in at most once: up front when it holds no login, else on the first 401.
+	relogged := apiKey == "" && !sess.loggedIn
+	if relogged {
 		if err := login(); err != nil {
 			return nil, err
 		}
 	}
-	// get reuses the kept login, logging in again once if the controller answers 401.
 	get := func(url string, out any) error {
 		err := getJSON(ctx, client, url, apiKey, out)
-		if apiKey != "" || !errors.Is(err, errUnauthorized) {
+		if apiKey != "" || relogged || !errors.Is(err, errUnauthorized) {
 			return err
 		}
+		relogged = true
 		if err := login(); err != nil {
 			return err
 		}

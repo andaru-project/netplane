@@ -86,8 +86,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 	sess := d.session(cfg)
 	client := sess.client
-	// Keep the session, not the connections: a kept-alive connection the router has closed
-	// would fail the next poll's first POST, which net/http does not retry.
+	// Keep the session, not the connections: a kept-alive connection the router closes while
+	// a request is in flight fails that POST, and polls are far apart anyway.
 	defer client.CloseIdleConnections()
 
 	ubusURL := strings.TrimRight(cfg.Endpoint, "/")
@@ -113,21 +113,26 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		sess.sid = loginRes.Session
 		return nil
 	}
-	if sess.sid == "" {
+	// A poll logs in at most once: up front when it holds no session, else on the first denial.
+	relogged := sess.sid == ""
+	if relogged {
 		if err := login(); err != nil {
 			return nil, err
 		}
 	}
-	// call reuses the kept session. A denial triggers at most one re-login per poll; a call
-	// still denied with a fresh session is refused by the ACL and remembered as such.
+	// call reuses the kept session. A call denied with a fresh session is refused by the ACL
+	// and remembered as such until it succeeds again.
 	var reloginErr error
-	relogged := false
 	call := func(object, method string, params map[string]any, out any) error {
 		name := object + "." + method
 		if reloginErr != nil {
 			return reloginErr // an earlier re-login failed this poll
 		}
 		err := ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out)
+		if err == nil {
+			delete(sess.denied, name) // the ACL allows it (again)
+			return nil
+		}
 		if !errors.Is(err, errAccessDenied) || sess.denied[name] {
 			return err
 		}
@@ -139,8 +144,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		if reloginErr = login(); reloginErr != nil {
 			return reloginErr
 		}
-		if err = ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out); errors.Is(err, errAccessDenied) {
+		err = ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out)
+		if errors.Is(err, errAccessDenied) {
 			sess.denied[name] = true
+		} else if err == nil {
+			delete(sess.denied, name)
 		}
 		return err
 	}
