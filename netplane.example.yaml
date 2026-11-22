@@ -1,0 +1,55 @@
+# Example netplane configuration (copy and customize; never commit real secrets)
+server:
+  listen: ":8099"
+  db_path: "/data/netplane.db"
+  retention: "24h"
+  trust_ingress_proxy: true
+  # Optional bearer token for standalone API access (Home Assistant integration):
+  # api_token_secret: "${NETPLANE_API_TOKEN}"
+
+targets:
+  - id: core-pfsense
+    name: Core Firewall
+    driver: pfsense
+    endpoint: "https://192.0.2.1"
+    poll_interval: "15s"
+    settings:
+      insecure_skip_verify: true
+    secrets:
+      api_key: "${PFSENSE_API_KEY}"
+
+  - id: sw-lg510s
+    name: LG510S Switch
+    driver: rtlplayground
+    endpoint: "http://192.0.2.10"
+    poll_interval: "15s"
+    secrets:
+      username: "${LG510S_USER}"
+      password: "${LG510S_PASS}"
+
+  - id: unifi-controller
+    name: UniFi Network
+    driver: unifi
+    endpoint: "https://192.0.2.20:11443"
+    poll_interval: "15s"
+    settings:
+      site: "default"
+      is_unifi_os: true
+      insecure_skip_verify: true
+    secrets:
+      username: "${UNIFI_USER}"
+      password: "${UNIFI_PASS}"
+
+  - id: sw-snmp-core
+    name: Core SNMP Switch
+    driver: snmp
+    endpoint: "192.0.2.30:161"
+    poll_interval: "30s"
+    settings:
+      version: "3"
+      username: "netplane"
+      auth_protocol: "SHA256"
+      priv_protocol: "AES"
+    secrets:
+      auth_passphrase: "${SNMP_AUTH_PASS}"
+      priv_passphrase: "${SNMP_PRIV_PASS}"

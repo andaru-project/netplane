@@ -1,0 +1,158 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package config
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/andrebrait/netplane/internal/driver"
+	"github.com/andrebrait/netplane/internal/model"
+)
+
+// ServerConfig configures the HTTP/SSE server and Home Assistant Ingress behavior.
+type ServerConfig struct {
+	Listen              string   `yaml:"listen"`
+	DBPath              string   `yaml:"db_path"`
+	Retention           string   `yaml:"retention"`
+	TrustIngressProxy   bool     `yaml:"trust_ingress_proxy"`
+	TrustedIngressCIDRs []string `yaml:"trusted_ingress_cidrs"`
+	APITokenSecret      string   `yaml:"api_token_secret"`
+	ResolvedAPIToken    string   `yaml:"-"`
+}
+
+// TargetYAML is the declarative YAML representation of one polling target.
+type TargetYAML struct {
+	ID           string            `yaml:"id"`
+	Name         string            `yaml:"name"`
+	Driver       string            `yaml:"driver"`
+	Endpoint     string            `yaml:"endpoint"`
+	Enabled      *bool             `yaml:"enabled"`
+	PollInterval string            `yaml:"poll_interval"`
+	Settings     map[string]any    `yaml:"settings"`
+	Secrets      map[string]string `yaml:"secrets"` // map[logicalKey]ENV_VAR_NAME
+}
+
+// FileConfig is the top-level netplane YAML configuration document.
+type FileConfig struct {
+	Server  ServerConfig `yaml:"server"`
+	Targets []TargetYAML `yaml:"targets"`
+}
+
+// Config is the validated runtime configuration with resolved secrets (never serialized).
+type Config struct {
+	Server    ServerConfig
+	Retention time.Duration
+	Targets   []driver.TargetConfig
+}
+
+// LoadFile reads and validates a YAML configuration file, resolving secret references from getenv.
+func LoadFile(path string) (*Config, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config %q: %w", path, err)
+	}
+	return Parse(raw, os.LookupEnv)
+}
+
+// Parse decodes YAML bytes and resolves secret references via lookupEnv.
+func Parse(data []byte, lookupEnv func(string) (string, bool)) (*Config, error) {
+	var fc FileConfig
+	if err := yaml.Unmarshal(data, &fc); err != nil {
+		return nil, fmt.Errorf("parse YAML config: %w", err)
+	}
+
+	if fc.Server.Listen == "" {
+		fc.Server.Listen = ":8099"
+	}
+	if fc.Server.DBPath == "" {
+		fc.Server.DBPath = "netplane.db"
+	}
+	retention := 24 * time.Hour
+	if fc.Server.Retention != "" {
+		d, err := time.ParseDuration(fc.Server.Retention)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("invalid server.retention %q", fc.Server.Retention)
+		}
+		retention = d
+	}
+	if fc.Server.APITokenSecret != "" {
+		envName := stripEnvSyntax(fc.Server.APITokenSecret)
+		if val, ok := lookupEnv(envName); ok && val != "" {
+			fc.Server.ResolvedAPIToken = val
+		} else {
+			return nil, fmt.Errorf("missing environment variable %q for server.api_token_secret", envName)
+		}
+	}
+
+	seen := make(map[string]bool, len(fc.Targets))
+	targets := make([]driver.TargetConfig, 0, len(fc.Targets))
+	for i, ty := range fc.Targets {
+		if ty.ID == "" {
+			return nil, fmt.Errorf("targets[%d]: id is required", i)
+		}
+		if seen[ty.ID] {
+			return nil, fmt.Errorf("targets[%d]: duplicate target id %q", i, ty.ID)
+		}
+		seen[ty.ID] = true
+		if ty.Driver == "" {
+			return nil, fmt.Errorf("target %q: driver is required", ty.ID)
+		}
+		enabled := true
+		if ty.Enabled != nil {
+			enabled = *ty.Enabled
+		}
+		pollInterval := 15 * time.Second
+		if ty.PollInterval != "" {
+			d, err := time.ParseDuration(ty.PollInterval)
+			if err != nil || d <= 0 {
+				return nil, fmt.Errorf("target %q: invalid poll_interval %q", ty.ID, ty.PollInterval)
+			}
+			pollInterval = d
+		}
+		name := ty.Name
+		if name == "" {
+			name = ty.ID
+		}
+		secretRefs := make(map[string]model.SecretRef, len(ty.Secrets))
+		resolved := make(map[string]string, len(ty.Secrets))
+		for k, ref := range ty.Secrets {
+			envName := stripEnvSyntax(ref)
+			secretRefs[k] = model.SecretRef{Secret: envName}
+			if val, ok := lookupEnv(envName); ok {
+				resolved[k] = val
+			} else if enabled {
+				return nil, fmt.Errorf("target %q: missing env var %q for secret %q", ty.ID, envName, k)
+			}
+		}
+
+		targets = append(targets, driver.TargetConfig{
+			ID:              ty.ID,
+			Name:            name,
+			Driver:          ty.Driver,
+			Endpoint:        ty.Endpoint,
+			Enabled:         enabled,
+			PollInterval:    pollInterval,
+			Settings:        ty.Settings,
+			SecretRefs:      secretRefs,
+			ResolvedSecrets: resolved,
+		})
+	}
+
+	return &Config{
+		Server:    fc.Server,
+		Retention: retention,
+		Targets:   targets,
+	}, nil
+}
+
+func stripEnvSyntax(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "${") && strings.HasSuffix(s, "}") {
+		return strings.TrimSpace(s[2 : len(s)-1])
+	}
+	return strings.TrimPrefix(s, "$")
+}
