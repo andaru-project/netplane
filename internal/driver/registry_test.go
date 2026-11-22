@@ -171,3 +171,48 @@ func TestCarryOver(t *testing.T) {
 	}
 	(&Snapshot{Unavailable: []Section{SectionClients}}).CarryOver(nil, time.Hour) // first poll: no panic
 }
+
+func TestCarryOverFreshnessRules(t *testing.T) {
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	clients := []model.Client{{MAC: "aa:aa:aa:aa:aa:01"}}
+	carry := func(prev *Snapshot, at time.Duration) *Snapshot {
+		s := &Snapshot{CollectedAt: t0.Add(at), Unavailable: []Section{SectionClients}}
+		s.CarryOver(prev, 15*time.Minute)
+		return s
+	}
+	fresh := &Snapshot{CollectedAt: t0, Clients: clients}
+
+	// A chain keeps the original freshness: +10m carried, +20m expired (not 10m after +10m).
+	s1 := carry(fresh, 10*time.Minute)
+	if len(s1.Clients) != 1 || !s1.Stale[SectionClients].Equal(t0) {
+		t.Fatalf("+10m: clients=%v stale=%v", s1.Clients, s1.Stale)
+	}
+	if s2 := carry(s1, 20*time.Minute); len(s2.Clients) != 0 {
+		t.Fatal("+20m: chained carry outlived 15 minutes")
+	}
+
+	// Data fresh in the previous poll is carried once even with a slow interval, not after a long stop.
+	if s := carry(fresh, 40*time.Minute); len(s.Clients) != 1 {
+		t.Fatal("slow interval: one failed poll dropped fresh data")
+	}
+	if s := carry(fresh, 2*time.Hour); len(s.Clients) != 0 {
+		t.Fatal("carried data from a snapshot two hours old")
+	}
+
+	// prev marked the section unavailable and carried nothing: its leftover data is not fresh.
+	dropped := &Snapshot{CollectedAt: t0, Clients: clients, Unavailable: []Section{SectionClients}}
+	if s := carry(dropped, time.Minute); len(s.Clients) != 0 {
+		t.Fatal("carried data prev itself could not refresh")
+	}
+
+	// A snapshot rewritten for an unreachable target is never a source.
+	offline := &Snapshot{CollectedAt: t0, Clients: clients, MarkedOffline: true}
+	if s := carry(offline, time.Minute); len(s.Clients) != 0 {
+		t.Fatal("carried from an offline-marked snapshot")
+	}
+
+	// A clock that stepped back expires the data.
+	if s := carry(fresh, -time.Hour); len(s.Clients) != 0 {
+		t.Fatal("carried data across a backwards clock step")
+	}
+}

@@ -3,6 +3,8 @@ package snmp
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 
 	"github.com/gosnmp/gosnmp"
@@ -13,9 +15,13 @@ import (
 
 type fakeWalker struct {
 	trees map[string][]gosnmp.SnmpPDU
+	fail  map[string]bool // root OIDs whose walk fails
 }
 
 func (f *fakeWalker) Walk(_ context.Context, rootOID string) ([]gosnmp.SnmpPDU, error) {
+	if f.fail[rootOID] {
+		return nil, errors.New("request timeout")
+	}
 	return f.trees[rootOID], nil
 }
 func (f *fakeWalker) Close() error { return nil }
@@ -291,5 +297,24 @@ func TestSNMPPoEAmbiguousAcrossGroupsNotAttached(t *testing.T) {
 	})
 	if snap.Links[0].PoE != nil {
 		t.Fatalf("PoE from two PSE groups merged onto ifIndex 1: %+v", snap.Links[0].PoE)
+	}
+}
+
+func TestSNMPFailedWalksMarkSections(t *testing.T) {
+	for oid, want := range map[string]driver.Section{
+		oidDot1qFdb: driver.SectionFDB, oidBasePortIf: driver.SectionFDB, oidVlanFdbID: driver.SectionFDB,
+		oidLldpRem: driver.SectionLLDP, oidLldpLoc: driver.SectionLLDP,
+	} {
+		fw := &fakeWalker{trees: map[string][]gosnmp.SnmpPDU{
+			".1.3.6.1.2.1.1": {{Name: oidSysName, Type: gosnmp.OctetString, Value: []byte("sw")}},
+		}, fail: map[string]bool{oid: true}}
+		drv := NewWithFactory(func(context.Context, driver.TargetConfig) (Walker, error) { return fw, nil })
+		snap, err := drv.Poll(context.Background(), driver.TargetConfig{ID: "s1", Endpoint: "192.0.2.1", Settings: map[string]any{"version": "2c"}, ResolvedSecrets: map[string]string{"community": "public"}})
+		if err != nil {
+			t.Fatalf("%s: %v", oid, err)
+		}
+		if !slices.Contains(snap.Unavailable, want) {
+			t.Errorf("failed walk %s: unavailable=%v, want %s", oid, snap.Unavailable, want)
+		}
 	}
 }

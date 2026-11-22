@@ -65,6 +65,9 @@ type Snapshot struct {
 	Unavailable []Section `json:"unavailable,omitempty"`
 	// Stale maps each carried-over section to when its data was last fresh.
 	Stale map[Section]time.Time `json:"stale,omitempty"`
+	// MarkedOffline is set when the store rewrote this snapshot for an unreachable target;
+	// its sections are not fresh and are never carried over.
+	MarkedOffline bool `json:"marked_offline,omitempty"`
 }
 
 // Section names a snapshot slice by its JSON field name.
@@ -92,21 +95,29 @@ func (s *Snapshot) MarkUnavailable(sec Section) {
 	}
 }
 
-// CarryOver fills each unavailable section from prev, as long as that data was fresh within
-// maxAge; older data is dropped so a permanently failing call cannot freeze it forever.
+// maxGap bounds how old the previous poll may be for its fresh data to be carried once: it
+// covers slow poll intervals, but not a snapshot left from before a long stop.
+const maxGap = time.Hour
+
+// CarryOver fills each unavailable section from prev. Data fresh in prev is carried once
+// (prev within maxGap), so a single failed call never looks like everything leaving, however
+// slow the poll interval. Data prev itself carried keeps its original freshness and expires
+// after maxAge, so a permanently failing call cannot freeze it.
 func (s *Snapshot) CarryOver(prev *Snapshot, maxAge time.Duration) {
-	if prev == nil {
+	if prev == nil || prev.MarkedOffline {
 		return
 	}
 	for _, sec := range s.Unavailable {
 		freshAt, carried := prev.Stale[sec]
+		limit := maxAge
 		if !carried {
 			if slices.Contains(prev.Unavailable, sec) {
 				continue // prev had nothing fresh to give either
 			}
-			freshAt = prev.CollectedAt
+			freshAt, limit = prev.CollectedAt, max(maxAge, maxGap)
 		}
-		if s.CollectedAt.Sub(freshAt) > maxAge {
+		// A negative age means the clock stepped back: treat the data as expired.
+		if age := s.CollectedAt.Sub(freshAt); age < 0 || age > limit {
 			continue
 		}
 		switch sec {

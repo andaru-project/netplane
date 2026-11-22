@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -175,8 +176,12 @@ func TestOpenWrtReusesSession(t *testing.T) {
 	}
 	poll := func() {
 		t.Helper()
-		if _, err := drv.Poll(context.Background(), cfg); err != nil {
+		snap, err := drv.Poll(context.Background(), cfg)
+		if err != nil {
 			t.Fatalf("Poll: %v", err)
+		}
+		if !slices.Contains(snap.Unavailable, driver.SectionNeighbors) { // getHostHints is denied
+			t.Fatalf("unavailable = %v", snap.Unavailable)
 		}
 	}
 	poll()

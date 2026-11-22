@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/andrebrait/netplane/internal/driver"
@@ -115,5 +116,23 @@ func TestAndaruRefusesTokenOverPlainHTTP(t *testing.T) {
 	cfg.Settings = map[string]any{"allow_insecure_http": true}
 	if err := New().ValidateConfig(cfg); err != nil {
 		t.Fatalf("allow_insecure_http: %v", err)
+	}
+}
+
+func TestAndaruFailedConfigMarksSections(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/status/links" {
+			_, _ = w.Write([]byte(`{"items":[]}`))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	snap, err := New().Poll(context.Background(), driver.TargetConfig{ID: "a1", Endpoint: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(snap.Unavailable, driver.SectionZones) || !slices.Contains(snap.Unavailable, driver.SectionFirewalls) {
+		t.Fatalf("unavailable = %v", snap.Unavailable)
 	}
 }

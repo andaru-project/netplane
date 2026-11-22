@@ -131,6 +131,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 	}
 
 	s.recordSuccess(cfg, now)
+	if len(snap.Unavailable) > 0 {
+		s.logger.Warn("target polled with sections unavailable; keeping their last data", "target_id", cfg.ID, "sections", snap.Unavailable)
+	}
 
 	if s.bus != nil {
 		for _, ev := range events.DiffSnapshots(prev, snap) {

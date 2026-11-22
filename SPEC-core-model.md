@@ -155,7 +155,20 @@ type Snapshot struct {
 	Radios          []model.WirelessRadio
 	WirelessUplinks []model.WirelessUplink
 	Clients         []model.Client
+
+	Unavailable   []Section             // sections the driver could not refresh (MarkUnavailable)
+	Stale         map[Section]time.Time // carried sections -> when their data was last fresh
+	MarkedOffline bool                  // rewritten by MarkTargetOffline; never a carry-over source
 }
+
+// Section names a snapshot slice by its JSON field ("segments", "zones", "fdb", "lldp",
+// "neighbors", "dhcp", "gateways", "vpns", "firewalls", "radios", "clients").
+type Section string
+
+// CarryOver (called by the store before saving) fills unavailable sections from the previous
+// snapshot: data fresh there is carried once (if that poll is under an hour old); data it had
+// itself carried keeps its original freshness and expires after 15 minutes.
+func (s *Snapshot) CarryOver(prev *Snapshot, maxAge time.Duration)
 
 // Driver is implemented by every platform integration.
 type Driver interface {
@@ -212,7 +225,7 @@ type ConfigDriver interface {
 - Every Go file starts with `// SPDX-License-Identifier: AGPL-3.0-or-later`.
 - Every JSON Schema file under `schema/` carries `"$comment": "SPDX-License-Identifier: Apache-2.0"`.
 - Normalize all MAC addresses via `model.NormalizeMAC` (`aa:bb:cc:dd:ee:ff`); a malformed MAC never fails a poll: optional MAC fields are cleared and MAC-keyed FDB/client entries are dropped. Empty slices serialize as `[]` rather than `null` for consistent wire contracts.
-- A driver that cannot refresh one section (a best-effort call failed) marks it in `Snapshot.Unavailable` instead of dropping it or failing the poll; the store carries that section over from the previous snapshot, recording when it was last fresh in `Snapshot.Stale`, for at most 15 minutes. So a failed client list or neighbour table does not look like everything leaving.
+- A driver that cannot refresh one section (a best-effort call failed) marks it in `Snapshot.Unavailable` instead of dropping it or failing the poll; the store carries that section over from the previous snapshot (once for data fresh in that poll, at most 15 minutes for data already carried), recording when it was last fresh in `Snapshot.Stale`. Carried clients keep their last online state for that time. Device fields derived from a failed call (role, capabilities) are still computed from what the poll got. So a failed client list or neighbour table does not look like everything leaving.
 - A target whose polls fail twice in a row has its stored devices and clients marked offline (emitting `device.offline` / `client.left`); the stored config, snapshot and device rows of targets removed from or disabled in the config (and the stored topology) are pruned at startup, while their link and diagnostic history ages out through retention.
 - Optional hardware telemetry fields use pointers (`*bool`, `*float64`, `*SfpDom`, `*PortPoE`) so absence means "unsupported/unavailable", never a false zero.
 

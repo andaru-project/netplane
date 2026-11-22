@@ -421,6 +421,7 @@ func (s *Store) MarkTargetOffline(ctx context.Context, targetID string, at time.
 	}
 	_ = json.Unmarshal([]byte(raw), curr) // same bytes, cannot fail now
 	curr.CollectedAt = at.UTC()
+	curr.MarkedOffline = true // its sections are not fresh: never carry them over
 	for i := range curr.Devices {
 		curr.Devices[i].Online = false
 	}
