@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -69,6 +69,27 @@ func LoadFile(path string) (*Config, error) {
 // hostNameRe matches a bare DNS host name: dot-separated labels of letters, digits, '-'
 // and '_', not starting or ending with '-'.
 var hostNameRe = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$`)
+
+// canonicalOrigin returns o as a browser serializes an Origin (lowercase scheme and host, no
+// default port), because trusted origins are compared to the Origin header byte for byte.
+func canonicalOrigin(o string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(o))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("want scheme://host[:port] with an http or https scheme")
+	}
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	return u.Scheme + "://" + host, nil
+}
 
 // TokenEnv is the environment variable read for the API token when the config names none.
 const TokenEnv = "NETPLANE_API_TOKEN"
@@ -141,9 +162,11 @@ func Parse(data []byte, lookupEnv func(string) (string, bool)) (*Config, error) 
 		fc.Server.AllowedHosts[i] = n
 	}
 	for i, o := range fc.Server.TrustedOrigins {
-		if err := http.NewCrossOriginProtection().AddTrustedOrigin(o); err != nil {
-			return nil, fmt.Errorf("server.trusted_origins[%d]: %w", i, err)
+		c, err := canonicalOrigin(o)
+		if err != nil {
+			return nil, fmt.Errorf("server.trusted_origins[%d] %q: %w", i, o, err)
 		}
+		fc.Server.TrustedOrigins[i] = c
 	}
 	if fc.Server.APITokenSecret != "" {
 		envName := stripEnvSyntax(fc.Server.APITokenSecret)

@@ -35,8 +35,8 @@ type Options struct {
 	APIToken            string
 	TrustIngressProxy   bool
 	TrustedIngressCIDRs []string
-	AllowedHosts        []string // extra Host names accepted without an API token; lowercase, no trailing dot
-	TrustedOrigins      []string // extra origins (scheme://host[:port]) allowed to send writes
+	AllowedHosts        []string // extra Host names accepted without an API token
+	TrustedOrigins      []string // extra origins allowed to send writes, as browsers serialize them
 	WebFS               fs.FS    // optional embedded SPA root containing index.html
 	Logger              *slog.Logger
 }
@@ -89,6 +89,10 @@ func New(opts Options) *Server {
 	}
 
 	s.registerRoutes()
+	s.opts.AllowedHosts = make([]string, len(opts.AllowedHosts)) // never alias the caller's slice
+	for i, h := range opts.AllowedHosts {                        // config.Parse validates; also accept callers that skip it
+		s.opts.AllowedHosts[i] = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+	}
 	for _, o := range opts.TrustedOrigins {
 		if err := s.csrf.AddTrustedOrigin(o); err != nil {
 			opts.Logger.Warn("ignoring invalid trusted origin", "origin", o, "err", err) // config.Parse validates

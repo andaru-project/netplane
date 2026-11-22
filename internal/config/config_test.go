@@ -164,8 +164,14 @@ func TestAllowedHostsNormalizedAndValidated(t *testing.T) {
 
 func TestTrustedOriginsValidated(t *testing.T) {
 	lookup := func(string) (string, bool) { return "", false }
-	if _, err := Parse([]byte("server:\n  trusted_origins: [\"https://netplane.example\"]\n"), lookup); err != nil {
-		t.Fatal(err)
+	cfg, err := Parse([]byte("server:\n  trusted_origins: [\"HTTPS://Netplane.Example:443/\", \"http://[2001:DB8::1]:8099\"]\n"), lookup)
+	if err != nil || cfg.Server.TrustedOrigins[0] != "https://netplane.example" || cfg.Server.TrustedOrigins[1] != "http://[2001:db8::1]:8099" {
+		t.Fatalf("trusted_origins = %v, %v", cfg, err)
+	}
+	for _, bad := range []string{"https://u@netplane.example", "https://netplane.example/path", "ftp://x"} {
+		if _, err := Parse([]byte("server:\n  trusted_origins: [\""+bad+"\"]\n"), lookup); err == nil {
+			t.Errorf("trusted origin %q accepted", bad)
+		}
 	}
 	if _, err := Parse([]byte("server:\n  trusted_origins: [\"netplane.example\"]\n"), lookup); err == nil {
 		t.Fatal("an origin without a scheme was accepted")

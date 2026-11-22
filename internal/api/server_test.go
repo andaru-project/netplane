@@ -482,7 +482,10 @@ func TestBrowserGuards(t *testing.T) {
 		{"192.0.2.10:8099", "", ""}:                                 false, // non-browser client
 		{"127.0.0.1:8099", "http://evil.example", "same-origin"}:    false,
 		{"127.0.0.1:8099", "https://netplane.example", "same-site"}: false, // trusted origin
-		{"127.0.0.1:8099", "https://example.com", ""}:               true,  // allowed_hosts is not an origin list
+		{"127.0.0.1:8099", "https://netplane.example", ""}:          false, // trusted, older browser
+		{"127.0.0.1:8099", "https://other.example", ""}:             true,
+		{"192.0.2.10:80", "http://192.0.2.10", ""}:                  true, // exact Host compare without Sec-Fetch-Site
+		{"127.0.0.1:8099", "https://example.com", ""}:               true, // allowed_hosts is not an origin list
 	} {
 		for _, srv := range []http.Handler{open, tok} {
 			req := httptest.NewRequest("POST", "/api/v1/diagnostics", strings.NewReader(`{"kind":"fdb_lookup","target":"192.0.2.55"}`))
