@@ -4,6 +4,9 @@ description: "Open network configuration, information, and diagnostics plane for
 version: "0.1.0"
 slug: "netplane"
 url: "https://github.com/andrebrait/netplane"
+# Published by .github/workflows/addon-image.yml for every v<version> tag: one multi-arch
+# manifest (amd64, arm64), from which Supervisor pulls its own platform.
+image: "ghcr.io/andrebrait/netplane"
 arch:
   - amd64
   - aarch64
