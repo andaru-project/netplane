@@ -126,6 +126,13 @@ func Parse(data []byte, lookupEnv func(string) (string, bool)) (*Config, error) 
 		}
 		retention = d
 	}
+	for i, h := range fc.Server.AllowedHosts {
+		n := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+		if n == "" || strings.ContainsAny(n, ":/*[] \t") {
+			return nil, fmt.Errorf("server.allowed_hosts[%d] %q: want a bare host name (no scheme, port, path or wildcard)", i, h)
+		}
+		fc.Server.AllowedHosts[i] = n
+	}
 	if fc.Server.APITokenSecret != "" {
 		envName := stripEnvSyntax(fc.Server.APITokenSecret)
 		if val, ok := lookupEnv(envName); ok && val != "" {

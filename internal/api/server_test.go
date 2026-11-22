@@ -448,7 +448,8 @@ func TestBrowserGuards(t *testing.T) {
 	for host, want := range map[string]int{
 		"192.0.2.10:8099": http.StatusOK, "[2001:db8::1]:8099": http.StatusOK, "netplane": http.StatusOK,
 		"netplane.lan": http.StatusOK, "nas.home.arpa": http.StatusOK, "Example.COM.": http.StatusOK,
-		"evil.example.net": http.StatusForbidden, "": http.StatusForbidden,
+		"NAS.LAN": http.StatusOK, "[2001:db8::1]": http.StatusOK, "netplane.localhost:8099": http.StatusOK,
+		"evil.example.net": http.StatusMisdirectedRequest, "": http.StatusMisdirectedRequest,
 	} {
 		req := httptest.NewRequest("GET", "/api/v1/devices", nil)
 		req.Host = host
@@ -469,17 +470,48 @@ func TestBrowserGuards(t *testing.T) {
 		t.Fatalf("public Host with a token: %d", rec.Code)
 	}
 
-	// A cross-origin write is refused; a same-origin one and an Origin-less one pass the guard.
-	for origin, want := range map[string]int{"http://evil.example": http.StatusForbidden, "null": http.StatusForbidden, "http://192.0.2.10:8099": http.StatusOK, "": http.StatusOK} {
-		req := httptest.NewRequest("POST", "/api/v1/diagnostics", strings.NewReader(`{"kind":"fdb_lookup","target":"192.0.2.55"}`))
-		req.Host = "192.0.2.10:8099"
-		if origin != "" {
-			req.Header.Set("Origin", origin)
+	// Cross-origin writes are refused, with or without a token.
+	type wcase struct{ host, origin, fetchSite string }
+	for c, refused := range map[wcase]bool{
+		{"192.0.2.10:8099", "http://evil.example", ""}:                true,
+		{"192.0.2.10:8099", "null", ""}:                               true,
+		{"192.0.2.10:8099", "http://u@192.0.2.10:8099", ""}:           true,
+		{"192.0.2.10:8099", "http://192.0.2.10:8099", ""}:             false,
+		{"192.0.2.10:80", "http://192.0.2.10", ""}:                    false, // default port filled in
+		{"192.0.2.10:8099", "", ""}:                                   false,
+		{"127.0.0.1:8099", "https://example.com", ""}:                 false, // allowed host behind a proxy
+		{"127.0.0.1:8099", "https://netplane.example", "same-origin"}: false,
+	} {
+		for _, srv := range []http.Handler{open, tok} {
+			req := httptest.NewRequest("POST", "/api/v1/diagnostics", strings.NewReader(`{"kind":"fdb_lookup","target":"192.0.2.55"}`))
+			req.Host = c.host
+			req.Header.Set("Authorization", "Bearer secret-api-tok")
+			if c.origin != "" {
+				req.Header.Set("Origin", c.origin)
+			}
+			if c.fetchSite != "" {
+				req.Header.Set("Sec-Fetch-Site", c.fetchSite)
+			}
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+			if got := rec.Code == http.StatusForbidden; got != refused {
+				t.Errorf("POST %+v: got %d", c, rec.Code)
+			}
+		}
+	}
+
+	// The ingress exemption needs the trusted peer and a Supervisor ingress path.
+	for path, want := range map[string]int{"/api/hassio_ingress/abc": http.StatusOK, "": http.StatusMisdirectedRequest} {
+		req := httptest.NewRequest("GET", "/api/v1/devices", nil)
+		req.Host = "evil.example.net"
+		req.RemoteAddr = "172.30.32.2:40000"
+		if path != "" {
+			req.Header.Set("X-Ingress-Path", path)
 		}
 		rec := httptest.NewRecorder()
 		open.ServeHTTP(rec, req)
-		if (rec.Code == http.StatusForbidden) != (want == http.StatusForbidden) {
-			t.Errorf("POST with Origin %q: got %d", origin, rec.Code)
+		if rec.Code != want {
+			t.Errorf("trusted peer with ingress path %q: got %d, want %d", path, rec.Code, want)
 		}
 	}
 }

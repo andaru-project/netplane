@@ -148,3 +148,16 @@ func TestExampleConfigParses(t *testing.T) {
 		t.Fatalf("example config = (%+v, %v)", cfg, err)
 	}
 }
+
+func TestAllowedHostsNormalizedAndValidated(t *testing.T) {
+	lookup := func(string) (string, bool) { return "", false }
+	cfg, err := Parse([]byte("server:\n  allowed_hosts: [\" Netplane.Example.NET. \"]\n"), lookup)
+	if err != nil || cfg.Server.AllowedHosts[0] != "netplane.example.net" {
+		t.Fatalf("allowed_hosts = %v, %v", cfg, err)
+	}
+	for _, bad := range []string{"netplane.example.net:8099", "https://netplane.example.net", "*.example.net", ""} {
+		if _, err := Parse([]byte("server:\n  allowed_hosts: [\""+bad+"\"]\n"), lookup); err == nil {
+			t.Errorf("allowed_hosts %q accepted", bad)
+		}
+	}
+}
