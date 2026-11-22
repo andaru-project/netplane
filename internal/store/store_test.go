@@ -477,4 +477,12 @@ func TestSaveSnapshotCarryWindowFollowsPollInterval(t *testing.T) {
 	if _, err := st.SaveSnapshot(ctx, s); err != nil || len(s.Clients) != 1 {
 		t.Fatalf("clients = %v, %v", s.Clients, err)
 	}
+	// Fresh again, then 61 minutes later on a 20-minute interval: past three intervals.
+	if _, err := st.SaveSnapshot(ctx, &driver.Snapshot{TargetID: "u1", CollectedAt: t0.Add(50 * time.Minute), Clients: []model.Client{{MAC: "aa:aa:aa:aa:aa:01"}}}); err != nil {
+		t.Fatal(err)
+	}
+	late := &driver.Snapshot{TargetID: "u1", CollectedAt: t0.Add(111 * time.Minute), PollInterval: 20 * time.Minute, Unavailable: []driver.Section{driver.SectionClients}}
+	if _, err := st.SaveSnapshot(ctx, late); err != nil || len(late.Clients) != 0 {
+		t.Fatalf("carried past three intervals: %v, %v", late.Clients, err)
+	}
 }
