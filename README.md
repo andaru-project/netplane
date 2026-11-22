@@ -59,13 +59,13 @@ docker run --rm -p 8099:8099 -v netplane-data:/data \
 
 The container reads its configuration from `/config/netplane.yaml`. Secrets the configuration references as `${NAME}` are resolved from environment variables, so pass them with `--env-file` (or `-e NAME=value`); in the Home Assistant Add-on, set them in the add-on's `secrets` option instead.
 
-To install the add-on, add `https://github.com/andrebrait/netplane` under Settings → Add-ons → Add-on store → Repositories, then install netplane. Supervisor pulls the published image `ghcr.io/andrebrait/netplane-{amd64,aarch64}` at the add-on's version.
+To install the add-on, add `https://github.com/andrebrait/netplane` under Settings → Add-ons → Add-on store → Repositories, then install netplane. Supervisor pulls the published multi-arch image `ghcr.io/andrebrait/netplane` (amd64 and arm64) at the add-on's version; the same image runs standalone with `docker run`.
 
 Releasing: Supervisor offers whatever `version` the default branch holds, so publish the images before the version bump reaches `main`:
 
 1. Open a pull request that sets `version` in `ha-addon/config.yaml`.
 2. Push the tag `v<version>` on that pull request's head commit. The [Add-on image](.github/workflows/addon-image.yml) workflow checks the tag against the file and publishes both images.
-3. The first time only, make both GHCR packages (`netplane-amd64`, `netplane-aarch64`) public under package settings → Change visibility, so Supervisor can pull them anonymously.
+3. The first time only, make the GHCR package `netplane` public under package settings → Change visibility, so Supervisor can pull it anonymously.
 4. Merge the pull request.
 
 Building the image locally needs BuildKit (the default since Docker 23).

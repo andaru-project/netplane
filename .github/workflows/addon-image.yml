@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 name: Add-on image
 
-# Publishes ghcr.io/<owner>/netplane-{amd64,aarch64}:<version> for Home Assistant, which pulls
-# the image named in ha-addon/config.yaml at the tag equal to its `version`. Pull requests
+# Publishes the multi-arch image ghcr.io/<owner>/netplane:<version> (linux/amd64, linux/arm64)
+# for Home Assistant, which pulls the image named in ha-addon/config.yaml at the tag equal to
+# its `version`, and for standalone `docker run`. Pull requests
 # build both images without pushing: the image depends on the whole tree.
 on:
   push:
@@ -39,13 +40,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        include:
-          - arch: amd64
-            platform: linux/amd64
-          - arch: aarch64
-            platform: linux/arm64
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -60,11 +54,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: ${{ matrix.platform }}
-          build-args: |
-            VERSION=${{ needs.version.outputs.version }}
-            BUILD_ARCH=${{ matrix.arch }}
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ needs.version.outputs.version }}
           push: ${{ github.event_name == 'push' }}
-          tags: ghcr.io/${{ needs.version.outputs.owner }}/netplane-${{ matrix.arch }}:${{ needs.version.outputs.version }}
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          tags: ghcr.io/${{ needs.version.outputs.owner }}/netplane:${{ needs.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

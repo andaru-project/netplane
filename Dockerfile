@@ -28,10 +28,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 
 FROM alpine:3.21
 ARG VERSION=0.1.0
-# The add-on architecture name (amd64, aarch64), set by the release workflow.
-ARG BUILD_ARCH
-# Home Assistant Supervisor reads these labels from add-on images.
-LABEL io.hass.type="addon" io.hass.version="${VERSION}" io.hass.arch="${BUILD_ARCH}" \
+# Home Assistant Supervisor reads these labels from add-on images. One multi-arch manifest
+# serves every platform, so there is no per-platform io.hass.arch label.
+LABEL io.hass.type="addon" io.hass.version="${VERSION}" \
       org.opencontainers.image.source="https://github.com/andrebrait/netplane" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
 RUN apk add --no-cache ca-certificates tzdata
