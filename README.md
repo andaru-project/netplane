@@ -34,7 +34,7 @@ export NETPLANE_API_TOKEN="$(openssl rand -hex 32)"  # the example requires a be
 ./bin/netplane serve --config netplane.local.yaml --db netplane.db --listen :8099
 ```
 
-The example configuration requires a bearer token (`api_token_secret`). Remove it only when the server listens on a loopback address; in the Home Assistant Add-on, set the `api_token` option instead.
+The example configuration requires a bearer token (`api_token_secret`). Remove it only when the server listens on a loopback address; in the Home Assistant Add-on, set the `api_token` option instead. Without a token, the server answers only requests addressed to an IP address, a single-label name (`netplane`) or a private suffix (`.local`, `.lan`, `.home.arpa`, `.internal`), so a malicious web page cannot reach it by DNS rebinding; list any other names under `server.allowed_hosts`. Writes whose `Origin` names another host are always refused.
 
 Drivers refuse to send credentials to a plain `http://` endpoint unless the target sets `allow_insecure_http: true` under `settings`. Use `https://` (or a `unix://` socket) where the device supports it.
 

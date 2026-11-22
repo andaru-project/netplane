@@ -110,6 +110,7 @@ func newTestServer(t *testing.T, token string) (*Server, *events.Bus) {
 		Targets:           []driver.TargetConfig{target},
 		APIToken:          token,
 		TrustIngressProxy: true,
+		AllowedHosts:      []string{"example.com"}, // httptest.NewRequest's default Host
 		WebFS:             webFS,
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -439,5 +440,46 @@ func TestDiagnosticBodyReadTimeout(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestBrowserGuards(t *testing.T) {
+	open, _ := newTestServer(t, "")
+	for host, want := range map[string]int{
+		"192.0.2.10:8099": http.StatusOK, "[2001:db8::1]:8099": http.StatusOK, "netplane": http.StatusOK,
+		"netplane.lan": http.StatusOK, "nas.home.arpa": http.StatusOK, "Example.COM.": http.StatusOK,
+		"evil.example.net": http.StatusForbidden, "": http.StatusForbidden,
+	} {
+		req := httptest.NewRequest("GET", "/api/v1/devices", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		open.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("token-less Host %q: got %d, want %d", host, rec.Code, want)
+		}
+	}
+
+	// With a token, public names are fine (DNS rebinding cannot carry the token).
+	tok, _ := newTestServer(t, "secret-api-tok")
+	req := httptest.NewRequest("GET", "/api/v1/health", nil)
+	req.Host = "netplane.example.net"
+	rec := httptest.NewRecorder()
+	tok.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public Host with a token: %d", rec.Code)
+	}
+
+	// A cross-origin write is refused; a same-origin one and an Origin-less one pass the guard.
+	for origin, want := range map[string]int{"http://evil.example": http.StatusForbidden, "null": http.StatusForbidden, "http://192.0.2.10:8099": http.StatusOK, "": http.StatusOK} {
+		req := httptest.NewRequest("POST", "/api/v1/diagnostics", strings.NewReader(`{"kind":"fdb_lookup","target":"192.0.2.55"}`))
+		req.Host = "192.0.2.10:8099"
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		open.ServeHTTP(rec, req)
+		if (rec.Code == http.StatusForbidden) != (want == http.StatusForbidden) {
+			t.Errorf("POST with Origin %q: got %d", origin, rec.Code)
+		}
 	}
 }

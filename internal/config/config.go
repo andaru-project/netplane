@@ -24,6 +24,7 @@ type ServerConfig struct {
 	Retention           string   `yaml:"retention"`
 	TrustIngressProxy   bool     `yaml:"trust_ingress_proxy"`
 	TrustedIngressCIDRs []string `yaml:"trusted_ingress_cidrs"`
+	AllowedHosts        []string `yaml:"allowed_hosts"`
 	APITokenSecret      string   `yaml:"api_token_secret"`
 	ResolvedAPIToken    string   `yaml:"-"`
 }

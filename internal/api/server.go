@@ -35,7 +35,8 @@ type Options struct {
 	APIToken            string
 	TrustIngressProxy   bool
 	TrustedIngressCIDRs []string
-	WebFS               fs.FS // optional embedded SPA root containing index.html
+	AllowedHosts        []string // extra public host names accepted without an API token
+	WebFS               fs.FS    // optional embedded SPA root containing index.html
 	Logger              *slog.Logger
 }
 
@@ -85,7 +86,7 @@ func New(opts Options) *Server {
 	}
 
 	s.registerRoutes()
-	s.handler = s.withIngress(s.withAuth(s.mux))
+	s.handler = s.withBrowserGuards(s.withIngress(s.withAuth(s.mux)))
 	return s
 }
 
