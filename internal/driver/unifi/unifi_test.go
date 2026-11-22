@@ -4,9 +4,11 @@ package unifi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/andrebrait/netplane/internal/driver"
@@ -156,3 +158,50 @@ func TestFlexFloatDropsNonfinite(t *testing.T) {
 }
 
 func ptr(v float64) *float64 { return &v }
+
+// TestUniFiReusesLogin checks that the login cookie serves many polls and that a 401 triggers
+// exactly one re-login.
+func TestUniFiReusesLogin(t *testing.T) {
+	var mu sync.Mutex
+	logins, token := 0, ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path == "/api/auth/login" {
+			logins++
+			token = fmt.Sprintf("session-%d", logins)
+			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: token, Path: "/"})
+			return
+		}
+		if c, err := r.Cookie("TOKEN"); err != nil || c.Value != token {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer srv.Close()
+
+	drv := New()
+	cfg := driver.TargetConfig{
+		ID: "u1", Driver: "unifi", Endpoint: srv.URL,
+		Settings:        map[string]any{"allow_insecure_http": true},
+		ResolvedSecrets: map[string]string{"username": "admin", "password": "pw"},
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := drv.Poll(context.Background(), cfg); err != nil {
+			t.Fatalf("Poll %d: %v", i, err)
+		}
+	}
+	if logins != 1 {
+		t.Fatalf("logins after 3 polls = %d, want 1", logins)
+	}
+	mu.Lock()
+	token = "revoked" // the controller expired the session
+	mu.Unlock()
+	if _, err := drv.Poll(context.Background(), cfg); err != nil {
+		t.Fatalf("Poll after expiry: %v", err)
+	}
+	if logins != 2 {
+		t.Fatalf("logins after expiry = %d, want 2", logins)
+	}
+}
