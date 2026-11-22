@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "netplane-client"
 version = "0.1.0"
 description = "Async Python client for the Andaru Netplane HTTP/SSE wire API"
-license = { text = "Apache-2.0" }
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = ["aiohttp>=3.9"]
 

@@ -1,8 +1,10 @@
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0-or-later
 name: PyPI
 
-# Publishes clients/python to PyPI as netplane-client for every client-v<version> tag, through
-# PyPI trusted publishing (no token: PyPI trusts this workflow in the "pypi" environment).
+# Publishes clients/python to PyPI as netplane-client for every client-v<version> tag on a
+# commit already on main, through PyPI trusted publishing (no token: PyPI trusts this workflow
+# in the "pypi" environment). A PyPI version can never be uploaded again, so the tag is tested
+# and checked against the package version first.
 # Pull requests that touch the client build it without publishing.
 on:
   push:
@@ -18,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -29,9 +33,14 @@ jobs:
             echo "tag ${GITHUB_REF_NAME} does not match clients/python version ${version}"
             exit 1
           fi
+          git merge-base --is-ancestor HEAD origin/main || { echo "tag ${GITHUB_REF_NAME} is not on main"; exit 1; }
+      - name: Test the client
+        run: |
+          python3 -m pip install --quiet aiohttp
+          PYTHONPATH=clients/python python3 -m unittest discover -s clients/python/tests -v
       - name: Build the sdist and wheel
         run: |
-          python3 -m pip install --quiet build
+          python3 -m pip install --quiet build==1.6.1
           python3 -m build clients/python --outdir dist
       - uses: actions/upload-artifact@v4
         with:
@@ -50,4 +59,4 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

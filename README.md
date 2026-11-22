@@ -71,11 +71,10 @@ Releasing: Supervisor offers whatever `version` the default branch holds, so pub
 
 Building the image locally needs BuildKit (the default since Docker 23).
 
-Releasing the Python client: the integration's `manifest.json` pins `netplane-client` to an exact version, so publish the client first:
+Releasing the Python client: PyPI never accepts a version twice, so only a commit on `main` is published:
 
-1. Open a pull request that sets `version` in `clients/python/pyproject.toml` and the `netplane-client==<version>` requirement in `ha-integration/custom_components/netplane/manifest.json`.
-2. Push the tag `client-v<version>` on that pull request's head commit. The [PyPI](.github/workflows/pypi.yml) workflow checks the tag against the file and publishes the package through PyPI trusted publishing. The trusted publisher (workflow `pypi.yml`, environment `pypi`) must be registered on PyPI first.
-3. Merge the pull request.
+1. Open a pull request that sets `version` in `clients/python/pyproject.toml` and the `netplane-client==<version>` requirement in `ha-integration/custom_components/netplane/manifest.json`, and merge it.
+2. Push the tag `client-v<version>` on the merge commit. The [PyPI](.github/workflows/pypi.yml) workflow checks that the tag matches the file and is on `main`, runs the client tests, and publishes the package through PyPI trusted publishing. The trusted publisher (workflow `pypi.yml`, environment `pypi`) must be registered on PyPI first.
 
 Home Assistant Add-on metadata lives in [ha-addon/config.yaml](ha-addon/config.yaml) (`ingress: true`, port `8099`), and the upstreamable Apache-2.0 Home Assistant integration lives in [ha-integration/custom_components/netplane](ha-integration/custom_components/netplane).
 
