@@ -218,6 +218,12 @@ func (s *Store) PruneTargets(ctx context.Context, keep map[string]bool) error {
 			return err
 		}
 	}
+	if len(stale) > 0 {
+		// The stored graph still holds the pruned devices; readers re-solve from state without it.
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM topology_snapshots`); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -502,9 +508,20 @@ func dedupeDevices(in []model.Device) []model.Device {
 	return out
 }
 
+// betterClient reports whether a is the better base record than b: attached beats
+// unattached, then online beats offline, then the more recently seen wins.
+func betterClient(a, b model.Client) bool {
+	if (a.AttachedDeviceID != "") != (b.AttachedDeviceID != "") {
+		return a.AttachedDeviceID != ""
+	}
+	if a.Online != b.Online {
+		return a.Online
+	}
+	return a.LastSeen.After(b.LastSeen)
+}
+
 // mergeClients folds clients reported by several targets (e.g. a router's DHCP view and an
-// AP's association list) into one record per MAC, preferring the record that knows where
-// the client is attached.
+// AP's association list) into one record per MAC, based on the best record (see betterClient).
 func mergeClients(in []model.Client) []model.Client {
 	idx := make(map[string]int, len(in))
 	out := make([]model.Client, 0, len(in))
@@ -516,7 +533,7 @@ func mergeClients(in []model.Client) []model.Client {
 			continue
 		}
 		m := &out[i]
-		if m.AttachedDeviceID == "" && c.AttachedDeviceID != "" {
+		if betterClient(c, *m) {
 			*m, c = c, *m
 		}
 		m.Online = m.Online || c.Online

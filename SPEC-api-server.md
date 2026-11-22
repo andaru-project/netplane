@@ -49,7 +49,7 @@ cmd/
 
 ## 5. API Contract Summary
 
-- `GET /api/v1/health` → `{"status":"ok","version":"...","targets":{...}}`
+- `GET /api/v1/health` → `{"status":"ok","version":"..."}`, plus `"targets":{...}` (per-target polling status) for authenticated callers; never requires a token
 - `GET /api/v1/openapi.json` → embedded OpenAPI 3.1 JSON
 - `GET /api/v1/state` → full `store.NetworkState`
 - `GET /api/v1/devices` → `{"items":[Device...]}`

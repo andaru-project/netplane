@@ -195,18 +195,23 @@ func TestFailingTargetGoesOffline(t *testing.T) {
 	if online() {
 		t.Fatal("device still online after consecutive failures")
 	}
+	_ = sched.PollOnce(ctx, cfg) // past the threshold: idempotent, no second event
 	state, err := st.LoadState(ctx)
 	if err != nil || len(state.Devices) != 1 || state.Devices[0].Online {
 		t.Fatalf("state devices = %+v err=%v", state.Devices, err)
 	}
-	for {
+	offline := 0
+	for done := false; !done; {
 		select {
 		case ev := <-evCh:
 			if ev.Type == events.DeviceOffline {
-				return
+				offline++
 			}
 		default:
-			t.Fatal("no device.offline event")
+			done = true
 		}
+	}
+	if offline != 1 {
+		t.Fatalf("device.offline events = %d, want 1", offline)
 	}
 }

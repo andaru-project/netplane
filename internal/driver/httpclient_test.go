@@ -52,3 +52,12 @@ func TestNewHTTPClientRefusesCrossHostRedirect(t *testing.T) {
 		t.Fatalf("same-host redirect not followed: %s", resp.Request.URL.Path)
 	}
 }
+
+func TestNewHTTPClientRefusesHTTPSDowngrade(t *testing.T) {
+	c := NewHTTPClient(TargetConfig{}, time.Second)
+	from, _ := http.NewRequest(http.MethodGet, "https://192.0.2.1/api", nil)
+	to, _ := http.NewRequest(http.MethodGet, "http://192.0.2.1/api", nil)
+	if err := c.CheckRedirect(to, []*http.Request{from}); err == nil {
+		t.Fatal("expected https -> http redirect to be refused")
+	}
+}

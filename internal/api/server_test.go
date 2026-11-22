@@ -179,6 +179,16 @@ func TestAPIEndpointsAndIngressAndAuth(t *testing.T) {
 		t.Fatalf("authenticated health missing targets: %s", rec.Body.String())
 	}
 
+	// The trusted ingress proxy counts as authenticated for health too.
+	req = httptest.NewRequest("GET", "/api/hassio_ingress/abc123/api/v1/health", nil)
+	req.RemoteAddr = "172.30.32.2:40000"
+	req.Header.Set("X-Ingress-Path", "/api/hassio_ingress/abc123")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `"targets"`) {
+		t.Fatalf("ingress health missing targets: %s", rec.Body.String())
+	}
+
 	// Escaped slashes in an interface name still route after the ingress prefix is stripped.
 	req = httptest.NewRequest("GET", "/api/hassio_ingress/abc123/api/v1/devices/mock:02:51:0a:00:00:01/links/Gi1%2F0%2F1/samples", nil)
 	req.RemoteAddr = "172.30.32.2:40000"

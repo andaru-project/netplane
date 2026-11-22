@@ -33,6 +33,8 @@ type Tab = 'devices' | 'topology' | 'clients' | 'diagnostics';
 
 export function App() {
   const [tab, setTab] = useState<Tab>('devices');
+  // Bumped to reopen the event stream after the browser gives up (e.g. a 401 before the token prompt).
+  const [sseEpoch, setSseEpoch] = useState(0);
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<DeviceDetail | null>(null);
   const [topology, setTopology] = useState<TopologyGraph | null>(null);
@@ -74,7 +76,13 @@ export function App() {
   useEffect(() => {
     const es = new EventSource('./api/v1/events/stream');
     es.onopen = () => setSseConnected(true);
-    es.onerror = () => setSseConnected(false);
+    let retry: number | undefined;
+    es.onerror = () => {
+      setSseConnected(false);
+      if (es.readyState === EventSource.CLOSED) {
+        retry = window.setTimeout(() => setSseEpoch((n) => n + 1), 5000);
+      }
+    };
     const onEvent = (e: MessageEvent<string>) => {
       try {
         const parsed = JSON.parse(e.data) as NetplaneEvent;
@@ -98,11 +106,16 @@ export function App() {
       'gateway.up',
       'gateway.down',
       'topology.updated',
+      'client.joined',
+      'client.left',
     ]) {
       es.addEventListener(t, onEvent as EventListener);
     }
-    return () => es.close();
-  }, [refreshAll]);
+    return () => {
+      window.clearTimeout(retry);
+      es.close();
+    };
+  }, [refreshAll, sseEpoch]);
 
   const openDevice = async (id: string) => {
     try {

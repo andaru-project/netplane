@@ -301,3 +301,31 @@ func TestLoadStateMergesOverlappingTargets(t *testing.T) {
 		t.Fatalf("merged client = %+v", c)
 	}
 }
+
+func TestMergeClientsPrefersFreshAssociation(t *testing.T) {
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	got := mergeClients([]model.Client{
+		{MAC: "aa:bb:cc:dd:ee:ff", AttachedDeviceID: "ap-a", LastSeen: t0},
+		{MAC: "aa:bb:cc:dd:ee:ff", AttachedDeviceID: "ap-b", Online: true, LastSeen: t0.Add(5 * time.Minute)},
+	})
+	if len(got) != 1 || got[0].AttachedDeviceID != "ap-b" || !got[0].Online {
+		t.Fatalf("merged = %+v", got)
+	}
+}
+
+func TestPruneTargetsDropsStoredTopology(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	if _, err := st.SaveSnapshot(ctx, &driver.Snapshot{TargetID: "gone"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveTopology(ctx, time.Now(), map[string]any{"nodes": []string{"gone"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PruneTargets(ctx, map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := st.LoadTopologyRaw(ctx); err != nil || ok {
+		t.Fatalf("stored topology survived prune: ok=%v err=%v", ok, err)
+	}
+}

@@ -114,16 +114,20 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if s.isTrustedIngressPeer(r.RemoteAddr) && sanitizeIngressPath(r.Header.Get("X-Ingress-Path")) != "" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if !s.validToken(r) {
+		if !s.authenticated(r) {
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "valid bearer token required")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// authenticated reports whether r may use token-protected routes: no token is configured,
+// it comes from the trusted ingress proxy, or it carries the token.
+func (s *Server) authenticated(r *http.Request) bool {
+	return s.opts.APIToken == "" ||
+		(s.isTrustedIngressPeer(r.RemoteAddr) && sanitizeIngressPath(r.Header.Get("X-Ingress-Path")) != "") ||
+		s.validToken(r)
 }
 
 // validToken accepts the API token as a Bearer Authorization header or, for the browser UI,

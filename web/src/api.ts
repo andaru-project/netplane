@@ -218,7 +218,9 @@ function promptForToken(): Promise<boolean> {
   tokenPrompt ??= Promise.resolve().then(() => {
     const token = window.prompt('This netplane server requires an API token:');
     if (!token) return false;
-    document.cookie = `netplane_token=${encodeURIComponent(token)}; path=/; SameSite=Strict`;
+    // Scope to the app's base path so other apps on the origin (e.g. other HA ingress add-ons) never get it.
+    const path = new URL('.', document.baseURI).pathname;
+    document.cookie = `netplane_token=${encodeURIComponent(token)}; path=${path}; SameSite=Strict`;
     return true;
   }).finally(() => {
     tokenPrompt = null;

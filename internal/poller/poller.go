@@ -93,7 +93,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 
 	snap, err := drv.Poll(ctx, cfg)
 	if err != nil {
-		if s.recordError(cfg, now, err) == offlineAfterFailures {
+		// Retried on every failure past the threshold: idempotent, and it only re-solves
+		// the topology when something actually went offline.
+		if s.recordError(cfg, now, err) >= offlineAfterFailures {
 			s.markOffline(ctx, cfg, now)
 		}
 		return err
@@ -134,8 +136,12 @@ func (s *Scheduler) markOffline(ctx context.Context, cfg driver.TargetConfig, no
 	if curr == nil {
 		return
 	}
+	evs := events.DiffSnapshots(prev, curr)
+	if len(evs) == 0 {
+		return // already offline
+	}
 	if s.bus != nil {
-		for _, ev := range events.DiffSnapshots(prev, curr) {
+		for _, ev := range evs {
 			s.bus.Publish(ev)
 		}
 	}

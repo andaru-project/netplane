@@ -151,7 +151,7 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{"status": "ok", "version": s.opts.Version}
 	// Per-target errors can name internal hosts, so unauthenticated callers get liveness only.
-	if s.opts.Poller != nil && (s.opts.APIToken == "" || s.validToken(r)) {
+	if s.opts.Poller != nil && s.authenticated(r) {
 		body["targets"] = s.opts.Poller.Status()
 	}
 	writeJSON(w, http.StatusOK, body)

@@ -10,7 +10,7 @@ import (
 )
 
 // NewHTTPClient returns a per-poll HTTP client honouring the insecure_skip_verify setting.
-// It refuses redirects to another host so API key headers and login bodies stay on the target.
+// It refuses redirects to another host or from https to http so API key headers and login bodies stay on the target.
 // Callers must call CloseIdleConnections when done.
 func NewHTTPClient(cfg TargetConfig, timeout time.Duration) *http.Client {
 	return &http.Client{
@@ -24,6 +24,9 @@ func NewHTTPClient(cfg TargetConfig, timeout time.Duration) *http.Client {
 			}
 			if req.URL.Host != via[0].URL.Host {
 				return fmt.Errorf("refusing redirect from %s to different host %s", via[0].URL.Host, req.URL.Host)
+			}
+			if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+				return fmt.Errorf("refusing redirect from https to %s", req.URL.Scheme)
 			}
 			return nil
 		},
