@@ -35,10 +35,6 @@ type session struct {
 	key    sessionKey
 	client *http.Client
 	sid    string
-	// denied holds object.method calls this account's ACL refuses even with a fresh session.
-	// uhttpd answers both those and an expired session with the same -32002, so a call is only
-	// put here after a re-login did not help, and never triggers a login again.
-	denied map[string]bool
 }
 
 // sessionKey is what a session depends on: any change starts a new client and login.
@@ -59,7 +55,7 @@ func (d *Driver) session(cfg driver.TargetConfig) *session {
 		if s != nil {
 			s.client.CloseIdleConnections()
 		}
-		s = &session{key: key, client: driver.NewHTTPClient(cfg, 15*time.Second), denied: map[string]bool{}}
+		s = &session{key: key, client: driver.NewHTTPClient(cfg, 15*time.Second)}
 		d.sessions[cfg.ID] = s
 	}
 	return s
@@ -86,8 +82,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 	sess := d.session(cfg)
 	client := sess.client
-	// Keep the session, not the connections: a kept-alive connection the router closes while
-	// a request is in flight fails that POST, and polls are far apart anyway.
+	// Keep the session, not the connections: net/http does not replay a POST that a router
+	// closing an idle kept-alive connection cuts mid-request.
 	defer client.CloseIdleConnections()
 
 	ubusURL := strings.TrimRight(cfg.Endpoint, "/")
@@ -113,44 +109,42 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		sess.sid = loginRes.Session
 		return nil
 	}
-	// A poll logs in at most once: up front when it holds no session, else on the first denial.
+	// A poll logs in at most once: up front when it holds no session, else when the first
+	// call finds the kept session expired.
 	relogged := sess.sid == ""
 	if relogged {
 		if err := login(); err != nil {
 			return nil, err
 		}
 	}
-	// call reuses the kept session. A call denied with a fresh session is refused by the ACL
-	// and remembered as such until it succeeds again.
-	var reloginErr error
+	// uhttpd answers an expired session and an ACL refusal with the same -32002. The required
+	// network.device.status call goes first, so once one call has succeeded this poll the
+	// session is known good and any later denial is the account's ACL, never a reason to log in.
+	verified := false
 	call := func(object, method string, params map[string]any, out any) error {
-		name := object + "." + method
-		if reloginErr != nil {
-			return reloginErr // an earlier re-login failed this poll
-		}
 		err := ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out)
-		if err == nil {
-			delete(sess.denied, name) // the ACL allows it (again)
-			return nil
-		}
-		if !errors.Is(err, errAccessDenied) || sess.denied[name] {
+		if err == nil || verified || !errors.Is(err, errAccessDenied) {
+			verified = verified || err == nil
 			return err
 		}
 		if relogged {
-			sess.denied[name] = true // denied right after a fresh login: the ACL, not expiry
+			// Denied right after a fresh login: start over next poll rather than keep a sid
+			// that may be dead (rpcd restarted) or that the ACL refuses for this call.
+			sess.sid = ""
 			return err
 		}
 		relogged = true
-		if reloginErr = login(); reloginErr != nil {
-			return reloginErr
+		if err := login(); err != nil {
+			return err
 		}
 		err = ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out)
-		if errors.Is(err, errAccessDenied) {
-			sess.denied[name] = true
-		} else if err == nil {
-			delete(sess.denied, name)
-		}
+		verified = err == nil
 		return err
+	}
+
+	devStatus := map[string]ubusNetDev{}
+	if err := call("network.device", "status", map[string]any{}, &devStatus); err != nil {
+		return nil, fmt.Errorf("openwrt network.device.status: %w", err)
 	}
 
 	var board struct {
@@ -172,11 +166,6 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		} `json:"memory"`
 	}
 	_ = call("system", "info", map[string]any{}, &sysInfo)
-
-	devStatus := map[string]ubusNetDev{}
-	if err := call("network.device", "status", map[string]any{}, &devStatus); err != nil {
-		return nil, fmt.Errorf("openwrt network.device.status: %w", err)
-	}
 
 	var ifDump struct {
 		Interface []ubusInterface `json:"interface"`

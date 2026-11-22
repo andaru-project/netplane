@@ -200,11 +200,12 @@ func TestOpenWrtReusesSession(t *testing.T) {
 	}
 }
 
-// TestOpenWrtReloginFailureAndACLHeal checks that a failed mid-poll re-login is reported, and
-// that a call once refused by the ACL is retried normally after it succeeds again.
-func TestOpenWrtReloginFailureAndACLHeal(t *testing.T) {
+// TestOpenWrtSessionLossAndReloginFailure checks that a session lost right after login is
+// dropped (the next poll logs in again instead of reusing a dead sid), and that a failed
+// re-login is reported.
+func TestOpenWrtSessionLossAndReloginFailure(t *testing.T) {
 	var mu sync.Mutex
-	logins, loginOK, deny := 0, true, true
+	logins, loginOK, killAfterLogin := 0, true, false
 	valid := map[string]bool{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -217,7 +218,6 @@ func TestOpenWrtReloginFailureAndACLHeal(t *testing.T) {
 		_ = json.Unmarshal(req.Params[2], &method)
 		mu.Lock()
 		defer mu.Unlock()
-		denied := `{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"Access denied"}}`
 		switch {
 		case obj+"."+method == "session.login":
 			logins++
@@ -226,10 +226,10 @@ func TestOpenWrtReloginFailureAndACLHeal(t *testing.T) {
 				return
 			}
 			sid := fmt.Sprintf("sid-%d", logins)
-			valid[sid] = true
+			valid[sid] = !killAfterLogin // rpcd restarts right after handing out the sid
 			_, _ = fmt.Fprintf(w, `{"result":[0,{"ubus_rpc_session":%q}]}`, sid)
-		case !valid[sid], obj == "system" && method == "board" && deny:
-			_, _ = w.Write([]byte(denied))
+		case !valid[sid]:
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"Access denied"}}`))
 		case obj+"."+method == "network.device.status":
 			_, _ = w.Write([]byte(`{"result":[0,{"lan1":{"up":true,"carrier":true}}]}`))
 		default:
@@ -243,21 +243,20 @@ func TestOpenWrtReloginFailureAndACLHeal(t *testing.T) {
 		Settings:        map[string]any{"allow_insecure_http": true},
 		ResolvedSecrets: map[string]string{"username": "u", "password": "p"},
 	}
-	if _, err := drv.Poll(context.Background(), cfg); err != nil {
-		t.Fatal(err)
-	}
-	sess := drv.sessions["ow2"]
-	if !sess.denied["system.board"] {
-		t.Fatal("system.board should be remembered as ACL-refused")
+	mu.Lock()
+	killAfterLogin = true
+	mu.Unlock()
+	if _, err := drv.Poll(context.Background(), cfg); err == nil {
+		t.Fatal("a session lost right after login must fail the poll")
 	}
 	mu.Lock()
-	deny = false // the admin widened the ACL
+	killAfterLogin = false
 	mu.Unlock()
 	if _, err := drv.Poll(context.Background(), cfg); err != nil {
-		t.Fatal(err)
+		t.Fatalf("the next poll must log in again and recover: %v", err)
 	}
-	if sess.denied["system.board"] {
-		t.Fatal("a succeeding call must leave the denied set")
+	if logins != 2 {
+		t.Fatalf("logins = %d, want 2", logins)
 	}
 	mu.Lock()
 	valid, loginOK = map[string]bool{}, false // session expired and the password now fails

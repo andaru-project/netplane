@@ -218,3 +218,34 @@ func TestUniFiReusesLogin(t *testing.T) {
 		t.Fatalf("an API key target logged in: logins = %d", logins)
 	}
 }
+
+// TestUniFiPersistent401LogsInOncePerPoll checks the per-poll re-login limit.
+func TestUniFiPersistent401LogsInOncePerPoll(t *testing.T) {
+	var mu sync.Mutex
+	logins := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path == "/api/auth/login" {
+			logins++
+			http.SetCookie(w, &http.Cookie{Name: "TOKEN", Value: "x", Path: "/"})
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized) // e.g. the account lacks Network access
+	}))
+	defer srv.Close()
+	drv := New()
+	cfg := driver.TargetConfig{
+		ID: "u2", Driver: "unifi", Endpoint: srv.URL,
+		Settings:        map[string]any{"allow_insecure_http": true},
+		ResolvedSecrets: map[string]string{"username": "admin", "password": "pw"},
+	}
+	_, _ = drv.Poll(context.Background(), cfg) // up-front login, then a 401: no second login
+	if logins != 1 {
+		t.Fatalf("first poll logins = %d, want 1", logins)
+	}
+	_, _ = drv.Poll(context.Background(), cfg) // kept login, 401: one re-login
+	if logins != 2 {
+		t.Fatalf("second poll logins = %d, want 2", logins)
+	}
+}
