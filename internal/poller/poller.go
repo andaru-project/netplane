@@ -209,10 +209,7 @@ func (s *Scheduler) Status() map[string]TargetStatus {
 }
 
 func (s *Scheduler) runTarget(ctx context.Context, cfg driver.TargetConfig) {
-	baseInterval := cfg.PollInterval
-	if baseInterval <= 0 {
-		baseInterval = 15 * time.Second
-	}
+	baseInterval := s.pollInterval(cfg)
 
 	failures := 0
 	for {
@@ -234,10 +231,25 @@ func (s *Scheduler) runTarget(ctx context.Context, cfg driver.TargetConfig) {
 	}
 }
 
+// pollInterval is the target's interval (default 15s), raised to its driver's floor.
+func (s *Scheduler) pollInterval(cfg driver.TargetConfig) time.Duration {
+	d := cfg.PollInterval
+	if d <= 0 {
+		d = 15 * time.Second
+	}
+	if drv, ok := s.registry.Get(cfg.Driver); ok {
+		if m, ok := drv.(driver.MinIntervalDriver); ok {
+			d = max(d, m.MinPollInterval())
+		}
+	}
+	return d
+}
+
 func backoffDuration(base time.Duration, failures int, capDur time.Duration) time.Duration {
 	if failures <= 0 {
 		return base
 	}
+	capDur = max(capDur, base) // never retry sooner than the driver's floor allows
 	d := base
 	for i := 1; i < failures && d < capDur; i++ {
 		d *= 2

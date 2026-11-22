@@ -21,17 +21,22 @@ targets:
     secrets:
       api_key: "${PFSENSE_API_KEY}"
 
-  - id: sw-lg510s
-    name: LG510S Switch
+  - id: sw-rtl
+    name: Access Switch
     driver: rtlplayground
     endpoint: "http://192.0.2.10"
-    poll_interval: "15s"
+    # The driver enforces at least 30s; the switch's MCU also serves Prometheus and its web UI.
+    poll_interval: "60s"
     settings:
-      # Plain-HTTP endpoint: credentials cross the LAN unencrypted. Prefer https:// where supported.
+      # Requires `prometheus on` on the switch: ports, counters, SFP DOM and identity come
+      # from its public exporter at http://<host>:9100/metrics (override with metrics_url).
+      # The firmware has no TLS, so the optional password crosses the LAN unencrypted.
       allow_insecure_http: true
-    secrets:
-      username: "${LG510S_USER}"
-      password: "${LG510S_PASS}"
+    # Optional: uncomment and set RTL_SWITCH_PASS to add LLDP, LAG, the management IP and
+    # the forwarding table. The driver keeps a single login session (the firmware has 4)
+    # and refreshes this data slowly.
+    # secrets:
+    #   password: "${RTL_SWITCH_PASS}"
 
   - id: unifi-controller
     name: UniFi Network

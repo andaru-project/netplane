@@ -298,3 +298,33 @@ func TestFailedOfflineRecomputeIsRetried(t *testing.T) {
 		t.Fatalf("stored topology nodes = %+v (err %v), want sw1 offline", g.Nodes, err)
 	}
 }
+
+type slowDriver struct{ mockDriver }
+
+func (*slowDriver) MinPollInterval() time.Duration { return 30 * time.Second }
+
+func TestPollIntervalHonoursDriverFloor(t *testing.T) {
+	reg := driver.NewRegistry()
+	_ = reg.Register(&slowDriver{mockDriver{kind: "slow"}})
+	_ = reg.Register(&mockDriver{kind: "fast"})
+	s := New(reg, nil, nil, nil)
+	for _, tc := range []struct {
+		drv  string
+		cfg  time.Duration
+		want time.Duration
+	}{
+		{"slow", 10 * time.Second, 30 * time.Second},
+		{"slow", time.Minute, time.Minute},
+		{"fast", 0, 15 * time.Second},
+	} {
+		if got := s.pollInterval(driver.TargetConfig{Driver: tc.drv, PollInterval: tc.cfg}); got != tc.want {
+			t.Errorf("%s/%v: got %v, want %v", tc.drv, tc.cfg, got, tc.want)
+		}
+	}
+}
+
+func TestBackoffNeverBelowBase(t *testing.T) {
+	if got := backoffDuration(3*time.Minute, 1, 2*time.Minute); got != 3*time.Minute {
+		t.Fatalf("backoff(base 3m, cap 2m) = %v, want 3m", got)
+	}
+}
