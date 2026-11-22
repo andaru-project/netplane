@@ -1,0 +1,35 @@
+# Go build / test artifacts
+/bin/
+/dist/
+*.test
+*.out
+coverage.txt
+
+# Frontend
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Python (clients/python, ha-integration)
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local runtime data & secrets
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local
+netplane.local.yaml
+*.key
+*.pem
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
