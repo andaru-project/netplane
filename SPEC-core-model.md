@@ -134,11 +134,9 @@ import (
 	"github.com/andaru-project/netplane/internal/model"
 )
 
-// Snapshot is an atomic point-in-time observed/live read returned by a Driver.
-// One TargetID (for example, a UniFi controller) may yield multiple devices.
-type Snapshot struct {
-	TargetID        string
-	CollectedAt     time.Time
+// Inventory is the observed state a snapshot carries. store.NetworkState embeds it too,
+// aggregating every target's snapshot with Append and FillNil (nil slices encode as []).
+type Inventory struct {
 	Devices         []model.Device
 	Links           []model.Link
 	LagGroups       []model.LagGroup
@@ -155,6 +153,14 @@ type Snapshot struct {
 	Radios          []model.WirelessRadio
 	WirelessUplinks []model.WirelessUplink
 	Clients         []model.Client
+}
+
+// Snapshot is an atomic point-in-time observed/live read returned by a Driver.
+// One TargetID (for example, a UniFi controller) may yield multiple devices.
+type Snapshot struct {
+	TargetID    string
+	CollectedAt time.Time
+	Inventory
 
 	Unavailable   []Section             // sections the driver could not refresh (MarkUnavailable)
 	Stale         map[Section]time.Time // carried sections -> when their data was last fresh

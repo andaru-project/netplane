@@ -460,7 +460,7 @@ func (s *Store) LoadState(ctx context.Context) (*NetworkState, error) {
 		return nil, err
 	}
 
-	state.NonNil()
+	state.FillNil()
 	state.Devices = dedupeDevices(state.Devices)
 	state.Clients = mergeClients(state.Clients)
 	sort.Slice(state.Devices, func(i, j int) bool { return state.Devices[i].ID < state.Devices[j].ID })
@@ -561,13 +561,12 @@ func (s *Store) QueryLinkSamples(ctx context.Context, deviceID, ifName string, s
 
 	out := []LinkSample{}
 	for rows.Next() {
-		var ts, rxErr, txErr int64
+		var ts int64
 		sample := LinkSample{DeviceID: deviceID, IfName: ifName}
-		if err := rows.Scan(&ts, &sample.RxBps, &sample.TxBps, &rxErr, &txErr, &sample.SfpRxDbm, &sample.SfpTempC, &sample.PoEWatts); err != nil {
+		if err := rows.Scan(&ts, &sample.RxBps, &sample.TxBps, &sample.RxErrors, &sample.TxErrors, &sample.SfpRxDbm, &sample.SfpTempC, &sample.PoEWatts); err != nil {
 			return nil, err
 		}
 		sample.Time = time.Unix(0, ts).UTC()
-		sample.RxErrors, sample.TxErrors = uint64(rxErr), uint64(txErr)
 		out = append(out, sample)
 	}
 	return out, rows.Err()

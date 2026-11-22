@@ -98,8 +98,8 @@ func (inv *Inventory) Append(o Inventory) {
 	inv.Clients = append(inv.Clients, o.Clients...)
 }
 
-// NonNil replaces nil slices with empty ones, so they encode as [] rather than null.
-func (inv *Inventory) NonNil() {
+// FillNil replaces nil slices with empty ones, so they encode as [] rather than null.
+func (inv *Inventory) FillNil() {
 	inv.Devices = nonNil(inv.Devices)
 	inv.Links = nonNil(inv.Links)
 	inv.LagGroups = nonNil(inv.LagGroups)

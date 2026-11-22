@@ -164,7 +164,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	// Lowest MAC keeps PrimaryMAC independent of interface response order.
-	macs, primaryMAC := driver.CollectMACs(rawMACs)
+	macs, _ := driver.CollectMACs(rawMACs)
+	primaryMAC := ""
 	if len(macs) > 0 {
 		primaryMAC = slices.Min(macs)
 	}

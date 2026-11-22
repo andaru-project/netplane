@@ -157,13 +157,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		mac       string
 		adminUp   bool
 		operUp    bool
-		in32      uint64 // ifInOctets
-		out32     uint64 // ifOutOctets
 		inHC      uint64 // ifHCInOctets
 		outHC     uint64 // ifHCOutOctets
 		hasInHC   bool
 		hasOutHC  bool
-		// Packets, errors and drops; the byte counters are chosen from the fields above.
+		// c holds the ifTable counters; the HC octets above replace its bytes when both exist.
 		c model.PortCounters
 	}
 	ifaces := map[int]*ifAcc{}
@@ -196,13 +194,13 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		case 8:
 			a.operUp = pduUint64(p) == 1
 		case 10:
-			a.in32 = pduUint64(p)
+			a.c.RxBytes = pduUint64(p)
 		case 13:
 			a.c.RxDropped = pduUint64(p)
 		case 14:
 			a.c.RxErrors = pduUint64(p)
 		case 16:
-			a.out32 = pduUint64(p)
+			a.c.TxBytes = pduUint64(p)
 		case 19:
 			a.c.TxDropped = pduUint64(p)
 		case 20:
@@ -381,7 +379,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		// Report both directions at one width: the store compares a single width flag per link.
 		hc := a.hasInHC && a.hasOutHC
 		counters := a.c
-		counters.RxBytes, counters.TxBytes, counters.Counter32 = a.in32, a.out32, !hc
+		counters.Counter32 = !hc
 		if hc {
 			counters.RxBytes, counters.TxBytes = a.inHC, a.outHC
 		}

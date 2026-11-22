@@ -17,6 +17,7 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 	}
 	ts := curr.CollectedAt.UTC()
 	var out []Event
+	// emit appends an event and returns it; the pointer is valid only until the next emit.
 	emit := func(typ Type, sev Severity, devID, link, summary string) *Event {
 		out = append(out, Event{Type: typ, Severity: sev, Timestamp: ts, TargetID: curr.TargetID, DeviceID: devID, LinkName: link, Summary: summary})
 		return &out[len(out)-1]
@@ -86,8 +87,7 @@ func DiffSnapshots(prev, curr *driver.Snapshot) []Event {
 			if l.StpState == model.StpBlocking || l.StpState == model.StpDiscarding {
 				sev = SeverityWarn
 			}
-			e := emit(LinkStpChanged, sev, l.DeviceID, l.IfName, fmt.Sprintf("STP state changed on %s/%s: %s -> %s", l.DeviceID, l.IfName, pl.StpState, l.StpState))
-			e.Details = map[string]any{"old": pl.StpState, "new": l.StpState}
+			emit(LinkStpChanged, sev, l.DeviceID, l.IfName, fmt.Sprintf("STP state changed on %s/%s: %s -> %s", l.DeviceID, l.IfName, pl.StpState, l.StpState)).Details = map[string]any{"old": pl.StpState, "new": l.StpState}
 		}
 		prevAlert := model.AlertOK
 		if pl.SFP != nil {

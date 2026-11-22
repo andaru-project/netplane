@@ -2,6 +2,7 @@
 package topology
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"slices"
@@ -135,6 +136,7 @@ func Solve(state *store.NetworkState, now time.Time) Graph {
 		infraEdges: make(map[pairKey][]*Edge),
 		infraPorts: make(map[devPortKey]bool),
 		confirmed:  make(map[*Edge]map[string]bool),
+		portMACs:   make(map[devPortKey]map[string]bool),
 	}
 	s.indexDevices()
 	s.indexLinks()
@@ -167,13 +169,7 @@ func (s *solver) indexDevices() {
 		if d.Name != "" {
 			s.devByName[strings.ToLower(d.Name)] = d.ID
 		}
-		label := d.Name
-		if label == "" {
-			label = d.Hostname
-		}
-		if label == "" {
-			label = d.ID
-		}
+		label := cmp.Or(d.Name, d.Hostname, d.ID)
 		s.g.Nodes = append(s.g.Nodes, Node{
 			ID:     d.ID,
 			Kind:   NodeDevice,
@@ -185,7 +181,6 @@ func (s *solver) indexDevices() {
 			Online: d.Online,
 		})
 	}
-
 }
 
 // indexLinks indexes physical links and LAG memberships.
@@ -204,22 +199,19 @@ func (s *solver) indexLinks() {
 		}
 		s.linkSpeed[devPortKey{l.DeviceID, l.IfName}] = l.SpeedMbps
 	}
-
 }
 
 // normalizePort maps a port to its LAG when it is a member or the LAG itself.
 func (s *solver) normalizePort(devID, portName string) (normName string, isLag bool, members []string, speed int) {
-	if lag, ok := s.linkToLAG[devPortKey{devID, portName}]; ok {
-		ms := append([]string(nil), lag.MemberLinks...)
-		sort.Strings(ms)
-		return lag.Name, true, ms, lag.SpeedMbps
+	k := devPortKey{devID, portName}
+	lag, ok := s.linkToLAG[k]
+	if !ok {
+		lag, ok = s.lagByName[k]
 	}
-	if lag, ok := s.lagByName[devPortKey{devID, portName}]; ok {
-		ms := append([]string(nil), lag.MemberLinks...)
-		sort.Strings(ms)
-		return lag.Name, true, ms, lag.SpeedMbps
+	if ok {
+		return lag.Name, true, slices.Sorted(slices.Values(lag.MemberLinks)), lag.SpeedMbps
 	}
-	return portName, false, []string{}, s.linkSpeed[devPortKey{devID, portName}]
+	return portName, false, []string{}, s.linkSpeed[k]
 }
 
 // resolvePeer finds the device an LLDP neighbor names, by chassis MAC, management IP or name.
@@ -245,6 +237,20 @@ func (s *solver) resolvePeer(chassisID, mgmtIP, sysName string) string {
 		}
 	}
 	return ""
+}
+
+// adjacency returns the device adjacency of the infrastructure edges found so far.
+func (s *solver) adjacency() map[string][]string {
+	adj := make(map[string][]string)
+	for pk := range s.infraEdges {
+		addPair(adj, pk)
+	}
+	return adj
+}
+
+func addPair(adj map[string][]string, pk pairKey) {
+	adj[pk.a] = append(adj[pk.a], pk.b)
+	adj[pk.b] = append(adj[pk.b], pk.a)
 }
 
 // side returns the link name field of e that belongs to devID.
@@ -281,7 +287,7 @@ func (s *solver) lldpEdges() {
 		}
 
 		// Same link: an endpoint port matches. Otherwise a reverse record whose port IDs are
-		// spelled differently joins an edge this device has not s.confirmed yet.
+		// spelled differently joins an edge this device has not confirmed yet.
 		var existing *Edge
 		for _, e := range s.infraEdges[pk] {
 			if *side(e, n.DeviceID) == localName || (remoteName != "" && *side(e, peerID) == remoteName) {
@@ -334,7 +340,6 @@ func (s *solver) lldpEdges() {
 			s.infraPorts[devPortKey{peerID, remoteName}] = true
 		}
 	}
-
 }
 
 // wirelessUplinkEdges adds wireless mesh uplinks (confidence 0.95).
@@ -368,12 +373,10 @@ func (s *solver) wirelessUplinkEdges() {
 			MemberLinks: []string{},
 		}}
 	}
-
 }
 
 // fdbEdges adds FDB infrastructure edges (confidence 0.85), avoiding transitive shortcuts.
 func (s *solver) fdbEdges() {
-	s.portMACs = make(map[devPortKey]map[string]bool)
 	for _, f := range s.state.FDB {
 		if f.IsLocal || f.MAC == "" {
 			continue
@@ -390,11 +393,7 @@ func (s *solver) fdbEdges() {
 	}
 
 	// Adjacency of known edges, so FDB edges never shortcut multi-hop LLDP chains.
-	infraAdj := make(map[string][]string)
-	for pk := range s.infraEdges {
-		infraAdj[pk.a] = append(infraAdj[pk.a], pk.b)
-		infraAdj[pk.b] = append(infraAdj[pk.b], pk.a)
-	}
+	infraAdj := s.adjacency()
 	connected := func(src, dst string) bool {
 		if src == dst {
 			return true
@@ -466,8 +465,7 @@ func (s *solver) fdbEdges() {
 			kind = EdgeLAG
 		}
 		pk := makePair(c.srcID, c.dstID)
-		infraAdj[pk.a] = append(infraAdj[pk.a], pk.b)
-		infraAdj[pk.b] = append(infraAdj[pk.b], pk.a)
+		addPair(infraAdj, pk)
 		s.infraEdges[pk] = []*Edge{{
 			FromID:      c.srcID,
 			FromLink:    normName,
@@ -479,7 +477,6 @@ func (s *solver) fdbEdges() {
 			MemberLinks: members,
 		}}
 	}
-
 }
 
 // orientEdges identifies root devices and orients edges away from them via BFS.
@@ -493,11 +490,7 @@ func (s *solver) orientEdges() {
 
 	depth := make(map[string]int, len(s.state.Devices))
 	if len(s.g.RootIDs) > 0 {
-		adj := make(map[string][]string)
-		for pk := range s.infraEdges {
-			adj[pk.a] = append(adj[pk.a], pk.b)
-			adj[pk.b] = append(adj[pk.b], pk.a)
-		}
+		adj := s.adjacency()
 		for k := range adj {
 			sort.Strings(adj[k])
 		}
@@ -541,7 +534,6 @@ func (s *solver) orientEdges() {
 		}
 		s.g.Edges = append(s.g.Edges, *e)
 	}
-
 }
 
 // clients correlates client metadata (IPs, hostnames) from Clients, DHCP and Neighbors, and
@@ -656,13 +648,7 @@ func (s *solver) clients() {
 
 	for mac, ci := range clientsByMAC {
 		nodeID := "client:" + mac
-		label := ci.hostname
-		if label == "" {
-			label = ci.ip
-		}
-		if label == "" {
-			label = mac
-		}
+		label := cmp.Or(ci.hostname, ci.ip, mac)
 		s.g.Nodes = append(s.g.Nodes, Node{
 			ID:     nodeID,
 			Kind:   NodeClient,
@@ -728,5 +714,4 @@ func (s *solver) clients() {
 			})
 		}
 	}
-
 }

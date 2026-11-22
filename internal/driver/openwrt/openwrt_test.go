@@ -35,8 +35,8 @@ func TestOpenWrtDriverPoll(t *testing.T) {
 			_, _ = w.Write([]byte(`{"result":[0,{"uptime":7200,"load":[6553],"memory":{"total":134217728,"free":67108864}}]}`))
 		case "network.device.status":
 			_, _ = w.Write([]byte(`{"result":[0,{
-				"lo":{"type":"Network device","up":true,"carrier":true,"mtu":65536},
-				"lan1":{"type":"Network device","up":true,"carrier":true,"mtu":1500,"macaddr":"02:51:0a:00:00:01","speed":"2500F","autoneg":true,"flow-control":{"autoneg":true,"supported":["rx","tx"],"link-advertising":["rx","tx"],"link-partner-advertising":["rx","tx"],"negotiated":["rx","tx"]},"statistics":{"rx_bytes":1000,"tx_bytes":2000}},
+				"lo":{"type":"Network device","up":true,"carrier":true,"mtu":65536,"macaddr":"02:00:00:00:00:99"},
+				"lan1":{"type":"Network device","up":true,"carrier":true,"mtu":1500,"macaddr":"02:51:0a:00:00:01","speed":"2500F","autoneg":true,"flow-control":{"autoneg":true,"supported":["rx","tx"],"link-advertising":["rx","tx"],"link-partner-advertising":["rx","tx"],"negotiated":["rx","tx"]},"statistics":{"rx_bytes":1000,"tx_bytes":2000,"rx_packets":10,"tx_packets":20,"rx_errors":1,"tx_errors":2,"rx_dropped":3,"tx_dropped":4,"collisions":7}},
 				"lan10":{"type":"Network device","up":false,"carrier":false,"mtu":1500,"macaddr":"02:51:0a:00:00:01","flow-control":{"autoneg":false,"supported":["rx","tx"],"link-partner-advertising":[],"selected":["tx"]}},
 				"lan2":{"type":"Network device","up":false,"carrier":false,"mtu":1500,"macaddr":"02:51:0a:00:00:01"},
 				"sfp9":{"type":"Network device","up":true,"carrier":true,"mtu":1500,"macaddr":"02:51:0a:00:00:02","speed":"10000F","statistics":{"rx_bytes":50000,"tx_bytes":40000}}
@@ -79,6 +79,12 @@ func TestOpenWrtDriverPoll(t *testing.T) {
 	snap.Normalize()
 	if len(snap.Devices) != 1 || snap.Devices[0].MgmtIP != "192.0.2.10" || snap.Devices[0].ID != "openwrt:ow-sw" || snap.Devices[0].PrimaryMAC != "02:51:0a:00:00:01" {
 		t.Fatalf("unexpected device: %+v", snap.Devices)
+	}
+	if macs := snap.Devices[0].MACs; !slices.Equal(macs, []string{"02:51:0a:00:00:01", "02:51:0a:00:00:02"}) {
+		t.Fatalf("device MACs = %v, want lan1 and sfp9 only (lo skipped, repeats dropped)", macs)
+	}
+	if c := snap.Links[0].Counters; c == nil || *c != (model.PortCounters{RxBytes: 1000, TxBytes: 2000, RxPackets: 10, TxPackets: 20, RxErrors: 1, TxErrors: 2, RxDropped: 3, TxDropped: 4}) {
+		t.Fatalf("lan1 counters = %+v", c)
 	}
 	if caps := snap.Devices[0].Capabilities; !slices.Contains(caps, model.CapDiagPing) || !slices.Contains(caps, model.CapDiagTraceroute) {
 		t.Fatalf("diagnostic capabilities missing: %v", caps)

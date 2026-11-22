@@ -3,7 +3,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +155,7 @@ func TestStoreSnapshotRatesAndRetention(t *testing.T) {
 			Index:    9,
 			IfName:   "sfp1",
 			Media:    model.MediaSFPPl,
+			SFP:      &model.SfpDom{Present: true, RxPowerDbm: &rxDbm, TempC: &tempC},
 			Counters: &model.PortCounters{RxBytes: 500, TxBytes: 500}, // simulates counter reset
 		}},
 	}
@@ -169,6 +172,9 @@ func TestStoreSnapshotRatesAndRetention(t *testing.T) {
 	}
 	if len(samples) != 1 || !samples[0].Time.Equal(t2) {
 		t.Fatalf("expected 1 retained sample at t2, got %+v", samples)
+	}
+	if got := samples[0]; got.SfpRxDbm == nil || *got.SfpRxDbm != rxDbm || got.SfpTempC == nil || *got.SfpTempC != tempC || got.PoEWatts != nil {
+		t.Fatalf("SFP sample readback = %+v", got)
 	}
 
 	// Verify PoE + SFP DOM sample readback and missing device lookup.
@@ -189,7 +195,7 @@ func TestStoreSnapshotRatesAndRetention(t *testing.T) {
 		t.Fatalf("SaveSnapshot 4: %v", err)
 	}
 	poeSamples, err := st.QueryLinkSamples(ctx, "openwrt:02:51:0a:00:00:01", "lan1", t2)
-	if err != nil || len(poeSamples) != 1 || poeSamples[0].PoEWatts == nil || *poeSamples[0].PoEWatts != 12.4 {
+	if err != nil || len(poeSamples) != 1 || poeSamples[0].PoEWatts == nil || *poeSamples[0].PoEWatts != 12.4 || poeSamples[0].SfpRxDbm != nil || poeSamples[0].SfpTempC != nil {
 		t.Fatalf("unexpected PoE samples: (%+v, %v)", poeSamples, err)
 	}
 	if _, ok, err := st.GetDevice(ctx, "nonexistent"); err != nil || ok {
@@ -274,6 +280,17 @@ func TestStorePruneTargetsAndStaleDevices(t *testing.T) {
 	state, err := st.LoadState(ctx)
 	if err != nil || len(state.Devices) != 1 || state.Devices[0].ID != "k1" || has("g1") {
 		t.Fatalf("after prune: devices=%v err=%v g1=%v", state.Devices, err, has("g1"))
+	}
+}
+
+func TestLoadStateEmptyEncodesNoNull(t *testing.T) {
+	state, err := openTestStore(t).LoadState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(state)
+	if strings.Contains(string(b), "null") {
+		t.Fatalf("empty state encodes null: %s", b)
 	}
 }
 
