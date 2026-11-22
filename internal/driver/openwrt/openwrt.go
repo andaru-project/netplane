@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andrebrait/netplane/internal/driver"
@@ -21,10 +22,44 @@ import (
 )
 
 // Driver polls an OpenWrt router, AP, or DSA switch via uhttpd-mod-ubus HTTP JSON-RPC (/ubus).
-type Driver struct{}
+// It keeps one HTTP client and ubus session per target across polls, logging in again only
+// when rpcd rejects the session (rpcd expires idle sessions after 300 s by default).
+type Driver struct {
+	mu       sync.Mutex
+	sessions map[string]*session
+}
+
+// session is the per-target state kept between polls. The poller serializes polls of one
+// target, so its fields need no lock of their own.
+type session struct {
+	key    sessionKey
+	client *http.Client
+	sid    string
+}
+
+// sessionKey is what a session depends on: any change starts a new client and login.
+type sessionKey struct {
+	endpoint, username, password string
+	insecure                     bool
+}
 
 // New returns a new OpenWrt ubus driver.
-func New() *Driver { return &Driver{} }
+func New() *Driver { return &Driver{sessions: map[string]*session{}} }
+
+func (d *Driver) session(cfg driver.TargetConfig) *session {
+	key := sessionKey{cfg.Endpoint, cfg.ResolvedSecrets["username"], cfg.ResolvedSecrets["password"], cfg.BoolSetting("insecure_skip_verify", false)}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	s := d.sessions[cfg.ID]
+	if s == nil || s.key != key {
+		if s != nil {
+			s.client.CloseIdleConnections()
+		}
+		s = &session{key: key, client: driver.NewHTTPClient(cfg, 15*time.Second)}
+		d.sessions[cfg.ID] = s
+	}
+	return s
+}
 
 // Kind returns "openwrt".
 func (d *Driver) Kind() string { return "openwrt" }
@@ -45,7 +80,10 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	if err := d.ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
-	client := driver.NewHTTPClient(cfg, 15*time.Second)
+	sess := d.session(cfg)
+	client := sess.client
+	// Keep the session, not the connections: net/http does not replay a POST that a router
+	// closing an idle kept-alive connection cuts mid-request.
 	defer client.CloseIdleConnections()
 
 	ubusURL := strings.TrimRight(cfg.Endpoint, "/")
@@ -53,20 +91,64 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		ubusURL += "/ubus"
 	}
 
-	var loginRes struct {
-		Session string `json:"ubus_rpc_session"`
+	login := func() error {
+		var loginRes struct {
+			Session string `json:"ubus_rpc_session"`
+		}
+		sess.sid = ""
+		err := ubusCall(ctx, client, ubusURL, "00000000000000000000000000000000", "session", "login", map[string]any{
+			"username": cfg.ResolvedSecrets["username"],
+			"password": cfg.ResolvedSecrets["password"],
+		}, &loginRes)
+		if err != nil {
+			return fmt.Errorf("openwrt ubus login: %w", err)
+		}
+		if loginRes.Session == "" {
+			return errors.New("openwrt ubus login: empty session")
+		}
+		sess.sid = loginRes.Session
+		return nil
 	}
-	err := ubusCall(ctx, client, ubusURL, "00000000000000000000000000000000", "session", "login", map[string]any{
-		"username": cfg.ResolvedSecrets["username"],
-		"password": cfg.ResolvedSecrets["password"],
-	}, &loginRes)
-	if err != nil {
-		return nil, fmt.Errorf("openwrt ubus login: %w", err)
+	// A poll logs in at most once: up front when it holds no session, else when the first
+	// call finds the kept session expired.
+	relogged := sess.sid == ""
+	if relogged {
+		if err := login(); err != nil {
+			return nil, err
+		}
 	}
-	if loginRes.Session == "" {
-		return nil, errors.New("openwrt ubus login: empty session")
+	// uhttpd answers an expired session and an ACL refusal with the same -32002. The required
+	// network.device.status call goes first, so once one call has succeeded this poll the
+	// session is known good and any later denial is the account's ACL, never a reason to log in.
+	verified := false
+	call := func(object, method string, params map[string]any, out any) error {
+		err := ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out)
+		if err == nil || verified || !errors.Is(err, errAccessDenied) {
+			verified = verified || err == nil
+			return err
+		}
+		if relogged {
+			// Denied right after a fresh login: start over next poll rather than keep a sid
+			// that may be dead (rpcd restarted) or that the ACL refuses for this call.
+			sess.sid = ""
+			return err
+		}
+		relogged = true
+		if err := login(); err != nil {
+			return err
+		}
+		err = ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out)
+		verified = err == nil
+		if errors.Is(err, errAccessDenied) {
+			sess.sid = "" // denied right after a fresh login, as above
+		}
+		return err
 	}
-	sid := loginRes.Session
+
+	devStatus := map[string]ubusNetDev{}
+	if err := call("network.device", "status", map[string]any{}, &devStatus); err != nil {
+		return nil, fmt.Errorf("openwrt network.device.status: %w", err)
+	}
 
 	var board struct {
 		Hostname string `json:"hostname"`
@@ -76,7 +158,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Version     string `json:"version"`
 		} `json:"release"`
 	}
-	_ = ubusCall(ctx, client, ubusURL, sid, "system", "board", map[string]any{}, &board)
+	_ = call("system", "board", map[string]any{}, &board)
 
 	var sysInfo struct {
 		Uptime uint64    `json:"uptime"`
@@ -86,27 +168,22 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Free  uint64 `json:"free"`
 		} `json:"memory"`
 	}
-	_ = ubusCall(ctx, client, ubusURL, sid, "system", "info", map[string]any{}, &sysInfo)
-
-	devStatus := map[string]ubusNetDev{}
-	if err := ubusCall(ctx, client, ubusURL, sid, "network.device", "status", map[string]any{}, &devStatus); err != nil {
-		return nil, fmt.Errorf("openwrt network.device.status: %w", err)
-	}
+	_ = call("system", "info", map[string]any{}, &sysInfo)
 
 	var ifDump struct {
 		Interface []ubusInterface `json:"interface"`
 	}
-	_ = ubusCall(ctx, client, ubusURL, sid, "network.interface", "dump", map[string]any{}, &ifDump)
+	_ = call("network.interface", "dump", map[string]any{}, &ifDump)
 
 	wirelessStatus := map[string]ubusRadio{}
-	_ = ubusCall(ctx, client, ubusURL, sid, "network.wireless", "status", map[string]any{}, &wirelessStatus)
+	_ = call("network.wireless", "status", map[string]any{}, &wirelessStatus)
 
 	hostHints := map[string]struct {
 		IPAddrs  []string `json:"ipaddrs"`
 		IP6Addrs []string `json:"ip6addrs"`
 		Name     string   `json:"name"`
 	}{}
-	_ = ubusCall(ctx, client, ubusURL, sid, "luci-rpc", "getHostHints", map[string]any{}, &hostHints)
+	_ = call("luci-rpc", "getHostHints", map[string]any{}, &hostHints)
 
 	now := time.Now().UTC()
 	devNames := slices.SortedFunc(maps.Keys(devStatus), comparePortNames)
@@ -340,6 +417,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	return snap, nil
 }
 
+// errAccessDenied is uhttpd refusing a call: an expired or unknown session, or an ACL refusal.
+var errAccessDenied = errors.New("ubus access denied")
+
 func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method string, params map[string]any, out any) error {
 	payload, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
@@ -371,6 +451,9 @@ func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method
 		return err
 	}
 	if rpcResp.Error != nil {
+		if rpcResp.Error.Code == -32002 { // uhttpd: expired or unknown session, or an ACL refusal
+			return fmt.Errorf("ubus error %d: %s: %w", rpcResp.Error.Code, rpcResp.Error.Message, errAccessDenied)
+		}
 		return fmt.Errorf("ubus error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 	if len(rpcResp.Result) < 1 {

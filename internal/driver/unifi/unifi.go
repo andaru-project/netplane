@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andrebrait/netplane/internal/driver"
@@ -19,10 +21,47 @@ import (
 )
 
 // Driver polls a UniFi Network controller (UniFi OS Server or standalone) over its local REST API.
-type Driver struct{}
+type Driver struct {
+	mu       sync.Mutex
+	sessions map[string]*session
+}
 
-// New returns a new UniFi controller driver.
-func New() *Driver { return &Driver{} }
+// session is the per-target client and login state kept between polls, so the controller
+// sees one login per session lifetime instead of one per poll. The poller serializes polls
+// of one target, so its fields need no lock of their own.
+type session struct {
+	key      sessionKey
+	client   *http.Client // carries the login cookie in its jar
+	loggedIn bool
+}
+
+// sessionKey is what a session depends on: any change starts a new client and login.
+type sessionKey struct {
+	endpoint, username, password, apiKey string
+	unifiOS, insecure                    bool
+}
+
+// New returns a new UniFi Network controller driver.
+func New() *Driver { return &Driver{sessions: map[string]*session{}} }
+
+func (d *Driver) session(cfg driver.TargetConfig) *session {
+	sec := cfg.ResolvedSecrets
+	key := sessionKey{cfg.Endpoint, sec["username"], sec["password"], sec["api_key"],
+		cfg.BoolSetting("is_unifi_os", true), cfg.BoolSetting("insecure_skip_verify", false)}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	s := d.sessions[cfg.ID]
+	if s == nil || s.key != key {
+		if s != nil {
+			s.client.CloseIdleConnections()
+		}
+		c := driver.NewHTTPClient(cfg, 15*time.Second)
+		c.Jar, _ = cookiejar.New(nil)
+		s = &session{key: key, client: c}
+		d.sessions[cfg.ID] = s
+	}
+	return s
+}
 
 // Kind returns "unifi".
 func (d *Driver) Kind() string { return "unifi" }
@@ -49,12 +88,13 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	site := cfg.StringSetting("site", "default")
 	isUniFiOS := cfg.BoolSetting("is_unifi_os", true)
 
-	client := driver.NewHTTPClient(cfg, 15*time.Second)
+	sess := d.session(cfg)
+	client := sess.client
+	// Keep the login cookie, not the connections, so an idle controller holds nothing for us.
 	defer client.CloseIdleConnections()
-	client.Jar, _ = cookiejar.New(nil)
-
 	apiKey := cfg.ResolvedSecrets["api_key"]
-	if apiKey == "" {
+	login := func() error {
+		sess.loggedIn = false
 		loginPath := "/api/login"
 		if isUniFiOS {
 			loginPath = "/api/auth/login"
@@ -65,18 +105,38 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		})
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+loginPath, bytes.NewReader(loginBody))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("unifi login: %w", err)
+			return fmt.Errorf("unifi login: %w", err)
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("unifi login HTTP %d", resp.StatusCode)
+			return fmt.Errorf("unifi login HTTP %d", resp.StatusCode)
 		}
+		sess.loggedIn = true
+		return nil
+	}
+	// A poll logs in at most once: up front when it holds no login, else on the first 401.
+	relogged := apiKey == "" && !sess.loggedIn
+	if relogged {
+		if err := login(); err != nil {
+			return nil, err
+		}
+	}
+	get := func(url string, out any) error {
+		err := getJSON(ctx, client, url, apiKey, out)
+		if apiKey != "" || relogged || !errors.Is(err, errUnauthorized) {
+			return err
+		}
+		relogged = true
+		if err := login(); err != nil {
+			return err
+		}
+		return getJSON(ctx, client, url, apiKey, out)
 	}
 
 	prefix := ""
@@ -87,7 +147,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	var devResp struct {
 		Data []unifiDevice `json:"data"`
 	}
-	if err := getJSON(ctx, client, baseURL+prefix+"/api/s/"+site+"/stat/device", apiKey, &devResp); err != nil {
+	if err := get(baseURL+prefix+"/api/s/"+site+"/stat/device", &devResp); err != nil {
 		return nil, fmt.Errorf("unifi stat/device: %w", err)
 	}
 
@@ -95,7 +155,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		Data []unifiClient `json:"data"`
 	}
 	// Required: an empty client list would replace the stored one and publish false client departures.
-	if err := getJSON(ctx, client, baseURL+prefix+"/api/s/"+site+"/stat/sta", apiKey, &staResp); err != nil {
+	if err := get(baseURL+prefix+"/api/s/"+site+"/stat/sta", &staResp); err != nil {
 		return nil, fmt.Errorf("unifi stat/sta: %w", err)
 	}
 
@@ -387,11 +447,17 @@ func getJSON(ctx context.Context, client *http.Client, url, apiKey string, out a
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return errUnauthorized
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
 }
+
+// errUnauthorized is the controller rejecting the login cookie (expired or revoked).
+var errUnauthorized = errors.New("HTTP 401")
 
 func mapRole(typ string) model.DeviceRole {
 	switch strings.ToLower(typ) {
