@@ -16,6 +16,12 @@ import (
 	"github.com/andrebrait/netplane/internal/api"
 	"github.com/andrebrait/netplane/internal/config"
 	"github.com/andrebrait/netplane/internal/driver"
+	"github.com/andrebrait/netplane/internal/driver/andaru"
+	"github.com/andrebrait/netplane/internal/driver/openwrt"
+	"github.com/andrebrait/netplane/internal/driver/pfsense"
+	"github.com/andrebrait/netplane/internal/driver/rtlplayground"
+	"github.com/andrebrait/netplane/internal/driver/snmp"
+	"github.com/andrebrait/netplane/internal/driver/unifi"
 	"github.com/andrebrait/netplane/internal/events"
 	"github.com/andrebrait/netplane/internal/poller"
 	"github.com/andrebrait/netplane/internal/store"
@@ -154,6 +160,14 @@ func runServe(args []string) error {
 }
 
 func registerDrivers(reg *driver.Registry) {
-	// Drivers are registered here as each driver module lands.
-	_ = reg
+	for _, d := range []driver.Driver{
+		andaru.New(),
+		openwrt.New(),
+		pfsense.New(),
+		rtlplayground.New(),
+		snmp.New(),
+		unifi.New(),
+	} {
+		_ = reg.Register(d)
+	}
 }

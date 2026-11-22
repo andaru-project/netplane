@@ -1,0 +1,131 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package snmp
+
+import (
+	"context"
+	"testing"
+
+	"github.com/gosnmp/gosnmp"
+
+	"github.com/andrebrait/netplane/internal/driver"
+	"github.com/andrebrait/netplane/internal/model"
+)
+
+type fakeWalker struct {
+	trees map[string][]gosnmp.SnmpPDU
+}
+
+func (f *fakeWalker) Walk(_ context.Context, rootOID string) ([]gosnmp.SnmpPDU, error) {
+	return f.trees[rootOID], nil
+}
+func (f *fakeWalker) Close() error { return nil }
+
+func TestSNMPValidationV2cAndV3(t *testing.T) {
+	drv := New()
+	if err := drv.ValidateConfig(driver.TargetConfig{ID: "s1"}); err == nil {
+		t.Fatal("expected error for missing endpoint")
+	}
+	if err := drv.ValidateConfig(driver.TargetConfig{ID: "s1", Endpoint: "192.0.2.30"}); err == nil {
+		t.Fatal("expected error for missing v2c community")
+	}
+	if err := drv.ValidateConfig(driver.TargetConfig{
+		ID: "s1", Endpoint: "192.0.2.30", Settings: map[string]any{"version": "2c"},
+		ResolvedSecrets: map[string]string{"community": "public"},
+	}); err != nil {
+		t.Fatalf("valid v2c rejected: %v", err)
+	}
+	if err := drv.ValidateConfig(driver.TargetConfig{
+		ID: "s3", Endpoint: "192.0.2.30:161",
+		Settings:        map[string]any{"version": "3", "username": "netplane", "auth_protocol": "SHA256", "priv_protocol": "AES"},
+		ResolvedSecrets: map[string]string{"auth_passphrase": "auth", "priv_passphrase": "priv"},
+	}); err != nil {
+		t.Fatalf("valid v3 rejected: %v", err)
+	}
+	if err := drv.ValidateConfig(driver.TargetConfig{
+		ID: "s3-bad", Endpoint: "192.0.2.30:161",
+		Settings: map[string]any{"version": "3", "username": "netplane", "auth_protocol": "SHA256"},
+	}); err == nil {
+		t.Fatal("expected error for missing v3 auth_passphrase")
+	}
+	if parseAuthProto("SHA256") != gosnmp.SHA256 || parsePrivProto("AES256") != gosnmp.AES256 {
+		t.Fatal("unexpected v3 protocol mapping")
+	}
+}
+
+func TestSNMPDriverPollWithFixtures(t *testing.T) {
+	fw := &fakeWalker{
+		trees: map[string][]gosnmp.SnmpPDU{
+			".1.3.6.1.2.1.1": {
+				{Name: oidSysDescr, Type: gosnmp.OctetString, Value: []byte("Managed 24P Switch")},
+				{Name: oidSysName, Type: gosnmp.OctetString, Value: []byte("core-sw")},
+				{Name: oidSysUpTime, Type: gosnmp.TimeTicks, Value: uint32(360000)},
+			},
+			oidIfTable: {
+				{Name: oidIfTable + ".2.1", Type: gosnmp.OctetString, Value: []byte("gi1")},
+				{Name: oidIfTable + ".4.1", Type: gosnmp.Integer, Value: 1500},
+				{Name: oidIfTable + ".6.1", Type: gosnmp.OctetString, Value: []byte{0xaa, 0xbb, 0xcc, 0x00, 0x00, 0x01}},
+				{Name: oidIfTable + ".7.1", Type: gosnmp.Integer, Value: 1},
+				{Name: oidIfTable + ".8.1", Type: gosnmp.Integer, Value: 1},
+				{Name: oidIfTable + ".2.25", Type: gosnmp.OctetString, Value: []byte("sfp25")},
+				{Name: oidIfTable + ".4.25", Type: gosnmp.Integer, Value: 9000},
+				{Name: oidIfTable + ".7.25", Type: gosnmp.Integer, Value: 1},
+				{Name: oidIfTable + ".8.25", Type: gosnmp.Integer, Value: 1},
+			},
+			oidIfXTable: {
+				{Name: oidIfXTable + ".1.1", Type: gosnmp.OctetString, Value: []byte("gi1")},
+				{Name: oidIfXTable + ".6.1", Type: gosnmp.Counter64, Value: uint64(123456)},
+				{Name: oidIfXTable + ".10.1", Type: gosnmp.Counter64, Value: uint64(654321)},
+				{Name: oidIfXTable + ".15.1", Type: gosnmp.Gauge32, Value: uint32(1000)},
+				{Name: oidIfXTable + ".18.1", Type: gosnmp.OctetString, Value: []byte("AP-Office")},
+				{Name: oidIfXTable + ".1.25", Type: gosnmp.OctetString, Value: []byte("sfp25")},
+				{Name: oidIfXTable + ".15.25", Type: gosnmp.Gauge32, Value: uint32(10000)},
+			},
+			oidBasePortIf: {
+				{Name: oidBasePortIf + ".1", Type: gosnmp.Integer, Value: 1},
+			},
+			oidDot1qFdb: {
+				// VLAN 10, MAC de:ad:be:ef:00:01 -> bridge port 1
+				{Name: oidDot1qFdb + ".10.222.173.190.239.0.1", Type: gosnmp.Integer, Value: 1},
+			},
+			oidLldpRem: {
+				{Name: oidLldpRem + ".5.100.25.1", Type: gosnmp.OctetString, Value: []byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x01}},
+				{Name: oidLldpRem + ".7.100.25.1", Type: gosnmp.OctetString, Value: []byte("sfp0")},
+				{Name: oidLldpRem + ".9.100.25.1", Type: gosnmp.OctetString, Value: []byte("core-fw")},
+			},
+			oidPethPort: {
+				{Name: oidPethPort + ".3.1.1", Type: gosnmp.Integer, Value: 1},
+				{Name: oidPethPort + ".6.1.1", Type: gosnmp.Integer, Value: 3},
+			},
+		},
+	}
+
+	drv := NewWithFactory(func(driver.TargetConfig) (Walker, error) { return fw, nil })
+	snap, err := drv.Poll(context.Background(), driver.TargetConfig{
+		ID:              "sw-snmp",
+		Driver:          "snmp",
+		Endpoint:        "192.0.2.30:161",
+		Settings:        map[string]any{"version": "2c"},
+		ResolvedSecrets: map[string]string{"community": "public"},
+	})
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if err := snap.Normalize(); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if len(snap.Devices) != 1 || snap.Devices[0].UptimeSec != 3600 || snap.Devices[0].PrimaryMAC != "aa:bb:cc:00:00:01" {
+		t.Fatalf("unexpected device: %+v", snap.Devices)
+	}
+	if len(snap.Links) != 2 || snap.Links[0].SpeedMbps != 1000 || snap.Links[0].PoE == nil || snap.Links[0].PoE.State != "delivering" {
+		t.Fatalf("unexpected links[0]: %+v", snap.Links)
+	}
+	if !snap.Links[1].IsFiber || snap.Links[1].Media != model.MediaSFPPl {
+		t.Fatalf("unexpected sfp link: %+v", snap.Links[1])
+	}
+	if len(snap.FDB) != 1 || snap.FDB[0].MAC != "de:ad:be:ef:00:01" || snap.FDB[0].VLAN != 10 || snap.FDB[0].LinkName != "gi1" {
+		t.Fatalf("unexpected FDB: %+v", snap.FDB)
+	}
+	if len(snap.LLDP) != 1 || snap.LLDP[0].ChassisID != "00:11:22:33:44:01" || snap.LLDP[0].LocalLink != "sfp25" {
+		t.Fatalf("unexpected LLDP: %+v", snap.LLDP)
+	}
+}
