@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"slices"
 	"sync"
 	"testing"
 
@@ -124,7 +124,7 @@ func TestUniFiDriverPoll(t *testing.T) {
 	}
 }
 
-func TestUniFiFailsPollWhenClientInventoryUnavailable(t *testing.T) {
+func TestUniFiMarksClientsUnavailable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/s/default/stat/device" {
 			_, _ = w.Write([]byte(`{"data":[{"mac":"3c:78:95:1f:71:0d","type":"usw","state":1}]}`))
@@ -133,13 +133,16 @@ func TestUniFiFailsPollWhenClientInventoryUnavailable(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	_, err := New().Poll(context.Background(), driver.TargetConfig{
+	snap, err := New().Poll(context.Background(), driver.TargetConfig{
 		ID: "u1", Endpoint: srv.URL,
 		Settings:        map[string]any{"is_unifi_os": false, "allow_insecure_http": true},
 		ResolvedSecrets: map[string]string{"api_key": "k"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "stat/sta") {
-		t.Fatalf("want stat/sta error, got %v", err)
+	if err != nil {
+		t.Fatalf("a failed client list must not fail the poll: %v", err)
+	}
+	if len(snap.Devices) != 1 || !slices.Contains(snap.Unavailable, driver.SectionClients) {
+		t.Fatalf("devices=%d unavailable=%v", len(snap.Devices), snap.Unavailable)
 	}
 }
 

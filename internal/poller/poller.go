@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -121,6 +122,7 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 		snap.CollectedAt = now
 	}
 
+	snap.PollInterval = s.pollInterval(cfg)
 	prev, err := s.store.SaveSnapshot(ctx, snap)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -131,6 +133,17 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 	}
 
 	s.recordSuccess(cfg, now)
+	// Log when a section stops refreshing and when its carried data runs out, not on every
+	// poll of a permanent failure.
+	for _, sec := range snap.Unavailable {
+		_, carried := snap.Stale[sec]
+		switch {
+		case prev == nil || !slices.Contains(prev.Unavailable, sec):
+			s.logger.Warn("target section stopped refreshing", "target_id", cfg.ID, "section", sec, "keeping_last_data", carried)
+		case !carried && hasKey(prev.Stale, sec):
+			s.logger.Warn("target section still not refreshing; dropped its last data", "target_id", cfg.ID, "section", sec)
+		}
+	}
 
 	if s.bus != nil {
 		for _, ev := range events.DiffSnapshots(prev, snap) {
@@ -285,4 +298,9 @@ func (s *Scheduler) recordError(cfg driver.TargetConfig, at time.Time, err error
 	st.ConsecutiveFailures++
 	s.status[cfg.ID] = st
 	return st.ConsecutiveFailures
+}
+
+func hasKey[K comparable, V any](m map[K]V, k K) bool {
+	_, ok := m[k]
+	return ok
 }

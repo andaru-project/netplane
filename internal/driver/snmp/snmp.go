@@ -133,12 +133,17 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	if err != nil {
 		return nil, fmt.Errorf("snmp walk ifTable: %w", err)
 	}
-	ifXPDUs, _ := w.Walk(ctx, oidIfXTable)
-	basePortPDUs, _ := w.Walk(ctx, oidBasePortIf)
-	fdbPDUs, _ := w.Walk(ctx, oidDot1qFdb)
-	vlanFdbPDUs, _ := w.Walk(ctx, oidVlanFdbID)
-	lldpPDUs, _ := w.Walk(ctx, oidLldpRem)
-	lldpLocPDUs, _ := w.Walk(ctx, oidLldpLoc)
+	ifXPDUs, ifXErr := w.Walk(ctx, oidIfXTable)
+	if ifXErr != nil {
+		// ifName is the link identity (link names, counter history, FDB and LLDP ports): a failed
+		// walk would rename every port, so fail the poll. A device without ifXTable walks empty.
+		return nil, fmt.Errorf("snmp walk ifXTable: %w", ifXErr)
+	}
+	basePortPDUs, basePortErr := w.Walk(ctx, oidBasePortIf)
+	fdbPDUs, fdbErr := w.Walk(ctx, oidDot1qFdb)
+	vlanFdbPDUs, vlanFdbErr := w.Walk(ctx, oidVlanFdbID)
+	lldpPDUs, lldpErr := w.Walk(ctx, oidLldpRem)
+	lldpLocPDUs, lldpLocErr := w.Walk(ctx, oidLldpLoc)
 	poePDUs, _ := w.Walk(ctx, oidPethPort)
 
 	type ifAcc struct {
@@ -366,6 +371,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Capabilities: caps,
 		}},
 	}
+	// A failed walk (as opposed to a table the device lacks) keeps the last FDB data, including
+	// the walks its port and VLAN mapping depends on. LLDP is marked after its ports resolve.
+	if fdbErr != nil || basePortErr != nil || vlanFdbErr != nil {
+		snap.MarkUnavailable(driver.SectionFDB)
+	}
 
 	for _, idx := range idxs {
 		a := ifaces[idx]
@@ -518,6 +528,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			locPortDesc[lpNum] = pduString(p)
 		}
 	}
+	lldpNeededBridgePorts := false // a name fell through to the bridge-port mapping
 	localPortName := func(lpNum int) string {
 		if n := nameToIf[locPortID[lpNum]]; n != "" {
 			return n
@@ -525,6 +536,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		if n := nameToIf[locPortDesc[lpNum]]; n != "" {
 			return n
 		}
+		lldpNeededBridgePorts = true
 		if ifIdx, ok := bridgePortToIf[lpNum]; ok && ifIdxToName[ifIdx] != "" {
 			return ifIdxToName[ifIdx]
 		}
@@ -571,6 +583,10 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		snap.LLDP = append(snap.LLDP, *n)
 	}
 
+	// A failed base-port walk only matters for LLDP when a local port needed that mapping.
+	if lldpErr != nil || lldpLocErr != nil || (basePortErr != nil && lldpNeededBridgePorts) {
+		snap.MarkUnavailable(driver.SectionLLDP)
+	}
 	return snap, nil
 }
 

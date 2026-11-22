@@ -143,3 +143,79 @@ func TestSnapshotNormalize(t *testing.T) {
 		t.Fatalf("invalid MACs kept: link=%q fdb=%v clients=%v", bad.Links[0].MAC, bad.FDB, bad.Clients)
 	}
 }
+
+func TestCarryOver(t *testing.T) {
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	prev := &Snapshot{CollectedAt: t0, Clients: []model.Client{{MAC: "aa:aa:aa:aa:aa:01", Online: true}}, LLDP: []model.LldpNeighbor{{LocalLink: "lan1"}}}
+
+	cur := &Snapshot{CollectedAt: t0.Add(time.Minute)}
+	cur.MarkUnavailable(SectionClients)
+	cur.MarkUnavailable(SectionClients) // idempotent
+	cur.CarryOver(prev, 15*time.Minute)
+	if len(cur.Unavailable) != 1 || len(cur.Clients) != 1 || len(cur.LLDP) != 0 || !cur.Stale[SectionClients].Equal(t0) {
+		t.Fatalf("carry: unavailable=%v clients=%v lldp=%v stale=%v", cur.Unavailable, cur.Clients, cur.LLDP, cur.Stale)
+	}
+
+	// A carried section keeps its original freshness, and expires after maxAge.
+	next := &Snapshot{CollectedAt: t0.Add(20 * time.Minute), Unavailable: []Section{SectionClients}}
+	next.CarryOver(cur, 15*time.Minute)
+	if len(next.Clients) != 0 || next.Stale != nil {
+		t.Fatalf("stale data carried past maxAge: %v", next.Clients)
+	}
+
+	// Nothing fresh in prev either: nothing to carry.
+	after := &Snapshot{CollectedAt: t0.Add(21 * time.Minute), Unavailable: []Section{SectionClients}}
+	after.CarryOver(next, time.Hour)
+	if len(after.Clients) != 0 {
+		t.Fatal("carried data from a snapshot that had none")
+	}
+	(&Snapshot{Unavailable: []Section{SectionClients}}).CarryOver(nil, time.Hour) // first poll: no panic
+}
+
+func TestCarryOverFreshnessRules(t *testing.T) {
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	clients := []model.Client{{MAC: "aa:aa:aa:aa:aa:01"}}
+	carry := func(prev *Snapshot, at time.Duration) *Snapshot {
+		s := &Snapshot{CollectedAt: t0.Add(at), Unavailable: []Section{SectionClients}}
+		s.CarryOver(prev, 15*time.Minute)
+		return s
+	}
+	fresh := &Snapshot{CollectedAt: t0, Clients: clients}
+
+	// A chain keeps the original freshness: +10m carried, +20m expired (not 10m after +10m).
+	s1 := carry(fresh, 10*time.Minute)
+	if len(s1.Clients) != 1 || !s1.Stale[SectionClients].Equal(t0) {
+		t.Fatalf("+10m: clients=%v stale=%v", s1.Clients, s1.Stale)
+	}
+	if s2 := carry(s1, 20*time.Minute); len(s2.Clients) != 0 {
+		t.Fatal("+20m: chained carry outlived 15 minutes")
+	}
+
+	// Data fresh in the previous poll is carried once within three poll intervals: a slow
+	// interval keeps it, a restart after a long stop does not revive it.
+	slow := &Snapshot{CollectedAt: t0.Add(40 * time.Minute), Unavailable: []Section{SectionClients}, PollInterval: 20 * time.Minute}
+	if slow.CarryOver(fresh, 15*time.Minute); len(slow.Clients) != 1 {
+		t.Fatal("slow interval: one failed poll dropped fresh data")
+	}
+	restart := &Snapshot{CollectedAt: t0.Add(50 * time.Minute), Unavailable: []Section{SectionClients}, PollInterval: time.Minute}
+	if restart.CarryOver(fresh, 15*time.Minute); len(restart.Clients) != 0 {
+		t.Fatal("carried 50-minute-old data on a 1-minute interval")
+	}
+
+	// prev marked the section unavailable and carried nothing: its leftover data is not fresh.
+	dropped := &Snapshot{CollectedAt: t0, Clients: clients, Unavailable: []Section{SectionClients}}
+	if s := carry(dropped, time.Minute); len(s.Clients) != 0 {
+		t.Fatal("carried data prev itself could not refresh")
+	}
+
+	// A snapshot rewritten for an unreachable target is never a source.
+	offline := &Snapshot{CollectedAt: t0, Clients: clients, MarkedOffline: true}
+	if s := carry(offline, time.Minute); len(s.Clients) != 0 {
+		t.Fatal("carried from an offline-marked snapshot")
+	}
+
+	// A clock that stepped back expires the data.
+	if s := carry(fresh, -time.Hour); len(s.Clients) != 0 {
+		t.Fatal("carried data across a backwards clock step")
+	}
+}

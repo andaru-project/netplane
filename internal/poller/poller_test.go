@@ -2,6 +2,7 @@
 package poller
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -326,5 +328,61 @@ func TestPollIntervalHonoursDriverFloor(t *testing.T) {
 func TestBackoffNeverBelowBase(t *testing.T) {
 	if got := backoffDuration(3*time.Minute, 1, 2*time.Minute); got != 3*time.Minute {
 		t.Fatalf("backoff(base 3m, cap 2m) = %v, want 3m", got)
+	}
+}
+
+func TestUnavailableSectionWarnsOnce(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	reg := driver.NewRegistry()
+	_ = reg.Register(&mockDriver{kind: "mock", fn: func(_ context.Context, cfg driver.TargetConfig, _ int32) (*driver.Snapshot, error) {
+		return &driver.Snapshot{TargetID: cfg.ID, Unavailable: []driver.Section{driver.SectionClients}}, nil
+	}})
+	var buf bytes.Buffer
+	sched := New(reg, st, nil, slog.New(slog.NewTextHandler(&buf, nil)))
+	cfg := driver.TargetConfig{ID: "t1", Driver: "mock", Enabled: true}
+	for i := 0; i < 3; i++ {
+		if err := sched.PollOnce(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(buf.String(), "stopped refreshing"); n != 1 {
+		t.Fatalf("warnings = %d, want 1:\n%s", n, buf.String())
+	}
+}
+
+func TestCarriedSectionDropWarns(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	reg := driver.NewRegistry()
+	_ = reg.Register(&mockDriver{kind: "mock", fn: func(_ context.Context, cfg driver.TargetConfig, n int32) (*driver.Snapshot, error) {
+		snap := &driver.Snapshot{TargetID: cfg.ID, CollectedAt: t0.Add(time.Duration(n-1) * 10 * time.Minute)}
+		if n == 1 {
+			snap.Clients = []model.Client{{MAC: "aa:aa:aa:aa:aa:01"}}
+		} else {
+			snap.Unavailable = []driver.Section{driver.SectionClients}
+		}
+		return snap, nil
+	}})
+	var buf bytes.Buffer
+	sched := New(reg, st, nil, slog.New(slog.NewTextHandler(&buf, nil)))
+	cfg := driver.TargetConfig{ID: "t1", Driver: "mock", Enabled: true}
+	for i := 0; i < 4; i++ { // fresh, carried (+10m), carried (+20m within 15m? no: chain expires), ...
+		if err := sched.PollOnce(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := buf.String()
+	if strings.Count(out, "stopped refreshing") != 1 || !strings.Contains(out, "keeping_last_data=true") || strings.Count(out, "dropped its last data") != 1 {
+		t.Fatalf("log:\n%s", out)
 	}
 }

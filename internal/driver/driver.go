@@ -58,6 +58,99 @@ type Snapshot struct {
 	Radios          []model.WirelessRadio  `json:"radios"`
 	WirelessUplinks []model.WirelessUplink `json:"wireless_uplinks"`
 	Clients         []model.Client         `json:"clients"`
+
+	// Unavailable lists sections the driver could not refresh this poll (a best-effort call
+	// failed). The store carries them over from the previous snapshot instead of treating
+	// their absence as everything having disappeared.
+	Unavailable []Section `json:"unavailable,omitempty"`
+	// Stale maps each carried-over section to when its data was last fresh.
+	Stale map[Section]time.Time `json:"stale,omitempty"`
+	// MarkedOffline is set when the store rewrote this snapshot for an unreachable target;
+	// its sections are not fresh and are never carried over.
+	MarkedOffline bool `json:"marked_offline,omitempty"`
+	// PollInterval is the target's poll interval, set by the poller so the store can size the
+	// one-time carry-over window; zero means unknown.
+	PollInterval time.Duration `json:"-"`
+}
+
+// Section names a snapshot slice by its JSON field name.
+type Section string
+
+// Sections a driver can mark unavailable.
+const (
+	SectionSegments  Section = "segments"
+	SectionZones     Section = "zones"
+	SectionFDB       Section = "fdb"
+	SectionLLDP      Section = "lldp"
+	SectionNeighbors Section = "neighbors"
+	SectionDHCP      Section = "dhcp"
+	SectionGateways  Section = "gateways"
+	SectionVPNs      Section = "vpns"
+	SectionFirewalls Section = "firewalls"
+	SectionRadios    Section = "radios"
+	SectionClients   Section = "clients"
+)
+
+// MarkUnavailable records that sec could not be refreshed this poll.
+func (s *Snapshot) MarkUnavailable(sec Section) {
+	if !slices.Contains(s.Unavailable, sec) {
+		s.Unavailable = append(s.Unavailable, sec)
+	}
+}
+
+// CarryOver fills each unavailable section from prev. Data fresh in prev is carried once, if
+// prev is no older than three poll intervals or maxAge, whichever is longer, so a single failed call never
+// looks like everything leaving however slow the interval, but a snapshot left from before a
+// long stop is not revived. Data prev itself carried keeps its original freshness and expires
+// after maxAge, so a permanently failing call cannot freeze it.
+func (s *Snapshot) CarryOver(prev *Snapshot, maxAge time.Duration) {
+	if prev == nil || prev.MarkedOffline {
+		return
+	}
+	for _, sec := range s.Unavailable {
+		freshAt, carried := prev.Stale[sec]
+		limit := maxAge
+		if !carried {
+			if slices.Contains(prev.Unavailable, sec) {
+				continue // prev had nothing fresh to give either
+			}
+			freshAt, limit = prev.CollectedAt, max(maxAge, 3*s.PollInterval)
+		}
+		// A negative age means the clock stepped back: treat the data as expired.
+		if age := s.CollectedAt.Sub(freshAt); age < 0 || age > limit {
+			continue
+		}
+		switch sec {
+		case SectionSegments:
+			s.Segments = prev.Segments
+		case SectionZones:
+			s.Zones = prev.Zones
+		case SectionFDB:
+			s.FDB = prev.FDB
+		case SectionLLDP:
+			s.LLDP = prev.LLDP
+		case SectionNeighbors:
+			s.Neighbors = prev.Neighbors
+		case SectionDHCP:
+			s.DHCP = prev.DHCP
+		case SectionGateways:
+			s.Gateways = prev.Gateways
+		case SectionVPNs:
+			s.VPNs = prev.VPNs
+		case SectionFirewalls:
+			s.Firewalls = prev.Firewalls
+		case SectionRadios:
+			s.Radios = prev.Radios
+		case SectionClients:
+			s.Clients = prev.Clients
+		default:
+			continue
+		}
+		if s.Stale == nil {
+			s.Stale = map[Section]time.Time{}
+		}
+		s.Stale[sec] = freshAt
+	}
 }
 
 // Normalize canonicalizes MAC addresses, SFP alert defaults, and non-nil slices across the snapshot.

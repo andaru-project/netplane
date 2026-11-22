@@ -86,6 +86,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		return nil, fmt.Errorf("pfsense status/interfaces: %w", err)
 	}
 
+	// Best-effort calls: a failure marks its section unavailable so the store keeps the old data.
+	var unavailable []driver.Section
 	var gwResp struct {
 		Data []struct {
 			Name      string  `json:"name"`
@@ -96,7 +98,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Default   bool    `json:"default"`
 		} `json:"data"`
 	}
-	_ = getJSON(ctx, client, baseURL+"/api/v2/status/gateways", apiKey, &gwResp)
+	if err := getJSON(ctx, client, baseURL+"/api/v2/status/gateways", apiKey, &gwResp); err != nil {
+		unavailable = append(unavailable, driver.SectionGateways)
+	}
 
 	var arpResp struct {
 		Data []struct {
@@ -106,7 +110,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Status    string `json:"status"`
 		} `json:"data"`
 	}
-	_ = getJSON(ctx, client, baseURL+"/api/v2/diagnostics/arp_table", apiKey, &arpResp)
+	if err := getJSON(ctx, client, baseURL+"/api/v2/diagnostics/arp_table", apiKey, &arpResp); err != nil {
+		unavailable = append(unavailable, driver.SectionNeighbors)
+	}
 
 	var dhcpResp struct {
 		Data []struct {
@@ -116,7 +122,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Type     string `json:"type"`
 		} `json:"data"`
 	}
-	_ = getJSON(ctx, client, baseURL+"/api/v2/status/dhcp_server/leases", apiKey, &dhcpResp)
+	if err := getJSON(ctx, client, baseURL+"/api/v2/status/dhcp_server/leases", apiKey, &dhcpResp); err != nil {
+		unavailable = append(unavailable, driver.SectionDHCP)
+	}
 
 	var svcResp struct {
 		Data []struct {
@@ -125,7 +133,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Status      bool   `json:"status"`
 		} `json:"data"`
 	}
-	_ = getJSON(ctx, client, baseURL+"/api/v2/status/services", apiKey, &svcResp)
+	if err := getJSON(ctx, client, baseURL+"/api/v2/status/services", apiKey, &svcResp); err != nil {
+		unavailable = append(unavailable, driver.SectionFirewalls)
+	}
 
 	var wgResp struct {
 		Data []struct {
@@ -138,7 +148,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			TransferTx uint64 `json:"transfer_tx"`
 		} `json:"data"`
 	}
-	_ = getJSON(ctx, client, baseURL+"/api/v2/status/wireguard/peers", apiKey, &wgResp)
+	if err := getJSON(ctx, client, baseURL+"/api/v2/status/wireguard/peers", apiKey, &wgResp); err != nil {
+		unavailable = append(unavailable, driver.SectionVPNs)
+	}
 
 	now := time.Now().UTC()
 	macs := []string{}
@@ -194,6 +206,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	snap := &driver.Snapshot{
+		Unavailable: unavailable,
 		TargetID:    cfg.ID,
 		CollectedAt: now,
 		Devices: []model.Device{{

@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -100,5 +101,31 @@ func TestPfSenseValidateRequiresAPIKey(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error: password alone cannot authenticate")
+	}
+}
+
+func TestPfSenseFailedCallsMarkSections(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/status/system":
+			_, _ = w.Write([]byte(`{"data":{"hostname":"pf"}}`))
+		case "/api/v2/status/interfaces":
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError) // every best-effort call fails
+		}
+	}))
+	defer srv.Close()
+	snap, err := New().Poll(context.Background(), driver.TargetConfig{
+		ID: "pf1", Endpoint: srv.URL, Settings: map[string]any{"allow_insecure_http": true},
+		ResolvedSecrets: map[string]string{"api_key": "k"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sec := range []driver.Section{driver.SectionGateways, driver.SectionNeighbors, driver.SectionDHCP, driver.SectionFirewalls, driver.SectionVPNs} {
+		if !slices.Contains(snap.Unavailable, sec) {
+			t.Errorf("%s not marked: %v", sec, snap.Unavailable)
+		}
 	}
 }
