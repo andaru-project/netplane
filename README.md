@@ -1,6 +1,6 @@
 # Andaru Netplane
 
-Andaru Netplane is part of the [Andaru](https://github.com/andaru-project) project. Its identifiers (binary, container image, add-on slug, Home Assistant domain and Python package) stay `netplane`.
+Andaru Netplane is part of the [Andaru Project](https://github.com/andaru-project). Its identifiers (binary, container image, add-on slug, Home Assistant domain and Python package) stay `netplane`.
 
 An open, driver-based **network configuration, information, and diagnostics plane** designed to manage heterogeneous networks (OpenWrt/DSA switches and routers, pfSense gateways, UniFi gear, and SNMP v2c/v3 managed switches; OPNsense support is planned) from a single fast UI—standalone or directly inside Home Assistant via Ingress.
 
@@ -67,8 +67,7 @@ Releasing: Supervisor offers whatever `version` the default branch holds, so pub
 
 1. Open a pull request that sets `version` in `ha-addon/config.yaml`.
 2. Push the tag `v<version>` on that pull request's head commit. The [Add-on image](.github/workflows/addon-image.yml) workflow checks the tag against the file and publishes the image.
-3. The first time only, make the GHCR package `netplane` public under package settings → Change visibility, so Supervisor can pull it anonymously.
-4. Merge the pull request.
+3. Merge the pull request. The package inherits the repository's public visibility, so Supervisor can pull it anonymously.
 
 Building the image locally needs BuildKit (the default since Docker 23).
 
