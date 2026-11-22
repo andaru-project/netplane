@@ -42,6 +42,9 @@ func fixtureServer(t *testing.T, routes map[string]string) *httptest.Server {
 		case body == "403":
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"status":403,"message":"Forbidden"}`))
+		case body == "500":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"errorMessage":"configd unavailable","errorTitle":"Error"}`))
 		default:
 			_, _ = w.Write([]byte(body))
 		}
@@ -56,25 +59,31 @@ func baseRoutes() map[string]string {
 		"/api/diagnostics/system/system_information": `{"name":"fw.example.lan","versions":["OPNsense 26.7.9-amd64","FreeBSD 14.3-RELEASE-p5"]}`,
 		"/api/diagnostics/system/system_time":        `{"uptime":"12 days, 03:04:05","loadavg":"0.21, 0.30, 0.28"}`,
 		"/api/diagnostics/system/system_resources":   `{"memory":{"total":"8589934592","used":1234567890}}`,
-		"/api/interfaces/overview/interfaces_info/1": `[
+		"/api/interfaces/overview/interfaces_info/1": `{"total":5,"rowCount":5,"current":1,"rows":[
 			{"device":"igc0","identifier":"wan","description":"WAN","enabled":true,"status":"up","flags":["up","running"],"mtu":"1500","macaddr":"00:0d:b9:00:00:01","macaddr_hw":"00:0d:b9:00:00:01","media":"1000baseT <full-duplex>","is_physical":true,"addr4":"198.51.100.2/24","ipv4":[{"ipaddr":"198.51.100.2/24"}],"ipv6":[],"vlan":null,
 			 "statistics":{"bytes received":"9000","bytes transmitted":"5000","packets received":"90","packets transmitted":"50","input errors":"1","output errors":"2","input queue drops":"3"}},
 			{"device":"igc1","identifier":"lan","description":"LAN","enabled":true,"status":"up","flags":["up","running"],"mtu":"1500","macaddr":"00:0d:b9:00:00:02","media":"10Gbase-SR <full-duplex>","is_physical":true,"addr4":"192.0.2.1/24","ipv4":[{"ipaddr":"192.0.2.1/24"}],"ipv6":[{"ipaddr":"fe80::1%igc1/64"}]},
 			{"device":"igc2","identifier":"","description":"Unassigned Interface","status":"no carrier","flags":["up"],"mtu":"1500","macaddr":"00:0d:b9:00:00:03","media":"autoselect","is_physical":true},
-			{"device":"vlan01","identifier":"opt1","description":"IoT","enabled":false,"status":"up","flags":["up","running"],"mtu":"1500","macaddr":"00:0d:b9:00:00:02","is_physical":false,"ipv4":[{"ipaddr":"10.20.0.1/24"}],"vlan":{"tag":"20","proto":"802.1q","parent":"igc1"}}
-		]`,
+			{"device":"vlan01","identifier":"opt1","description":"IoT","enabled":false,"status":"up","flags":["up","running"],"mtu":"1500","macaddr":"00:0d:b9:00:00:02","is_physical":false,"ipv4":[{"ipaddr":"10.20.0.1/24"}],"vlan":{"tag":"20","proto":"802.1q","parent":"igc1"}},
+			{"device":"lagg0","identifier":"opt2","description":"Uplink","enabled":true,"status":"up","flags":["up","running"],"mtu":"9000","macaddr":"00:0d:b9:00:00:04","is_physical":false,"ipv4":[]}
+		]}`,
 		"/api/routes/gateway/status": `{"items":[
 			{"name":"WAN_DHCP","address":"198.51.100.1","status":"none","loss":"0.0 %","delay":"4.2 ms","monitor":"1.1.1.1"},
-			{"name":"WAN6","address":"2001:db8::1","status":"down","loss":"~","delay":"~","monitor":"~"}],"status":"ok"}`,
+			{"name":"WAN6","address":"2001:db8::1","status":"down","loss":"~","delay":"~","monitor":"~"},
+			{"name":"LTE","address":"~","status":"delay","loss":"0.0 %","delay":"180.5 ms","monitor":"2001:db8:9::1"}],"status":"ok"}`,
 		"/api/diagnostics/interface/search_arp": `{"rows":[{"mac":"DE:AD:BE:EF:00:01","ip":"192.0.2.50","intf":"igc1","expired":false,"permanent":false},{"mac":"00:0d:b9:00:00:02","ip":"192.0.2.1","intf":"igc1","permanent":true}]}`,
 		"/api/diagnostics/interface/search_ndp": `{"rows":[{"mac":"de:ad:be:ef:00:01","ip":"fe80::50%igc1","intf":"igc1"}]}`,
-		"/api/kea/leases4/search":               `{"rows":[{"address":"192.0.2.50","hwaddr":"de:ad:be:ef:00:01","hostname":"nas","expire":"1795000000","if_name":"lan"}]}`,
-		"/api/dnsmasq/leases/search":            `{"rows":[{"address":"192.0.2.60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":1795000001,"if_name":"lan"}]}`,
-		"/api/diagnostics/firewall/pf_states":   `{"current":"1234","limit":"812000"}`,
+		"/api/kea/leases4/search": `{"rows":[{"address":"192.0.2.50","hwaddr":"de:ad:be:ef:00:01","hostname":"nas","expire":"1795000000","if_name":"lan","state":"0"},
+			{"address":"192.0.2.51","hwaddr":"de:ad:be:ef:00:09","hostname":"gone","expire":"1795000000","if_name":"lan","state":"2"}]}`,
+		"/api/dnsmasq/leases/search": `{"rows":[{"address":"192.0.2.60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":1795000001,"if_name":"lan"},
+			{"address":"2001:db8::60","hwaddr":"de:ad:be:ef:00:02","hostname":"tv","expire":1795000001,"if_name":"lan"}]}`,
+		"/api/dhcpv4/leases/search_lease":     `{"rows":[{"address":"192.0.2.70","mac":"de:ad:be:ef:00:03","hostname":"printer","type":"static","if":"lan"}]}`,
+		"/api/diagnostics/firewall/pf_states": `{"current":"1234","limit":"812000"}`,
 		"/api/wireguard/service/show": `{"rows":[
 			{"if":"wg0","type":"interface","public-key":"srv=","status":"up","name":"HomeVPN"},
 			{"if":"wg0","type":"peer","public-key":"abc=","endpoint":"203.0.113.5:51820","latest-handshake":` + hs + `,"transfer-rx":1024,"transfer-tx":2048,"name":"phone"},
-			{"if":"wg0","type":"peer","public-key":"old=","latest-handshake":0,"transfer-rx":0,"transfer-tx":0}]}`,
+			{"if":"wg0","type":"peer","public-key":"old=","endpoint":"(none)","latest-handshake":0,"transfer-rx":0,"transfer-tx":0},
+			{"if":"wg0","type":"peer","public-key":"idle=","endpoint":"203.0.113.6:51820","latest-handshake":` + strconv.FormatInt(time.Now().Unix()-400, 10) + `,"transfer-rx":0,"transfer-tx":0}]}`,
 	}
 }
 
@@ -122,13 +131,16 @@ func TestOpnsensePoll(t *testing.T) {
 		t.Fatalf("unassigned link = %+v", spare)
 	}
 
-	if len(snap.Segments) != 3 {
+	if len(snap.Segments) != 4 {
 		t.Fatalf("segments = %+v", snap.Segments)
 	}
 	var iot model.Segment
 	for _, s := range snap.Segments {
 		if s.ID == "opt1" {
 			iot = s
+		}
+		if (s.ID == "opt2") != (s.Kind == "lag") || (s.ID == "lan") != s.IsManagement {
+			t.Errorf("segment %s: kind %s, management %v", s.ID, s.Kind, s.IsManagement)
 		}
 		if s.ID == "lan" && (len(s.Addresses) != 2 || s.Addresses[1].Address != "fe80::1" || s.Addresses[1].PrefixLength != 64) {
 			t.Fatalf("lan addresses = %+v", s.Addresses)
@@ -138,23 +150,30 @@ func TestOpnsensePoll(t *testing.T) {
 		t.Fatalf("vlan segment = %+v", iot)
 	}
 
-	if len(snap.Gateways) != 2 || !snap.Gateways[0].Online || *snap.Gateways[0].RTTMs != 4.2 || snap.Gateways[0].GatewayIP != "198.51.100.1" ||
-		snap.Gateways[1].Online || snap.Gateways[1].RTTMs != nil || snap.Gateways[1].Family != model.IPv6 || snap.Gateways[1].MonitorIP != "" {
-		t.Fatalf("gateways = %+v", snap.Gateways)
+	gws := snap.Gateways
+	if len(gws) != 3 || !gws[0].Online || *gws[0].RTTMs != 4.2 || gws[0].GatewayIP != "198.51.100.1" ||
+		gws[1].Online || gws[1].RTTMs != nil || gws[1].Family != model.IPv6 || gws[1].MonitorIP != "" ||
+		!gws[2].Online || gws[2].GatewayIP != "" || gws[2].Family != model.IPv6 || *gws[2].RTTMs != 180.5 {
+		t.Fatalf("gateways = %+v", gws)
 	}
 	if len(snap.Neighbors) != 3 || snap.Neighbors[0].MAC != "de:ad:be:ef:00:01" || snap.Neighbors[0].SegmentName != "lan" || snap.Neighbors[0].State != "reachable" ||
 		snap.Neighbors[1].State != "permanent" || snap.Neighbors[2].IP != "fe80::50" || snap.Neighbors[2].Family != model.IPv6 {
 		t.Fatalf("neighbors = %+v", snap.Neighbors)
 	}
-	if len(snap.DHCP) != 2 || snap.DHCP[0].Hostname != "nas" || snap.DHCP[0].ExpiresAt == nil || snap.DHCP[0].ExpiresAt.Unix() != 1795000000 ||
-		snap.DHCP[1].ExpiresAt == nil || snap.DHCP[1].ExpiresAt.Unix() != 1795000001 || snap.DHCP[0].Pool != "lan" {
-		t.Fatalf("dhcp = %+v", snap.DHCP)
+	// The reclaimed Kea lease (state 2) is left out.
+	dh := snap.DHCP
+	if len(dh) != 4 || dh[0].Hostname != "nas" || dh[0].ExpiresAt == nil || dh[0].ExpiresAt.Unix() != 1795000000 || dh[0].Pool != "lan" ||
+		dh[1].ExpiresAt == nil || dh[1].ExpiresAt.Unix() != 1795000001 || dh[2].Family != model.IPv6 ||
+		!dh[3].Static || dh[3].MAC != "de:ad:be:ef:00:03" || dh[0].Static {
+		t.Fatalf("dhcp = %+v", dh)
 	}
 	if fw := snap.Firewalls; len(fw) != 1 || *fw[0].StatesUsed != 1234 || *fw[0].StatesMax != 812000 {
 		t.Fatalf("firewalls = %+v", fw)
 	}
-	if len(snap.VPNs) != 2 || !snap.VPNs[0].Up || snap.VPNs[0].Name != "phone" || snap.VPNs[0].RxBytes != 1024 || snap.VPNs[1].Up || snap.VPNs[1].LastHandshake != nil {
-		t.Fatalf("vpns = %+v", snap.VPNs)
+	v := snap.VPNs
+	if len(v) != 3 || !v[0].Up || v[0].Name != "phone" || v[0].RxBytes != 1024 || v[1].Up || v[1].LastHandshake != nil || v[1].Endpoint != "" ||
+		v[2].Up || v[2].LastHandshake == nil {
+		t.Fatalf("vpns = %+v", v)
 	}
 }
 
@@ -165,12 +184,28 @@ func TestOpnsenseCamelCaseFallback(t *testing.T) {
 	r["/api/diagnostics/system/system_information"] = "403"
 	r["/api/diagnostics/system/systemTime"] = r["/api/diagnostics/system/system_time"]
 	delete(r, "/api/diagnostics/system/system_time")
-	snap, err := New().Poll(context.Background(), target(fixtureServer(t, r).URL))
-	if err != nil {
-		t.Fatal(err)
+	var refused int
+	srv := fixtureServer(t, r)
+	inner := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/api/diagnostics/system/system_information" {
+			refused++
+		}
+		inner.ServeHTTP(w, req)
+	})
+	drv := New()
+	for range 2 {
+		snap, err := drv.Poll(context.Background(), target(srv.URL))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snap.Devices[0].Firmware.Current != "26.7.9" || snap.Devices[0].UptimeSec == 0 {
+			t.Fatalf("device = %+v", snap.Devices[0])
+		}
 	}
-	if snap.Devices[0].Firmware.Current != "26.7.9" || snap.Devices[0].UptimeSec == 0 {
-		t.Fatalf("device = %+v", snap.Devices[0])
+	// The second poll goes straight to the spelling that answered.
+	if refused != 1 {
+		t.Fatalf("refused snake_case requests = %d, want 1", refused)
 	}
 }
 
@@ -179,6 +214,7 @@ func TestOpnsenseSectionsUnavailableOrAbsent(t *testing.T) {
 	// No DHCP server or WireGuard plugin installed: empty, not stale.
 	delete(r, "/api/kea/leases4/search")
 	delete(r, "/api/dnsmasq/leases/search")
+	delete(r, "/api/dhcpv4/leases/search_lease")
 	delete(r, "/api/wireguard/service/show")
 	snap, err := New().Poll(context.Background(), target(fixtureServer(t, r).URL))
 	if err != nil {
@@ -188,12 +224,21 @@ func TestOpnsenseSectionsUnavailableOrAbsent(t *testing.T) {
 		t.Fatalf("absent services: unavailable=%v dhcp=%v vpns=%v", snap.Unavailable, snap.DHCP, snap.VPNs)
 	}
 
-	// Refused calls keep the last data.
+	// A privilege the API user lacks (403) leaves its section empty too.
 	r = baseRoutes()
-	for _, p := range []string{"/api/kea/leases4/search", "/api/routes/gateway/status", "/api/diagnostics/interface/search_ndp", "/api/diagnostics/firewall/pf_states", "/api/wireguard/service/show"} {
+	for _, p := range []string{"/api/kea/leases4/search", "/api/dnsmasq/leases/search", "/api/diagnostics/interface/search_ndp", "/api/wireguard/service/show"} {
 		r[p] = "403"
 	}
-	delete(r, "/api/dnsmasq/leases/search")
+	snap, err = New().Poll(context.Background(), target(fixtureServer(t, r).URL))
+	if err != nil || len(snap.Unavailable) != 0 || len(snap.Neighbors) != 2 || len(snap.DHCP) != 1 {
+		t.Fatalf("refused sections: err=%v unavailable=%v neighbors=%d dhcp=%d", err, snap.Unavailable, len(snap.Neighbors), len(snap.DHCP))
+	}
+
+	// Any other failure keeps the last data, even when another DHCP server answered.
+	r = baseRoutes()
+	for _, p := range []string{"/api/dnsmasq/leases/search", "/api/routes/gateway/status", "/api/diagnostics/interface/search_ndp", "/api/diagnostics/firewall/pf_states", "/api/wireguard/service/show"} {
+		r[p] = "500"
+	}
 	snap, err = New().Poll(context.Background(), target(fixtureServer(t, r).URL))
 	if err != nil {
 		t.Fatal(err)
@@ -203,6 +248,16 @@ func TestOpnsenseSectionsUnavailableOrAbsent(t *testing.T) {
 		if !slices.Contains(snap.Unavailable, s) {
 			t.Errorf("section %s not marked unavailable: %v", s, snap.Unavailable)
 		}
+	}
+	if !slices.Contains(snap.Devices[0].Capabilities, model.CapVPN) {
+		t.Error("a transient WireGuard failure dropped the VPN capability")
+	}
+
+	// A box without gateways answers status "failed" with no items: empty, not stale.
+	r = baseRoutes()
+	r["/api/routes/gateway/status"] = `{"items":[],"status":"failed"}`
+	if snap, err = New().Poll(context.Background(), target(fixtureServer(t, r).URL)); err != nil || len(snap.Unavailable) != 0 {
+		t.Fatalf("no gateways: err=%v unavailable=%v", err, snap.Unavailable)
 	}
 
 	// The required calls fail the poll, with the reason.
@@ -222,7 +277,7 @@ func TestParseHelpers(t *testing.T) {
 	if p, v := parseVersion([]string{"OPNsense Business 25.10-amd64"}); p != "OPNsense Business" || v != "25.10" {
 		t.Errorf("parseVersion = %q %q", p, v)
 	}
-	for in, want := range map[string]uint64{"1 day, 00:00:01": 86401, "03:04:05": 11045, "soon": 0} {
+	for in, want := range map[string]uint64{"1 day, 00:00:01": 86401, "12 Tage, 03:04:05": 12*86400 + 11045, "03:04:05": 11045, "soon": 0} {
 		if got := parseUptime(in); got != want {
 			t.Errorf("parseUptime(%q) = %d, want %d", in, got, want)
 		}
@@ -233,8 +288,7 @@ func TestParseHelpers(t *testing.T) {
 		"1000baseSX <full-duplex>":     model.MediaSFP,
 		"100baseTX <half-duplex>":      model.MediaFE,
 	} {
-		speed, _ := parseMedia(in)
-		if got := mediaType(in, speed); got != want {
+		if _, _, got := parseMedia(in); got != want {
 			t.Errorf("mediaType(%q) = %s, want %s", in, got, want)
 		}
 	}

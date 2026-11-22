@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andaru-project/netplane/internal/driver"
@@ -33,7 +34,11 @@ import (
 const wgOnlineAge = 300 * time.Second
 
 // Driver polls an OPNsense firewall.
-type Driver struct{}
+type Driver struct {
+	// spelling remembers, per target and endpoint, the path variant that answered, so a
+	// 25.1 box is not sent (and does not log) a refused snake_case request on every poll.
+	spelling sync.Map
+}
 
 // New returns a new OPNsense REST API driver.
 func New() *Driver { return &Driver{} }
@@ -57,14 +62,18 @@ type api struct {
 	client      *http.Client
 	base        string
 	key, secret string
+	target      string
+	spelling    *sync.Map
 }
 
-func newAPI(cfg driver.TargetConfig, timeout time.Duration) *api {
+func (d *Driver) newAPI(cfg driver.TargetConfig, timeout time.Duration) *api {
 	return &api{
-		client: driver.NewHTTPClient(cfg, timeout),
-		base:   strings.TrimRight(cfg.Endpoint, "/"),
-		key:    cfg.ResolvedSecrets["api_key"],
-		secret: cfg.ResolvedSecrets["api_secret"],
+		client:   driver.NewHTTPClient(cfg, timeout),
+		base:     strings.TrimRight(cfg.Endpoint, "/"),
+		key:      cfg.ResolvedSecrets["api_key"],
+		secret:   cfg.ResolvedSecrets["api_secret"],
+		target:   cfg.ID,
+		spelling: &d.spelling,
 	}
 }
 
@@ -125,18 +134,33 @@ func (a *api) do(ctx context.Context, method, path string, body, out any) error 
 	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out)
 }
 
-// get tries each path in order, moving on only when the API refuses or lacks it (403, 404).
+// get tries each spelling of an endpoint, the one that last answered first, moving on only
+// when the API refuses or lacks it.
 func (a *api) get(ctx context.Context, out any, paths ...string) error {
+	key := a.target + "|" + paths[0]
+	if v, ok := a.spelling.Load(key); ok {
+		paths = append([]string{v.(string)}, paths...)
+	}
 	var err error
-	for _, p := range paths {
+	var p string
+	for _, p = range paths {
 		if err = a.do(ctx, http.MethodGet, p, nil, out); err == nil {
+			a.spelling.Store(key, p)
 			return nil
 		}
-		if c := httpStatus(err); c != http.StatusForbidden && c != http.StatusNotFound {
-			return fmt.Errorf("%s: %w", p, err)
+		if !absent(err) {
+			break
 		}
 	}
-	return fmt.Errorf("%s: %w", paths[len(paths)-1], err)
+	return fmt.Errorf("%s: %w", p, err)
+}
+
+// absent reports a refusal (403: the API user lacks the privilege) or a missing endpoint
+// (404: the plugin or service is not installed). An optional section is then empty, not
+// stale, so the store does not carry its old rows over.
+func absent(err error) bool {
+	c := httpStatus(err)
+	return c == http.StatusForbidden || c == http.StatusNotFound
 }
 
 // numStr decodes a JSON string, number or null as text: OPNsense returns many counters as
@@ -145,7 +169,6 @@ type numStr string
 
 func (n *numStr) UnmarshalJSON(b []byte) error {
 	if string(b) == "null" {
-		*n = ""
 		return nil
 	}
 	var s string
@@ -167,14 +190,18 @@ func (n numStr) int64() (int64, bool) {
 	return v, err == nil
 }
 
-// float reads the leading number of a value such as "4.2 ms" or "0.0 %"; "~" (unmonitored)
-// and other text give nil.
-func (n numStr) float() *float64 {
-	f := strings.Fields(string(n))
-	if len(f) == 0 {
-		return nil
+// float reads the leading number of a value such as "4.2 ms" or "0.0 %".
+func (n numStr) float() *float64 { return leadingFloat(string(n)) }
+
+// leadingFloat reads the number a value starts with ("4.2 ms", "100.0%", "0.21"); "~"
+// (unmonitored) and other text give nil.
+func leadingFloat(s string) *float64 {
+	s = strings.TrimSpace(s)
+	end := strings.IndexFunc(s, func(r rune) bool { return (r < '0' || r > '9') && r != '.' && r != '-' })
+	if end >= 0 {
+		s = s[:end]
 	}
-	v, err := strconv.ParseFloat(f[0], 64)
+	v, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return nil
 	}
@@ -216,7 +243,8 @@ type leaseRow struct {
 	Expire   numStr `json:"expire"` // Kea, dnsmasq: epoch seconds
 	IfName   string `json:"if_name"`
 	If       string `json:"if"`
-	Type     string `json:"type"` // ISC: dynamic or static
+	Type     string `json:"type"`  // ISC: dynamic or static
+	State    numStr `json:"state"` // Kea: 0 is a current lease; declined and reclaimed ones differ
 }
 
 // Poll reads identity, interfaces, gateways, ARP/NDP, DHCP leases, pf states and WireGuard.
@@ -224,7 +252,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	if err := d.ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
-	a := newAPI(cfg, 15*time.Second)
+	a := d.newAPI(cfg, 15*time.Second)
 	defer a.client.CloseIdleConnections()
 
 	var sysInfo struct {
@@ -234,13 +262,22 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	if err := a.get(ctx, &sysInfo, "/api/diagnostics/system/system_information", "/api/diagnostics/system/systemInformation"); err != nil {
 		return nil, fmt.Errorf("opnsense system information: %w", err)
 	}
-	var ifResp []ifaceRow
-	if err := a.get(ctx, &ifResp, "/api/interfaces/overview/interfaces_info/1"); err != nil {
+	var ifs struct {
+		Rows []ifaceRow `json:"rows"`
+	}
+	if err := a.get(ctx, &ifs, "/api/interfaces/overview/interfaces_info/1"); err != nil {
 		return nil, fmt.Errorf("opnsense interfaces: %w", err)
 	}
+	ifResp := ifs.Rows
 
-	// Best-effort calls: a failure marks its section unavailable so the store keeps the old data.
+	// Optional calls: a refused or missing endpoint leaves its section empty (see absent);
+	// any other failure marks it unavailable so the store keeps the old data.
 	snap := &driver.Snapshot{TargetID: cfg.ID}
+	optional := func(sec driver.Section, err error) {
+		if err != nil && !absent(err) {
+			snap.MarkUnavailable(sec)
+		}
+	}
 	var sysTime struct {
 		Uptime  string `json:"uptime"`
 		LoadAvg string `json:"loadavg"`
@@ -263,11 +300,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Delay   numStr `json:"delay"`
 			Monitor string `json:"monitor"`
 		} `json:"items"`
-		Status string `json:"status"`
 	}
-	if err := a.get(ctx, &gwResp, "/api/routes/gateway/status"); err != nil || gwResp.Status == "failed" {
-		snap.MarkUnavailable(driver.SectionGateways)
-	}
+	// An empty gateway list also answers status "failed", so only the HTTP error counts.
+	optional(driver.SectionGateways, a.get(ctx, &gwResp, "/api/routes/gateway/status"))
 
 	type neighborRow struct {
 		IP        string `json:"ip"`
@@ -280,30 +315,19 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		Rows []neighborRow `json:"rows"`
 	}
 	// search_arp and search_ndp keep one spelling in every release.
-	errARP := a.get(ctx, &arpResp, "/api/diagnostics/interface/search_arp")
-	errNDP := a.get(ctx, &ndpResp, "/api/diagnostics/interface/search_ndp")
-	if errARP != nil || errNDP != nil {
-		snap.MarkUnavailable(driver.SectionNeighbors)
-	}
+	optional(driver.SectionNeighbors, a.get(ctx, &arpResp, "/api/diagnostics/interface/search_arp"))
+	optional(driver.SectionNeighbors, a.get(ctx, &ndpResp, "/api/diagnostics/interface/search_ndp"))
 
-	// Any of the three DHCP servers may run; one that is not installed answers 404.
+	// Kea, dnsmasq (25.7 and later) and ISC (core up to 25.7, then a plugin) may each serve
+	// leases. A failed one marks the whole section unavailable rather than drop its leases.
 	var leases []leaseRow
-	dhcpOK, dhcpFailed := false, false
 	for _, p := range []string{"/api/kea/leases4/search", "/api/dnsmasq/leases/search", "/api/dhcpv4/leases/search_lease"} {
 		var r struct {
 			Rows []leaseRow `json:"rows"`
 		}
 		err := a.get(ctx, &r, p)
-		switch {
-		case err == nil:
-			dhcpOK = true
-			leases = append(leases, r.Rows...)
-		case httpStatus(err) != http.StatusNotFound:
-			dhcpFailed = true
-		}
-	}
-	if dhcpFailed && !dhcpOK {
-		snap.MarkUnavailable(driver.SectionDHCP)
+		optional(driver.SectionDHCP, err)
+		leases = append(leases, r.Rows...)
 	}
 
 	var pfStates struct {
@@ -325,10 +349,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		} `json:"rows"`
 	}
 	errWG := a.get(ctx, &wgResp, "/api/wireguard/service/show")
-	// No WireGuard plugin (404) means no tunnels, not stale ones.
-	if errWG != nil && httpStatus(errWG) != http.StatusNotFound {
-		snap.MarkUnavailable(driver.SectionVPNs)
-	}
+	optional(driver.SectionVPNs, errWG)
 
 	now := time.Now().UTC()
 	devID := "opnsense:" + cfg.ID
@@ -361,7 +382,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		model.CapNeighbors, model.CapDHCP, model.CapFirmwareInfo, model.CapDiagPing,
 	}
 	stats := model.SystemStats{MemTotalBytes: sysRes.Memory.Total.uint(), MemUsedBytes: sysRes.Memory.Used.uint()}
-	if f := numStr(strings.Split(sysTime.LoadAvg, ",")[0]).float(); f != nil {
+	if f := leadingFloat(strings.Split(sysTime.LoadAvg, ",")[0]); f != nil {
 		stats.Load1 = *f
 	}
 
@@ -394,11 +415,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		linkUp := r.Status == "up"
 		oper := model.OperFromAdminLink(adminUp, linkUp)
 		var mtu *int
-		if v, err := strconv.Atoi(strings.TrimSpace(string(r.MTU))); err == nil {
-			mtu = &v
+		if v, ok := r.MTU.int64(); ok {
+			mtu = new(int(v))
 		}
 		if r.IsPhysical {
-			speed, duplex := parseMedia(r.Media)
+			speed, duplex, media := parseMedia(r.Media)
 			l := model.Link{
 				DeviceID:  devID,
 				Index:     i + 1,
@@ -410,7 +431,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				OperState: oper,
 				Duplex:    duplex,
 				MTU:       mtu,
-				Media:     mediaType(r.Media, speed),
+				Media:     media,
 			}
 			if linkUp {
 				l.SpeedMbps = speed
@@ -432,21 +453,21 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			continue // unassigned: a port, not a logical interface
 		}
 		seg := model.Segment{
-			DeviceID:   devID,
-			ID:         r.Identifier,
-			Name:       r.Description,
-			Kind:       "ethernet",
-			ParentLink: r.Device,
-			MTU:        mtu,
-			AdminUp:    adminUp,
-			OperState:  oper,
-			Addresses:  []model.IPAddress{},
+			DeviceID:     devID,
+			ID:           r.Identifier,
+			Name:         r.Description,
+			Kind:         segmentKind(r.Device),
+			ParentLink:   r.Device,
+			MTU:          mtu,
+			AdminUp:      adminUp,
+			OperState:    oper,
+			Addresses:    []model.IPAddress{},
+			IsManagement: r.Identifier == "lan",
 		}
 		if r.VLAN != nil {
 			seg.Kind, seg.ParentLink = "vlan", r.VLAN.Parent
 			if v, ok := r.VLAN.Tag.int64(); ok {
-				tag := int(v)
-				seg.VLANID = &tag
+				seg.VLANID = new(int(v))
 			}
 		}
 		for _, ip := range r.IPv4 {
@@ -463,16 +484,14 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	for _, gw := range gwResp.Items {
-		family := model.IPv4
-		if addr, err := netip.ParseAddr(gw.Address); err == nil && addr.Is6() {
-			family = model.IPv6
-		}
+		// "~" stands for an address the gateway does not have yet (dynamic, unmonitored).
+		addr, monitor := strings.Trim(gw.Address, "~"), strings.Trim(gw.Monitor, "~")
 		snap.Gateways = append(snap.Gateways, model.GatewayStatus{
 			DeviceID:  devID,
 			Name:      gw.Name,
-			Family:    family,
-			GatewayIP: gw.Address,
-			MonitorIP: strings.Trim(gw.Monitor, "~"),
+			Family:    familyOf(cmp.Or(addr, monitor)),
+			GatewayIP: addr,
+			MonitorIP: monitor,
 			// dpinger reports "none" for a healthy gateway; delay and loss still forward traffic.
 			Online:  gw.Status != "down" && gw.Status != "force_down",
 			RTTMs:   gw.Delay.float(),
@@ -505,12 +524,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	for _, l := range leases {
 		mac, err := model.NormalizeMAC(cmp.Or(l.HWAddr, l.MAC))
-		if err != nil || l.Address == "" {
+		if st, ok := l.State.int64(); err != nil || l.Address == "" || (ok && st != 0) {
 			continue
 		}
 		lease := model.DhcpLease{
 			DeviceID: devID,
-			Family:   model.IPv4,
+			Family:   familyOf(l.Address), // dnsmasq lists IPv6 leases too
 			IP:       l.Address,
 			MAC:      mac,
 			Hostname: l.Hostname,
@@ -534,7 +553,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 		snap.Firewalls = append(snap.Firewalls, fw)
 	} else {
-		snap.MarkUnavailable(driver.SectionFirewalls)
+		optional(driver.SectionFirewalls, errPF)
 	}
 
 	for _, p := range wgResp.Rows {
@@ -554,33 +573,52 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			Name:          cmp.Or(p.Name, p.If+" peer"),
 			Kind:          "wireguard",
 			Peer:          p.PublicKey,
-			Endpoint:      p.Endpoint,
+			Endpoint:      strings.TrimPrefix(p.Endpoint, "(none)"), // wg's text for no endpoint
 			Up:            up,
 			LastHandshake: hs,
 			RxBytes:       p.TransferRx.uint(),
 			TxBytes:       p.TransferTx.uint(),
 		})
 	}
-	if len(snap.VPNs) > 0 {
+	// Advertise VPN while WireGuard answers or fails transiently, so carried-over tunnels keep it.
+	if len(snap.VPNs) > 0 || (errWG != nil && !absent(errWG)) {
 		snap.Devices[0].Capabilities = append(snap.Devices[0].Capabilities, model.CapVPN)
 	}
 	return snap, nil
 }
 
-// parseVersion splits "OPNsense 26.7.9-amd64" into product and version.
-func parseVersion(versions []string) (product, version string) {
-	if len(versions) == 0 {
-		return "OPNsense", ""
+// familyOf returns the address family of an IP address, IPv4 for anything else.
+func familyOf(s string) model.IPFamily {
+	if addr, err := netip.ParseAddr(s); err == nil && addr.Is6() {
+		return model.IPv6
 	}
-	f := strings.Fields(versions[0])
-	if len(f) < 2 {
-		return "OPNsense", ""
-	}
-	version, _, _ = strings.Cut(f[len(f)-1], "-")
-	return strings.Join(f[:len(f)-1], " "), version
+	return model.IPv4
 }
 
-var uptimeRE = regexp.MustCompile(`^(?:(\d+) days?, )?(\d+):(\d{2}):(\d{2})$`)
+// segmentKind maps an interface's device name to a segment kind; VLANs are set from vlan.
+func segmentKind(device string) string {
+	kinds := map[string]string{"lagg": "lag", "bridge": "bridge", "wg": "wireguard", "pppoe": "pppoe", "lo": "loopback", "ovpn": "other", "gif": "other", "gre": "other"}
+	for prefix, kind := range kinds {
+		if strings.HasPrefix(device, prefix) {
+			return kind
+		}
+	}
+	return "ethernet"
+}
+
+// parseVersion splits "OPNsense 26.7.9-amd64" into product and version.
+func parseVersion(versions []string) (product, version string) {
+	if len(versions) > 0 {
+		if f := strings.Fields(versions[0]); len(f) >= 2 {
+			version, _, _ = strings.Cut(f[len(f)-1], "-")
+			return strings.Join(f[:len(f)-1], " "), version
+		}
+	}
+	return "OPNsense", ""
+}
+
+// The word after the day count is translated with the GUI language ("12 Tage, 03:04:05").
+var uptimeRE = regexp.MustCompile(`^(?:(\d+) \S+, )?(\d+):(\d{2}):(\d{2})$`)
 
 // parseUptime reads system_time's uptime ("12 days, 03:04:05" or "03:04:05"); other text
 // gives 0.
@@ -595,49 +633,48 @@ func parseUptime(s string) uint64 {
 
 var mediaRE = regexp.MustCompile(`(?i)\b(\d+)(G?)base-?(\w*)`)
 
-// parseMedia reads the speed and duplex from ifconfig media text ("1000baseT <full-duplex>",
-// "10Gbase-SR <full-duplex,rxpause,txpause>").
-func parseMedia(media string) (speedMbps int, duplex string) {
-	if m := mediaRE.FindStringSubmatch(media); m != nil {
+// parseMedia reads ifconfig media text ("1000baseT <full-duplex>", "10Gbase-SR
+// <full-duplex,rxpause,txpause>"): speed, duplex and port type. Optical and direct-attach
+// media (SR, LR, SX, CR, Twinax, ...) are SFP cages, the rest copper by speed.
+func parseMedia(text string) (speedMbps int, duplex string, media model.MediaType) {
+	m := mediaRE.FindStringSubmatch(text)
+	if m != nil {
 		speedMbps, _ = strconv.Atoi(m[1])
 		if m[2] != "" {
 			speedMbps *= 1000
 		}
 	}
 	switch {
-	case strings.Contains(media, "full-duplex"):
+	case strings.Contains(text, "full-duplex"):
 		duplex = "full"
-	case strings.Contains(media, "half-duplex"):
+	case strings.Contains(text, "half-duplex"):
 		duplex = "half"
 	}
-	return speedMbps, duplex
-}
-
-// mediaType maps ifconfig media to a port type: optical and direct-attach media (SR, LR, CR,
-// Twinax, ...) are SFP cages, the rest copper by speed.
-func mediaType(media string, speedMbps int) model.MediaType {
-	m := mediaRE.FindStringSubmatch(media)
 	if m != nil {
-		if t := strings.ToUpper(m[3]); t != "" && (!strings.HasPrefix(t, "T") || strings.HasPrefix(t, "TWINAX")) {
+		t := strings.ToUpper(m[3])
+		copper := strings.HasPrefix(t, "T") && !strings.HasPrefix(t, "TWINAX")
+		if t != "" && !copper {
 			if speedMbps > 1000 {
-				return model.MediaSFPPl
+				return speedMbps, duplex, model.MediaSFPPl
 			}
-			return model.MediaSFP
+			return speedMbps, duplex, model.MediaSFP
 		}
 	}
 	switch {
 	case speedMbps >= 10000:
-		return model.Media10GE
+		media = model.Media10GE
 	case speedMbps >= 5000:
-		return model.Media5GE
+		media = model.Media5GE
 	case speedMbps >= 2500:
-		return model.Media25GE
+		media = model.Media25GE
 	case speedMbps >= 1000:
-		return model.MediaGE
+		media = model.MediaGE
 	case speedMbps > 0:
-		return model.MediaFE
+		media = model.MediaFE
+	default:
+		media = model.MediaOther
 	}
-	return model.MediaOther
+	return speedMbps, duplex, media
 }
 
 // parsePrefix reads "192.0.2.1/24" or "fe80::1%igc1/64".

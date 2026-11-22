@@ -42,11 +42,17 @@ Drivers refuse to send credentials to a plain `http://` endpoint unless the targ
 
 #### OPNsense
 
-The `opnsense` driver reads OPNsense 25.1 or later through its core REST API. Create an API key for a dedicated user and set the `api_key` and `api_secret` secrets. The user needs these privileges (OPNsense grants whole pages, so several also allow changes on that page):
+The `opnsense` driver reads OPNsense 25.1 or later through its core REST API. Create an API key for a dedicated user and set the `api_key` and `api_secret` secrets. The user needs these privileges. OPNsense grants whole pages, so several also allow changes on that page, as noted:
 
-- Required: `Lobby: Dashboard` (`page-system-login-logout`: identity, uptime, memory, pf states) and `Status: Interfaces` (`page-status-interfaces`).
-- Optional, each adding its section: `Diagnostics: ARP Table` and `NDP Table`, `System: Gateways`, `Services: Kea DHCP` (`page-dhcp-kea-v4`), `Services: Dnsmasq DNS & DHCP` or `Status: DHCP leases` (ISC), `VPN: WireGuard: Diagnostics` (OPNsense 25.7 or later), and `Diagnostics: Ping` for the ping diagnostic.
-- Ping runs as an OPNsense ping job, which the driver removes afterwards. A user with `System: Deny config write` (`user-config-readonly`) cannot create the job.
+- **Required:** `Lobby: Dashboard` (identity, uptime, memory, pf states) and `Status: Interfaces` (also allows reloading an interface).
+- **Optional, each adding its section:**
+  - `Diagnostics: ARP Table` and `Diagnostics: NDP Table`.
+  - `System: Gateways` (also allows editing gateways).
+  - One of these per DHCP server in use, each of which also allows editing that server: `Services: DHCP: Kea(v4)`, `Services: Dnsmasq DNS/DHCP: Settings`, or `Status: DHCP leases` for ISC dhcpd.
+  - `VPN: WireGuard: Status` (25.7 or later; on 25.1 only `VPN: WireGuard: Configuration` grants it).
+  - `Diagnostics: Ping` for the ping diagnostic.
+- **Missing privileges and services:** a section whose privilege is missing, or whose service is not installed, stays empty. Any other failure keeps the section's last data.
+- **Ping:** it runs as an OPNsense ping job, which the driver removes afterwards. A user with `System: Deny config write` cannot create the job, and a DNS name is pinged over IPv4.
 
 #### RTLPlayground switches
 

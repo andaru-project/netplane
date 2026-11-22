@@ -2,10 +2,12 @@
 package opnsense
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/andaru-project/netplane/internal/driver"
@@ -15,12 +17,12 @@ import (
 // pingPoll is how often a running ping job's counters are read.
 var pingPoll = time.Second
 
+// pingJob is a search_jobs row. ping.py reports min, avg and max as numbers or null.
 type pingJob struct {
 	ID        string   `json:"id"`
-	Status    string   `json:"status"`
+	Status    string   `json:"status"` // running or stopped
 	Send      numStr   `json:"send"`
 	Received  numStr   `json:"received"`
-	Loss      numStr   `json:"loss"`
 	Min       *float64 `json:"min"`
 	Avg       *float64 `json:"avg"`
 	Max       *float64 `json:"max"`
@@ -28,9 +30,9 @@ type pingJob struct {
 }
 
 // RunDiagnostic runs ping through OPNsense's ping jobs: a job pings once a second until it is
-// stopped, so the driver reads its counters until count probes went out, then stops and
-// removes it. Creating a job saves an in-memory model, which a user with
-// user-config-readonly is refused.
+// removed, so the driver reads its counters until count probes went out and their replies
+// had a second to arrive, then removes it. Creating a job saves an in-memory model, which a
+// user with user-config-readonly is refused. A DNS name is pinged over IPv4.
 func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req model.DiagnosticRequest) (*model.DiagnosticResult, error) {
 	if err := d.ValidateConfig(cfg); err != nil {
 		return nil, err
@@ -51,7 +53,7 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 		fam = "ip6"
 	}
 
-	a := newAPI(cfg, 15*time.Second)
+	a := d.newAPI(cfg, 15*time.Second)
 	defer a.client.CloseIdleConnections()
 	var set struct {
 		Result      string            `json:"result"`
@@ -69,8 +71,7 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 		// Always remove the job, even after a timeout: it would otherwise ping for a day.
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		var ignored map[string]any
-		_ = a.do(dctx, http.MethodPost, "/api/diagnostics/ping/stop/"+set.UUID, map[string]any{}, &ignored)
+		var ignored map[string]any // remove also kills the job's ping
 		_ = a.do(dctx, http.MethodPost, "/api/diagnostics/ping/remove/"+set.UUID, map[string]any{}, &ignored)
 	}()
 	var started struct {
@@ -84,7 +85,8 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 		return nil, fmt.Errorf("opnsense ping start: %s", started.StatusMsg)
 	}
 
-	deadline := time.Now().Add(time.Duration(n+5) * time.Second)
+	// Generous: the firewall may first spend seconds resolving a name.
+	deadline := time.Now().Add(time.Duration(n+10) * time.Second)
 	var job pingJob
 	for {
 		if err := sleep(ctx, pingPoll); err != nil {
@@ -96,34 +98,32 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 		if err := a.do(ctx, http.MethodGet, "/api/diagnostics/ping/search_jobs", nil, &jobs); err != nil {
 			return nil, pingError("search_jobs", err)
 		}
-		found := false
-		for _, j := range jobs.Rows {
-			if j.ID == set.UUID {
-				job, found = j, true
-			}
-		}
-		if !found {
+		i := slices.IndexFunc(jobs.Rows, func(j pingJob) bool { return j.ID == set.UUID })
+		if i < 0 {
 			return nil, fmt.Errorf("opnsense ping job %s disappeared", set.UUID)
 		}
-		if job.Send.uint() >= uint64(n) || job.Status != "running" || time.Now().After(deadline) {
+		job = jobs.Rows[i]
+		// Done once every reply is in, or a probe past count went out (so the last counted
+		// probe had its second), or the ping exited.
+		sent, got := job.Send.uint(), job.Received.uint()
+		if got >= uint64(n) || sent > uint64(n) || job.Status != "running" || time.Now().After(deadline) {
 			break
 		}
 	}
 
-	stats := driver.PingStats{Transmitted: int(job.Send.uint()), Received: int(job.Received.uint())}
-	if l := job.Loss.float(); l != nil {
-		stats.LossPct = *l
+	// The job keeps pinging, so count only the probes asked for. The job's loss text differs
+	// between IPv4 ("0.00 %") and IPv6 ("100.0%"), so loss is computed here.
+	sent := min(int(job.Send.uint()), n)
+	stats := driver.PingStats{Transmitted: sent, Received: min(int(job.Received.uint()), sent)}
+	if sent > 0 {
+		stats.LossPct = 100 * float64(sent-stats.Received) / float64(sent)
 	}
 	if stats.Received > 0 {
 		stats.RTTMinMs, stats.RTTAvgMs, stats.RTTMaxMs = job.Min, job.Avg, job.Max
 	}
-	noReplies := "no replies"
-	if job.LastError != "" {
-		noReplies = job.LastError
-	}
-	res := driver.PingStatsResult(req, host, stats, "", noReplies)
-	if stats.Transmitted == 0 {
-		res.OK, res.Summary, res.Error = false, fmt.Sprintf("ping %s failed", host), noReplies
+	res := driver.PingStatsResult(req, host, stats, "", cmp.Or(job.LastError, "no replies"))
+	if sent == 0 {
+		res.Summary, res.Structured = fmt.Sprintf("ping %s failed", host), nil
 	}
 	return res, nil
 }

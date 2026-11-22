@@ -25,6 +25,7 @@ type pingServer struct {
 	received func(sent int) int
 	setReply string
 	running  bool
+	exits    bool // the ping exits at once, as when its name does not resolve
 }
 
 func (p *pingServer) handler(w http.ResponseWriter, r *http.Request) {
@@ -40,20 +41,21 @@ func (p *pingServer) handler(w http.ResponseWriter, r *http.Request) {
 		p.running = true
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	case path == "search_jobs":
-		if p.running {
+		if p.running && !p.exits {
 			p.sent++
 		}
 		rows := []map[string]any{{"id": "other", "status": "running", "send": 99}}
-		row := map[string]any{"id": "job1", "status": "running", "send": p.sent, "received": p.received(p.sent), "loss": "0.00 %", "last_error": ""}
+		status := "running"
+		if p.exits {
+			status = "stopped"
+		}
+		row := map[string]any{"id": "job1", "status": status, "send": p.sent, "received": p.received(p.sent), "loss": "0.00 %", "last_error": ""}
 		if p.received(p.sent) > 0 {
 			row["min"], row["avg"], row["max"] = 1.0, 2.5, 4.0
 		} else {
 			row["loss"], row["last_error"] = "100.00 %", "ping: sendto: No route to host"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"rows": append(rows, row)})
-	case path == "stop/job1":
-		p.running = false
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	case path == "remove/job1":
 		_, _ = w.Write([]byte(`{"status":"ok","stopped_processes":0}`))
 	default:
@@ -61,14 +63,14 @@ func (p *pingServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func runPing(t *testing.T, p *pingServer, target_ string, count string) (*model.DiagnosticResult, error) {
+func runPing(t *testing.T, p *pingServer, host, count string) (*model.DiagnosticResult, error) {
 	t.Helper()
 	old := pingPoll
 	pingPoll = time.Millisecond
 	t.Cleanup(func() { pingPoll = old })
 	srv := httptest.NewServer(http.HandlerFunc(p.handler))
 	t.Cleanup(srv.Close)
-	req := model.DiagnosticRequest{Kind: model.DiagPing, DeviceID: "opnsense:opn", Target: target_, Params: map[string]string{}}
+	req := model.DiagnosticRequest{Kind: model.DiagPing, DeviceID: "opnsense:opn", Target: host, Params: map[string]string{}}
 	if count != "" {
 		req.Params["count"] = count
 	}
@@ -89,15 +91,31 @@ func TestOpnsensePing(t *testing.T) {
 	if settings["hostname"] != "2001:db8::1" || settings["fam"] != "ip6" {
 		t.Fatalf("job settings = %v", settings)
 	}
-	if got := strings.Join(p.calls, ","); got != "set,start/job1,search_jobs,search_jobs,stop/job1,remove/job1" {
+	if got := strings.Join(p.calls, ","); got != "set,start/job1,search_jobs,search_jobs,remove/job1" {
 		t.Fatalf("calls = %s", got)
 	}
 
-	// No replies: the job's own error explains it.
+	// No replies: the job's own error explains it; one probe asked, one counted.
 	p = &pingServer{setReply: `{"result":"ok","uuid":"job1"}`, received: func(int) int { return 0 }}
 	res, err = runPing(t, p, "192.0.2.99", "1")
-	if err != nil || res.OK || res.Error != "ping: sendto: No route to host" {
+	st, _ = res.Structured.(driver.PingStats)
+	if err != nil || res.OK || res.Error != "ping: sendto: No route to host" || st.Transmitted != 1 || st.LossPct != 100 || st.RTTAvgMs != nil {
 		t.Fatalf("result = %+v, err = %v", res, err)
+	}
+
+	// The last reply arrives a poll late: wait for it rather than count a loss.
+	p = &pingServer{setReply: `{"result":"ok","uuid":"job1"}`, received: func(s int) int { return min(s-1, 3) }}
+	res, err = runPing(t, p, "192.0.2.1", "3")
+	st, _ = res.Structured.(driver.PingStats)
+	if err != nil || !res.OK || st.Transmitted != 3 || st.Received != 3 || st.LossPct != 0 {
+		t.Fatalf("late reply: result = %+v, err = %v", res, err)
+	}
+
+	// The ping exits before sending (unresolvable name): failed, with no statistics.
+	p = &pingServer{setReply: `{"result":"ok","uuid":"job1"}`, received: func(int) int { return 0 }, exits: true}
+	res, err = runPing(t, p, "nowhere.invalid", "3")
+	if err != nil || res.OK || res.Structured != nil || !strings.HasPrefix(res.Summary, "ping nowhere.invalid failed") {
+		t.Fatalf("exited job: result = %+v, err = %v", res, err)
 	}
 }
 
