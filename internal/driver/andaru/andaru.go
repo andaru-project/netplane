@@ -169,7 +169,10 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 	}
 
-	if hasSaved {
+	if !hasSaved { // keep the last zones and firewall summary instead of dropping them
+		snap.MarkUnavailable(driver.SectionZones)
+		snap.MarkUnavailable(driver.SectionFirewalls)
+	} else {
 		for _, z := range savedResp.Zones {
 			snap.Zones = append(snap.Zones, model.Zone{
 				DeviceID:   devID,

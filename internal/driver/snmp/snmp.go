@@ -135,9 +135,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 	ifXPDUs, _ := w.Walk(ctx, oidIfXTable)
 	basePortPDUs, _ := w.Walk(ctx, oidBasePortIf)
-	fdbPDUs, _ := w.Walk(ctx, oidDot1qFdb)
+	fdbPDUs, fdbErr := w.Walk(ctx, oidDot1qFdb)
 	vlanFdbPDUs, _ := w.Walk(ctx, oidVlanFdbID)
-	lldpPDUs, _ := w.Walk(ctx, oidLldpRem)
+	lldpPDUs, lldpErr := w.Walk(ctx, oidLldpRem)
 	lldpLocPDUs, _ := w.Walk(ctx, oidLldpLoc)
 	poePDUs, _ := w.Walk(ctx, oidPethPort)
 
@@ -365,6 +365,13 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			LastSeen:     now,
 			Capabilities: caps,
 		}},
+	}
+	// A failed walk (as opposed to a table the device lacks) keeps the last FDB or LLDP data.
+	if fdbErr != nil {
+		snap.MarkUnavailable(driver.SectionFDB)
+	}
+	if lldpErr != nil {
+		snap.MarkUnavailable(driver.SectionLLDP)
 	}
 
 	for _, idx := range idxs {

@@ -173,17 +173,25 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	var ifDump struct {
 		Interface []ubusInterface `json:"interface"`
 	}
-	_ = call("network.interface", "dump", map[string]any{}, &ifDump)
+	// Best-effort calls: a failure marks its section unavailable so the store keeps the old data.
+	var unavailable []driver.Section
+	if call("network.interface", "dump", map[string]any{}, &ifDump) != nil {
+		unavailable = append(unavailable, driver.SectionSegments)
+	}
 
 	wirelessStatus := map[string]ubusRadio{}
-	_ = call("network.wireless", "status", map[string]any{}, &wirelessStatus)
+	if call("network.wireless", "status", map[string]any{}, &wirelessStatus) != nil {
+		unavailable = append(unavailable, driver.SectionRadios)
+	}
 
 	hostHints := map[string]struct {
 		IPAddrs  []string `json:"ipaddrs"`
 		IP6Addrs []string `json:"ip6addrs"`
 		Name     string   `json:"name"`
 	}{}
-	_ = call("luci-rpc", "getHostHints", map[string]any{}, &hostHints)
+	if call("luci-rpc", "getHostHints", map[string]any{}, &hostHints) != nil {
+		unavailable = append(unavailable, driver.SectionNeighbors)
+	}
 
 	now := time.Now().UTC()
 	devNames := slices.SortedFunc(maps.Keys(devStatus), comparePortNames)
@@ -241,6 +249,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	mgmtIP := ""
 	snap := &driver.Snapshot{
+		Unavailable: unavailable,
 		TargetID:    cfg.ID,
 		CollectedAt: now,
 	}

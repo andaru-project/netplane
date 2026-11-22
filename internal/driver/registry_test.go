@@ -143,3 +143,31 @@ func TestSnapshotNormalize(t *testing.T) {
 		t.Fatalf("invalid MACs kept: link=%q fdb=%v clients=%v", bad.Links[0].MAC, bad.FDB, bad.Clients)
 	}
 }
+
+func TestCarryOver(t *testing.T) {
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	prev := &Snapshot{CollectedAt: t0, Clients: []model.Client{{MAC: "aa:aa:aa:aa:aa:01", Online: true}}, LLDP: []model.LldpNeighbor{{LocalLink: "lan1"}}}
+
+	cur := &Snapshot{CollectedAt: t0.Add(time.Minute)}
+	cur.MarkUnavailable(SectionClients)
+	cur.MarkUnavailable(SectionClients) // idempotent
+	cur.CarryOver(prev, 15*time.Minute)
+	if len(cur.Unavailable) != 1 || len(cur.Clients) != 1 || len(cur.LLDP) != 0 || !cur.Stale[SectionClients].Equal(t0) {
+		t.Fatalf("carry: unavailable=%v clients=%v lldp=%v stale=%v", cur.Unavailable, cur.Clients, cur.LLDP, cur.Stale)
+	}
+
+	// A carried section keeps its original freshness, and expires after maxAge.
+	next := &Snapshot{CollectedAt: t0.Add(20 * time.Minute), Unavailable: []Section{SectionClients}}
+	next.CarryOver(cur, 15*time.Minute)
+	if len(next.Clients) != 0 || next.Stale != nil {
+		t.Fatalf("stale data carried past maxAge: %v", next.Clients)
+	}
+
+	// Nothing fresh in prev either: nothing to carry.
+	after := &Snapshot{CollectedAt: t0.Add(21 * time.Minute), Unavailable: []Section{SectionClients}}
+	after.CarryOver(next, time.Hour)
+	if len(after.Clients) != 0 {
+		t.Fatal("carried data from a snapshot that had none")
+	}
+	(&Snapshot{Unavailable: []Section{SectionClients}}).CarryOver(nil, time.Hour) // first poll: no panic
+}

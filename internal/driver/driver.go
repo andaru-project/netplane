@@ -58,6 +58,88 @@ type Snapshot struct {
 	Radios          []model.WirelessRadio  `json:"radios"`
 	WirelessUplinks []model.WirelessUplink `json:"wireless_uplinks"`
 	Clients         []model.Client         `json:"clients"`
+
+	// Unavailable lists sections the driver could not refresh this poll (a best-effort call
+	// failed). The store carries them over from the previous snapshot instead of treating
+	// their absence as everything having disappeared.
+	Unavailable []Section `json:"unavailable,omitempty"`
+	// Stale maps each carried-over section to when its data was last fresh.
+	Stale map[Section]time.Time `json:"stale,omitempty"`
+}
+
+// Section names a snapshot slice by its JSON field name.
+type Section string
+
+// Sections a driver can mark unavailable.
+const (
+	SectionSegments  Section = "segments"
+	SectionZones     Section = "zones"
+	SectionFDB       Section = "fdb"
+	SectionLLDP      Section = "lldp"
+	SectionNeighbors Section = "neighbors"
+	SectionDHCP      Section = "dhcp"
+	SectionGateways  Section = "gateways"
+	SectionVPNs      Section = "vpns"
+	SectionFirewalls Section = "firewalls"
+	SectionRadios    Section = "radios"
+	SectionClients   Section = "clients"
+)
+
+// MarkUnavailable records that sec could not be refreshed this poll.
+func (s *Snapshot) MarkUnavailable(sec Section) {
+	if !slices.Contains(s.Unavailable, sec) {
+		s.Unavailable = append(s.Unavailable, sec)
+	}
+}
+
+// CarryOver fills each unavailable section from prev, as long as that data was fresh within
+// maxAge; older data is dropped so a permanently failing call cannot freeze it forever.
+func (s *Snapshot) CarryOver(prev *Snapshot, maxAge time.Duration) {
+	if prev == nil {
+		return
+	}
+	for _, sec := range s.Unavailable {
+		freshAt, carried := prev.Stale[sec]
+		if !carried {
+			if slices.Contains(prev.Unavailable, sec) {
+				continue // prev had nothing fresh to give either
+			}
+			freshAt = prev.CollectedAt
+		}
+		if s.CollectedAt.Sub(freshAt) > maxAge {
+			continue
+		}
+		switch sec {
+		case SectionSegments:
+			s.Segments = prev.Segments
+		case SectionZones:
+			s.Zones = prev.Zones
+		case SectionFDB:
+			s.FDB = prev.FDB
+		case SectionLLDP:
+			s.LLDP = prev.LLDP
+		case SectionNeighbors:
+			s.Neighbors = prev.Neighbors
+		case SectionDHCP:
+			s.DHCP = prev.DHCP
+		case SectionGateways:
+			s.Gateways = prev.Gateways
+		case SectionVPNs:
+			s.VPNs = prev.VPNs
+		case SectionFirewalls:
+			s.Firewalls = prev.Firewalls
+		case SectionRadios:
+			s.Radios = prev.Radios
+		case SectionClients:
+			s.Clients = prev.Clients
+		default:
+			continue
+		}
+		if s.Stale == nil {
+			s.Stale = map[Section]time.Time{}
+		}
+		s.Stale[sec] = freshAt
+	}
 }
 
 // Normalize canonicalizes MAC addresses, SFP alert defaults, and non-nil slices across the snapshot.

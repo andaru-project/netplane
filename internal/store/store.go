@@ -201,6 +201,9 @@ func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 // shortcut: fixed bound, not tied to the target's poll interval; derive it if intervals exceed ~5m.
 const maxCounterGap = 15 * time.Minute
 
+// maxCarryOver bounds how long a section the driver keeps failing to refresh is carried over.
+const maxCarryOver = 15 * time.Minute
+
 // PruneTargets deletes the stored config, snapshot and devices of every target whose ID is
 // not in keep, so removed or disabled targets stop showing stale (online) devices.
 func (s *Store) PruneTargets(ctx context.Context, keep map[string]bool) error {
@@ -268,6 +271,10 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 	} else if err != sql.ErrNoRows {
 		return nil, err
 	}
+
+	// Sections the driver could not refresh keep their last data for a while, so a failed
+	// best-effort call does not look like every client or neighbour leaving.
+	snap.CarryOver(prev, maxCarryOver)
 
 	tsNano := snap.CollectedAt.UTC().UnixNano()
 

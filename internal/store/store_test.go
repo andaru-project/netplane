@@ -441,3 +441,26 @@ func TestDiagnosticRunsAgeOut(t *testing.T) {
 		t.Fatalf("runs = (%+v, %v), want only new", runs, err)
 	}
 }
+
+func TestSaveSnapshotCarriesUnavailableSections(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	first := &driver.Snapshot{TargetID: "u1", CollectedAt: t0, Clients: []model.Client{{MAC: "aa:aa:aa:aa:aa:01", Online: true}}}
+	if _, err := st.SaveSnapshot(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second := &driver.Snapshot{TargetID: "u1", CollectedAt: t0.Add(time.Minute), Unavailable: []driver.Section{driver.SectionClients}}
+	prev, err := st.SaveSnapshot(ctx, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The saved snapshot (and the one the poller diffs) still has the client.
+	if len(second.Clients) != 1 || len(prev.Clients) != 1 {
+		t.Fatalf("clients not carried: %v", second.Clients)
+	}
+	state, err := st.LoadState(ctx)
+	if err != nil || len(state.Clients) != 1 {
+		t.Fatalf("state clients = %v, %v", state.Clients, err)
+	}
+}

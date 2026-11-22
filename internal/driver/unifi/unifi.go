@@ -154,15 +154,16 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	var staResp struct {
 		Data []unifiClient `json:"data"`
 	}
-	// Required: an empty client list would replace the stored one and publish false client departures.
-	if err := get(baseURL+prefix+"/api/s/"+site+"/stat/sta", &staResp); err != nil {
-		return nil, fmt.Errorf("unifi stat/sta: %w", err)
-	}
+	// Best effort: a failed client list keeps the stored one instead of publishing departures.
+	staErr := get(baseURL+prefix+"/api/s/"+site+"/stat/sta", &staResp)
 
 	now := time.Now().UTC()
 	snap := &driver.Snapshot{
 		TargetID:    cfg.ID,
 		CollectedAt: now,
+	}
+	if staErr != nil {
+		snap.MarkUnavailable(driver.SectionClients)
 	}
 
 	macToDevID := make(map[string]string, len(devResp.Data))
