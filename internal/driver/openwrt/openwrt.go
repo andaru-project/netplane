@@ -275,16 +275,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			MTU:         &mtu,
 			Media:       media,
 			FlowControl: fc,
-			Counters: &model.PortCounters{
-				RxBytes:   nd.Statistics.RxBytes,
-				TxBytes:   nd.Statistics.TxBytes,
-				RxPackets: nd.Statistics.RxPackets,
-				TxPackets: nd.Statistics.TxPackets,
-				RxErrors:  nd.Statistics.RxErrors,
-				TxErrors:  nd.Statistics.TxErrors,
-				RxDropped: nd.Statistics.RxDropped,
-				TxDropped: nd.Statistics.TxDropped,
-			},
+			Counters:    &nd.Statistics,
 		})
 	}
 
@@ -576,16 +567,8 @@ type ubusNetDev struct {
 		Selected   []string `json:"selected"`
 		Negotiated []string `json:"negotiated"`
 	} `json:"flow-control"`
-	Statistics struct {
-		RxBytes   uint64 `json:"rx_bytes"`
-		TxBytes   uint64 `json:"tx_bytes"`
-		RxPackets uint64 `json:"rx_packets"`
-		TxPackets uint64 `json:"tx_packets"`
-		RxErrors  uint64 `json:"rx_errors"`
-		TxErrors  uint64 `json:"tx_errors"`
-		RxDropped uint64 `json:"rx_dropped"`
-		TxDropped uint64 `json:"tx_dropped"`
-	} `json:"statistics"`
+	// netifd's statistics keys match PortCounters' JSON names.
+	Statistics model.PortCounters `json:"statistics"`
 }
 
 type ubusInterface struct {

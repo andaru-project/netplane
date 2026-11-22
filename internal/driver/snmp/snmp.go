@@ -163,12 +163,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		outHC     uint64 // ifHCOutOctets
 		hasInHC   bool
 		hasOutHC  bool
-		inPkts    uint64
-		outPkts   uint64
-		inErr     uint64
-		outErr    uint64
-		inDrop    uint64
-		outDrop   uint64
+		// Packets, errors and drops; the byte counters are chosen from the fields above.
+		c model.PortCounters
 	}
 	ifaces := map[int]*ifAcc{}
 	getIf := func(idx int) *ifAcc {
@@ -202,15 +198,15 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		case 10:
 			a.in32 = pduUint64(p)
 		case 13:
-			a.inDrop = pduUint64(p)
+			a.c.RxDropped = pduUint64(p)
 		case 14:
-			a.inErr = pduUint64(p)
+			a.c.RxErrors = pduUint64(p)
 		case 16:
 			a.out32 = pduUint64(p)
 		case 19:
-			a.outDrop = pduUint64(p)
+			a.c.TxDropped = pduUint64(p)
 		case 20:
-			a.outErr = pduUint64(p)
+			a.c.TxErrors = pduUint64(p)
 		}
 	}
 
@@ -226,11 +222,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		case 6:
 			a.inHC, a.hasInHC = pduUint64(p), true
 		case 7:
-			a.inPkts = pduUint64(p)
+			a.c.RxPackets = pduUint64(p)
 		case 10:
 			a.outHC, a.hasOutHC = pduUint64(p), true
 		case 11:
-			a.outPkts = pduUint64(p)
+			a.c.TxPackets = pduUint64(p)
 		case 15:
 			a.highSpeed = pduUint64(p)
 		case 18:
@@ -384,9 +380,10 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		media := guessSnmpMedia(ifName, speedMbps)
 		// Report both directions at one width: the store compares a single width flag per link.
 		hc := a.hasInHC && a.hasOutHC
-		rx, tx := a.in32, a.out32
+		counters := a.c
+		counters.RxBytes, counters.TxBytes, counters.Counter32 = a.in32, a.out32, !hc
 		if hc {
-			rx, tx = a.inHC, a.outHC
+			counters.RxBytes, counters.TxBytes = a.inHC, a.outHC
 		}
 		snap.Links = append(snap.Links, model.Link{
 			DeviceID:  devID,
@@ -401,17 +398,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			MTU:       &mtu,
 			Media:     media,
 			PoE:       poeByIf[idx],
-			Counters: &model.PortCounters{
-				RxBytes:   rx,
-				TxBytes:   tx,
-				RxPackets: a.inPkts,
-				TxPackets: a.outPkts,
-				RxErrors:  a.inErr,
-				TxErrors:  a.outErr,
-				RxDropped: a.inDrop,
-				TxDropped: a.outDrop,
-				Counter32: !hc,
-			},
+			Counters:  &counters,
 		})
 	}
 
