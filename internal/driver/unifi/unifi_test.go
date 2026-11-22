@@ -204,4 +204,17 @@ func TestUniFiReusesLogin(t *testing.T) {
 	if logins != 2 {
 		t.Fatalf("logins after expiry = %d, want 2", logins)
 	}
+	cfg.ResolvedSecrets = map[string]string{"username": "admin", "password": "new"}
+	if _, err := drv.Poll(context.Background(), cfg); err != nil {
+		t.Fatalf("Poll after a password change: %v", err)
+	}
+	if logins != 3 {
+		t.Fatalf("logins after a password change = %d, want 3", logins)
+	}
+	// With an API key there is never a login, even on a 401.
+	cfg.ResolvedSecrets = map[string]string{"api_key": "k"}
+	_, _ = drv.Poll(context.Background(), cfg)
+	if logins != 3 {
+		t.Fatalf("an API key target logged in: logins = %d", logins)
+	}
 }

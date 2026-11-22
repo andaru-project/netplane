@@ -35,6 +35,10 @@ type session struct {
 	key    sessionKey
 	client *http.Client
 	sid    string
+	// denied holds object.method calls this account's ACL refuses even with a fresh session.
+	// uhttpd answers both those and an expired session with the same -32002, so a call is only
+	// put here after a re-login did not help, and never triggers a login again.
+	denied map[string]bool
 }
 
 // sessionKey is what a session depends on: any change starts a new client and login.
@@ -55,7 +59,7 @@ func (d *Driver) session(cfg driver.TargetConfig) *session {
 		if s != nil {
 			s.client.CloseIdleConnections()
 		}
-		s = &session{key: key, client: driver.NewHTTPClient(cfg, 15*time.Second)}
+		s = &session{key: key, client: driver.NewHTTPClient(cfg, 15*time.Second), denied: map[string]bool{}}
 		d.sessions[cfg.ID] = s
 	}
 	return s
@@ -82,6 +86,9 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 	sess := d.session(cfg)
 	client := sess.client
+	// Keep the session, not the connections: a kept-alive connection the router has closed
+	// would fail the next poll's first POST, which net/http does not retry.
+	defer client.CloseIdleConnections()
 
 	ubusURL := strings.TrimRight(cfg.Endpoint, "/")
 	if !strings.HasSuffix(ubusURL, "/ubus") {
@@ -111,19 +118,31 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			return nil, err
 		}
 	}
-	// call reuses the kept session, logging in again once if rpcd rejects it.
+	// call reuses the kept session. A denial triggers at most one re-login per poll; a call
+	// still denied with a fresh session is refused by the ACL and remembered as such.
+	var reloginErr error
+	relogged := false
 	call := func(object, method string, params map[string]any, out any) error {
-		if sess.sid == "" {
-			return errors.New("openwrt ubus: no session") // an earlier re-login failed this poll
+		name := object + "." + method
+		if reloginErr != nil {
+			return reloginErr // an earlier re-login failed this poll
 		}
 		err := ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out)
-		if !errors.Is(err, errAccessDenied) {
+		if !errors.Is(err, errAccessDenied) || sess.denied[name] {
 			return err
 		}
-		if err := login(); err != nil {
+		if relogged {
+			sess.denied[name] = true // denied right after a fresh login: the ACL, not expiry
 			return err
 		}
-		return ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out)
+		relogged = true
+		if reloginErr = login(); reloginErr != nil {
+			return reloginErr
+		}
+		if err = ubusCall(ctx, client, ubusURL, sess.sid, object, method, params, out); errors.Is(err, errAccessDenied) {
+			sess.denied[name] = true
+		}
+		return err
 	}
 
 	var board struct {
@@ -398,7 +417,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	return snap, nil
 }
 
-// errAccessDenied is rpcd refusing the session id: expired, unknown, or lacking the ACL.
+// errAccessDenied is uhttpd refusing a call: an expired or unknown session, or an ACL refusal.
 var errAccessDenied = errors.New("ubus access denied")
 
 func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method string, params map[string]any, out any) error {
@@ -432,7 +451,7 @@ func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method
 		return err
 	}
 	if rpcResp.Error != nil {
-		if rpcResp.Error.Code == -32002 { // rpcd: unknown or expired session
+		if rpcResp.Error.Code == -32002 { // uhttpd: expired or unknown session, or an ACL refusal
 			return fmt.Errorf("ubus error %d: %s: %w", rpcResp.Error.Code, rpcResp.Error.Message, errAccessDenied)
 		}
 		return fmt.Errorf("ubus error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
@@ -442,9 +461,6 @@ func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method
 	}
 	var code int
 	if err := json.Unmarshal(rpcResp.Result[0], &code); err != nil || code != 0 {
-		if code == 6 { // UBUS_STATUS_PERMISSION_DENIED
-			return fmt.Errorf("ubus call %s.%s: %w", object, method, errAccessDenied)
-		}
 		return fmt.Errorf("ubus call %s.%s returned status %d", object, method, code)
 	}
 	if out != nil && len(rpcResp.Result) >= 2 {

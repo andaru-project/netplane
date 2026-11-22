@@ -90,6 +90,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	sess := d.session(cfg)
 	client := sess.client
+	// Keep the login cookie, not the connections (see the OpenWrt driver).
+	defer client.CloseIdleConnections()
 	apiKey := cfg.ResolvedSecrets["api_key"]
 	login := func() error {
 		sess.loggedIn = false

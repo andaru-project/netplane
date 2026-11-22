@@ -155,6 +155,10 @@ func TestOpenWrtReusesSession(t *testing.T) {
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"Access denied"}}`))
 			return
 		}
+		if obj+"."+method == "luci-rpc.getHostHints" { // outside this account's ACL
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"Access denied"}}`))
+			return
+		}
 		if obj+"."+method == "network.device.status" {
 			_, _ = w.Write([]byte(`{"result":[0,{"lan1":{"up":true,"carrier":true,"macaddr":"02:51:0a:00:00:01"}}]}`))
 			return
@@ -177,19 +181,21 @@ func TestOpenWrtReusesSession(t *testing.T) {
 	}
 	poll()
 	poll()
-	if logins != 1 {
-		t.Fatalf("logins after 2 polls = %d, want 1", logins)
+	poll()
+	// The ACL-denied call costs one re-login the first time, then is remembered.
+	if logins != 2 {
+		t.Fatalf("logins after 3 polls = %d, want 2 (one to learn the ACL denial)", logins)
 	}
 	mu.Lock()
 	valid = map[string]bool{} // rpcd expired the session
 	mu.Unlock()
 	poll()
-	if logins != 2 {
-		t.Fatalf("logins after expiry = %d, want 2", logins)
+	if logins != 3 {
+		t.Fatalf("logins after expiry = %d, want 3", logins)
 	}
 	cfg.ResolvedSecrets = map[string]string{"username": "root", "password": "new"}
 	poll()
-	if logins != 3 {
-		t.Fatalf("logins after a password change = %d, want 3", logins)
+	if logins != 5 { // new session, and the ACL denial is learned again for it
+		t.Fatalf("logins after a password change = %d, want 5", logins)
 	}
 }
