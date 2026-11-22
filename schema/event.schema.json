@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://netplane.dev/schema/v1/event.schema.json",
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "title": "NetplaneEvent",
+  "type": "object",
+  "required": ["id", "type", "severity", "timestamp", "summary"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "type": {
+      "type": "string",
+      "enum": [
+        "device.online",
+        "device.offline",
+        "link.up",
+        "link.down",
+        "link.stp_changed",
+        "sfp.alert",
+        "vpn.up",
+        "vpn.down",
+        "gateway.up",
+        "gateway.down",
+        "client.joined",
+        "client.left",
+        "topology.updated"
+      ]
+    },
+    "severity": { "type": "string", "enum": ["info", "warn", "crit"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "target_id": { "type": "string" },
+    "device_id": { "type": "string" },
+    "link_name": { "type": "string" },
+    "summary": { "type": "string" },
+    "details": { "type": "object" }
+  }
+}

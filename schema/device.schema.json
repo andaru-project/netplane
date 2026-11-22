@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://netplane.dev/schema/v1/device.schema.json",
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "title": "NetplaneDevice",
+  "type": "object",
+  "required": [
+    "id",
+    "driver",
+    "target_id",
+    "name",
+    "role",
+    "online",
+    "last_seen",
+    "capabilities"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "driver": {
+      "type": "string",
+      "enum": ["openwrt", "rtlplayground", "andaru", "pfsense", "opnsense", "unifi", "snmp", "mock"]
+    },
+    "target_id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string" },
+    "hostname": { "type": "string" },
+    "vendor": { "type": "string" },
+    "model": { "type": "string" },
+    "role": {
+      "type": "string",
+      "enum": ["switch", "router", "gateway", "firewall", "ap", "combo", "unknown"]
+    },
+    "primary_mac": { "type": "string", "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$" },
+    "macs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$" }
+    },
+    "mgmt_ip": { "type": "string" },
+    "firmware": {
+      "type": "object",
+      "properties": {
+        "current": { "type": "string" },
+        "available": { "type": "string" },
+        "hardware_rev": { "type": "string" },
+        "serial": { "type": "string" }
+      }
+    },
+    "uptime_sec": { "type": "integer", "minimum": 0 },
+    "online": { "type": "boolean" },
+    "last_seen": { "type": "string", "format": "date-time" },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "system_stats": {
+      "type": "object",
+      "properties": {
+        "cpu_pct": { "type": "number" },
+        "mem_used_bytes": { "type": "integer", "minimum": 0 },
+        "mem_total_bytes": { "type": "integer", "minimum": 0 },
+        "load1": { "type": "number" }
+      }
+    },
+    "sensors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "value", "unit", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "kind": { "type": "string", "enum": ["temp_c", "fan_rpm", "voltage_v", "power_w", "psu_ok"] },
+          "value": { "type": "number" },
+          "unit": { "type": "string" },
+          "status": { "type": "string", "enum": ["ok", "warn", "crit", "unknown"] }
+        }
+      }
+    },
+    "poe_budget": {
+      "type": ["object", "null"],
+      "properties": {
+        "total_watts": { "type": "number", "minimum": 0 },
+        "used_watts": { "type": "number", "minimum": 0 }
+      }
+    },
+    "pending_changes": { "type": ["boolean", "null"] },
+    "extensions": { "type": "object" }
+  }
+}

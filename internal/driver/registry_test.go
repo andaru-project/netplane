@@ -1,0 +1,137 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package driver
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/andrebrait/netplane/internal/model"
+)
+
+type stubDriver struct{ kind string }
+
+func (s stubDriver) Kind() string                          { return s.kind }
+func (s stubDriver) ValidateConfig(cfg TargetConfig) error { return nil }
+func (s stubDriver) Poll(context.Context, TargetConfig) (*Snapshot, error) {
+	return &Snapshot{}, nil
+}
+
+func TestRegistry(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(nil); err == nil {
+		t.Fatal("expected error for nil driver")
+	}
+	if err := r.Register(stubDriver{kind: ""}); err == nil {
+		t.Fatal("expected error for empty kind")
+	}
+	if err := r.Register(stubDriver{kind: "unifi"}); err != nil {
+		t.Fatalf("register unifi: %v", err)
+	}
+	if err := r.Register(stubDriver{kind: "openwrt"}); err != nil {
+		t.Fatalf("register openwrt: %v", err)
+	}
+	if err := r.Register(stubDriver{kind: "unifi"}); err == nil {
+		t.Fatal("expected duplicate kind error")
+	}
+
+	d, ok := r.Get("openwrt")
+	if !ok || d.Kind() != "openwrt" {
+		t.Fatalf("Get(openwrt) = (%v, %v)", d, ok)
+	}
+	if _, ok := r.Get("missing"); ok {
+		t.Fatal("expected missing driver to return false")
+	}
+	kinds := r.Kinds()
+	if len(kinds) != 2 || kinds[0] != "openwrt" || kinds[1] != "unifi" {
+		t.Fatalf("Kinds() = %v, want [openwrt unifi]", kinds)
+	}
+}
+
+func TestTargetConfigRedactsSecrets(t *testing.T) {
+	const secretVal = "super-secret-api-token-9999"
+	cfg := TargetConfig{
+		ID:              "t1",
+		Name:            "Lab Firewall",
+		Driver:          "pfsense",
+		Endpoint:        "https://192.0.2.1",
+		Enabled:         true,
+		PollInterval:    15 * time.Second,
+		SecretRefs:      map[string]model.SecretRef{"api_key": {Secret: "PFSENSE_API_KEY"}},
+		ResolvedSecrets: map[string]string{"api_key": secretVal},
+	}
+
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), secretVal) {
+		t.Fatalf("secret leaked in JSON: %s", raw)
+	}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("polling target", "target", cfg)
+	if strings.Contains(buf.String(), secretVal) {
+		t.Fatalf("secret leaked in slog: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), `"secret_count":1`) {
+		t.Fatalf("expected secret_count in log, got %s", buf.String())
+	}
+}
+
+func TestSnapshotNormalize(t *testing.T) {
+	rx := -22.5
+	snap := &Snapshot{
+		TargetID:    "t1",
+		CollectedAt: time.Now().UTC(),
+		Devices: []model.Device{{
+			ID:         "openwrt:02:51:0a:00:00:01",
+			PrimaryMAC: "02510A000001",
+			MACs:       []string{"02-51-0A-00-00-01"},
+		}},
+		Links: []model.Link{{
+			DeviceID: "openwrt:02:51:0a:00:00:01",
+			IfName:   "sfp1",
+			MAC:      "0251.0a00.0002",
+			Media:    model.MediaSFPPl,
+			SFP:      &model.SfpDom{Present: true, RxPowerDbm: &rx},
+		}},
+		LagGroups:       []model.LagGroup{{ID: "lag1"}},
+		Segments:        []model.Segment{{ID: "seg1"}},
+		Zones:           []model.Zone{{ID: "z1"}},
+		FDB:             []model.FdbEntry{{DeviceID: "d1", LinkName: "lan1", MAC: "AA-BB-CC-DD-EE-FF", VLAN: 1}},
+		LLDP:            []model.LldpNeighbor{{DeviceID: "d1", LocalLink: "sfp1", ChassisID: "AABBCCDDEEFF"}},
+		Neighbors:       []model.NeighborEntry{{DeviceID: "d1", Family: model.IPv4, IP: "192.0.2.5", MAC: "AA:BB:CC:DD:EE:FF"}},
+		DHCP:            []model.DhcpLease{{DeviceID: "d1", Family: model.IPv4, IP: "192.0.2.5", MAC: "aabb.ccdd.eeff"}},
+		Firewalls:       []model.FirewallState{{DeviceID: "d1"}},
+		Radios:          []model.WirelessRadio{{DeviceID: "d1"}},
+		WirelessUplinks: []model.WirelessUplink{{DeviceID: "ap2", PeerMAC: "11-22-33-44-55-66"}},
+		Clients:         []model.Client{{MAC: "112233445566"}},
+	}
+
+	if err := snap.Normalize(); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if snap.Devices[0].PrimaryMAC != "02:51:0a:00:00:01" {
+		t.Fatalf("device mac = %q", snap.Devices[0].PrimaryMAC)
+	}
+	if !snap.Links[0].IsFiber || snap.Links[0].SFP.AlertState != model.AlertWarn {
+		t.Fatalf("link fiber/sfp alert = %v / %v", snap.Links[0].IsFiber, snap.Links[0].SFP.AlertState)
+	}
+	if snap.LLDP[0].ChassisID != "aa:bb:cc:dd:ee:ff" {
+		t.Fatalf("lldp chassis = %q", snap.LLDP[0].ChassisID)
+	}
+	if snap.Clients[0].MAC != "11:22:33:44:55:66" {
+		t.Fatalf("client mac = %q", snap.Clients[0].MAC)
+	}
+
+	bad := &Snapshot{FDB: []model.FdbEntry{{DeviceID: "d1", LinkName: "lan1", MAC: "invalid"}}}
+	if err := bad.Normalize(); err == nil {
+		t.Fatal("expected invalid MAC error")
+	}
+}

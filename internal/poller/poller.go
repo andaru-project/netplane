@@ -1,0 +1,204 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package poller
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/andrebrait/netplane/internal/driver"
+	"github.com/andrebrait/netplane/internal/events"
+	"github.com/andrebrait/netplane/internal/store"
+	"github.com/andrebrait/netplane/internal/topology"
+)
+
+// TargetStatus captures runtime health for one polled target.
+type TargetStatus struct {
+	TargetID            string    `json:"target_id"`
+	Driver              string    `json:"driver"`
+	LastAttempt         time.Time `json:"last_attempt,omitempty"`
+	LastSuccess         time.Time `json:"last_success,omitempty"`
+	LastError           string    `json:"last_error,omitempty"`
+	ConsecutiveFailures int       `json:"consecutive_failures"`
+}
+
+// Scheduler runs concurrent isolated polling loops for configured targets.
+type Scheduler struct {
+	registry   *driver.Registry
+	store      *store.Store
+	bus        *events.Bus
+	logger     *slog.Logger
+	maxBackoff time.Duration
+
+	mu     sync.RWMutex
+	status map[string]TargetStatus
+}
+
+// New creates a Scheduler wired to the given Registry, Store, and EventBus.
+func New(reg *driver.Registry, st *store.Store, bus *events.Bus, logger *slog.Logger) *Scheduler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Scheduler{
+		registry:   reg,
+		store:      st,
+		bus:        bus,
+		logger:     logger,
+		maxBackoff: 2 * time.Minute,
+		status:     make(map[string]TargetStatus),
+	}
+}
+
+// SetMaxBackoff overrides the maximum backoff cap on consecutive target failures.
+func (s *Scheduler) SetMaxBackoff(d time.Duration) {
+	if d > 0 {
+		s.maxBackoff = d
+	}
+}
+
+// Run starts polling loops for all enabled targets and blocks until ctx is cancelled
+// and all worker goroutines have exited.
+func (s *Scheduler) Run(ctx context.Context, targets []driver.TargetConfig) {
+	var wg sync.WaitGroup
+	for _, cfg := range targets {
+		if !cfg.Enabled {
+			continue
+		}
+		wg.Add(1)
+		go func(c driver.TargetConfig) {
+			defer wg.Done()
+			s.runTarget(ctx, c)
+		}(cfg)
+	}
+	wg.Wait()
+}
+
+// PollOnce executes a single synchronous poll cycle for cfg, persisting state,
+// emitting diff events, and updating the solved topology snapshot.
+func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error {
+	now := time.Now().UTC()
+	drv, ok := s.registry.Get(cfg.Driver)
+	if !ok {
+		err := fmt.Errorf("unknown driver %q", cfg.Driver)
+		s.recordError(cfg, now, err)
+		return err
+	}
+
+	snap, err := drv.Poll(ctx, cfg)
+	if err != nil {
+		s.recordError(cfg, now, err)
+		return err
+	}
+	if snap.TargetID == "" {
+		snap.TargetID = cfg.ID
+	}
+	if snap.CollectedAt.IsZero() {
+		snap.CollectedAt = now
+	}
+
+	prev, err := s.store.SaveSnapshot(ctx, snap)
+	if err != nil {
+		s.recordError(cfg, now, err)
+		return err
+	}
+
+	s.recordSuccess(cfg, now)
+
+	if s.bus != nil {
+		for _, ev := range events.DiffSnapshots(prev, snap) {
+			s.bus.Publish(ev)
+		}
+	}
+
+	if state, err := s.store.LoadState(ctx); err == nil {
+		graph := topology.Solve(state, now)
+		if err := s.store.SaveTopology(ctx, now, graph); err == nil && s.bus != nil {
+			s.bus.Publish(events.Event{
+				Type:      events.TopologyUpdated,
+				Severity:  events.SeverityInfo,
+				Timestamp: now,
+				TargetID:  cfg.ID,
+				Summary:   fmt.Sprintf("Topology updated (%d nodes, %d edges)", len(graph.Nodes), len(graph.Edges)),
+			})
+		}
+	}
+	return nil
+}
+
+// Status returns a copy of all target polling statuses.
+func (s *Scheduler) Status() map[string]TargetStatus {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]TargetStatus, len(s.status))
+	for k, v := range s.status {
+		out[k] = v
+	}
+	return out
+}
+
+func (s *Scheduler) runTarget(ctx context.Context, cfg driver.TargetConfig) {
+	baseInterval := cfg.PollInterval
+	if baseInterval <= 0 {
+		baseInterval = 15 * time.Second
+	}
+
+	failures := 0
+	for {
+		if err := s.PollOnce(ctx, cfg); err != nil {
+			failures++
+			s.logger.Warn("target poll failed", "target", cfg, "failures", failures, "err", err)
+		} else {
+			failures = 0
+		}
+
+		wait := backoffDuration(baseInterval, failures, s.maxBackoff)
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func backoffDuration(base time.Duration, failures int, capDur time.Duration) time.Duration {
+	if failures <= 0 {
+		return base
+	}
+	d := base
+	for i := 1; i < failures && d < capDur; i++ {
+		d *= 2
+	}
+	if d > capDur {
+		return capDur
+	}
+	return d
+}
+
+func (s *Scheduler) recordSuccess(cfg driver.TargetConfig, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status[cfg.ID] = TargetStatus{
+		TargetID:            cfg.ID,
+		Driver:              cfg.Driver,
+		LastAttempt:         at,
+		LastSuccess:         at,
+		LastError:           "",
+		ConsecutiveFailures: 0,
+	}
+}
+
+func (s *Scheduler) recordError(cfg driver.TargetConfig, at time.Time, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.status[cfg.ID]
+	st.TargetID = cfg.ID
+	st.Driver = cfg.Driver
+	st.LastAttempt = at
+	st.LastError = err.Error()
+	st.ConsecutiveFailures++
+	s.status[cfg.ID] = st
+}
