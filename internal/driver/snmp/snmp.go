@@ -308,7 +308,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			ifName = a.descr
 		}
 		if ifName == "" {
-			ifName = fmt.Sprintf("if%d", idx)
+			ifName = ifIndexName(idx)
 		}
 		ifIdxToName[idx] = ifName
 		rawMACs = append(rawMACs, a.mac)
@@ -515,7 +515,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		if n := ifIdxToName[lpNum]; n != "" {
 			return n
 		}
-		return fmt.Sprintf("if%d", lpNum)
+		return ifIndexName(lpNum)
 	}
 
 	// LLDP-MIB: .1.0.8802.1.1.2.1.4.1.1.<col>.<timeMark>.<localPortNum>.<remIndex>
@@ -736,3 +736,6 @@ func guessSnmpMedia(ifName string, speedMbps int) model.MediaType {
 		return model.MediaOther
 	}
 }
+
+// ifIndexName names an interface that has no ifName or ifDescr after its ifIndex.
+func ifIndexName(idx int) string { return "if" + strconv.Itoa(idx) }
