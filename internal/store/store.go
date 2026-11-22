@@ -36,22 +36,7 @@ type LinkSample struct {
 
 // NetworkState aggregates the latest snapshots across all polled targets.
 type NetworkState struct {
-	Devices         []model.Device         `json:"devices"`
-	Links           []model.Link           `json:"links"`
-	LagGroups       []model.LagGroup       `json:"lag_groups"`
-	Segments        []model.Segment        `json:"segments"`
-	Zones           []model.Zone           `json:"zones"`
-	FDB             []model.FdbEntry       `json:"fdb"`
-	LLDP            []model.LldpNeighbor   `json:"lldp"`
-	Neighbors       []model.NeighborEntry  `json:"neighbors"`
-	DHCP            []model.DhcpLease      `json:"dhcp"`
-	Gateways        []model.GatewayStatus  `json:"gateways"`
-	Routes          []model.Route          `json:"routes"`
-	VPNs            []model.VpnTunnel      `json:"vpns"`
-	Firewalls       []model.FirewallState  `json:"firewalls"`
-	Radios          []model.WirelessRadio  `json:"radios"`
-	WirelessUplinks []model.WirelessUplink `json:"wireless_uplinks"`
-	Clients         []model.Client         `json:"clients"`
+	driver.Inventory
 }
 
 // Store provides SQLite WAL persistence for targets, snapshots, samples, topology, and diagnostics.
@@ -458,24 +443,7 @@ func (s *Store) LoadState(ctx context.Context) (*NetworkState, error) {
 	}
 	defer rows.Close()
 
-	state := &NetworkState{
-		Devices:         []model.Device{},
-		Links:           []model.Link{},
-		LagGroups:       []model.LagGroup{},
-		Segments:        []model.Segment{},
-		Zones:           []model.Zone{},
-		FDB:             []model.FdbEntry{},
-		LLDP:            []model.LldpNeighbor{},
-		Neighbors:       []model.NeighborEntry{},
-		DHCP:            []model.DhcpLease{},
-		Gateways:        []model.GatewayStatus{},
-		Routes:          []model.Route{},
-		VPNs:            []model.VpnTunnel{},
-		Firewalls:       []model.FirewallState{},
-		Radios:          []model.WirelessRadio{},
-		WirelessUplinks: []model.WirelessUplink{},
-		Clients:         []model.Client{},
-	}
+	state := &NetworkState{}
 
 	for rows.Next() {
 		var raw string
@@ -486,27 +454,13 @@ func (s *Store) LoadState(ctx context.Context) (*NetworkState, error) {
 		if err := json.Unmarshal([]byte(raw), &snap); err != nil {
 			return nil, err
 		}
-		state.Devices = append(state.Devices, snap.Devices...)
-		state.Links = append(state.Links, snap.Links...)
-		state.LagGroups = append(state.LagGroups, snap.LagGroups...)
-		state.Segments = append(state.Segments, snap.Segments...)
-		state.Zones = append(state.Zones, snap.Zones...)
-		state.FDB = append(state.FDB, snap.FDB...)
-		state.LLDP = append(state.LLDP, snap.LLDP...)
-		state.Neighbors = append(state.Neighbors, snap.Neighbors...)
-		state.DHCP = append(state.DHCP, snap.DHCP...)
-		state.Gateways = append(state.Gateways, snap.Gateways...)
-		state.Routes = append(state.Routes, snap.Routes...)
-		state.VPNs = append(state.VPNs, snap.VPNs...)
-		state.Firewalls = append(state.Firewalls, snap.Firewalls...)
-		state.Radios = append(state.Radios, snap.Radios...)
-		state.WirelessUplinks = append(state.WirelessUplinks, snap.WirelessUplinks...)
-		state.Clients = append(state.Clients, snap.Clients...)
+		state.Append(snap.Inventory)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
+	state.NonNil()
 	state.Devices = dedupeDevices(state.Devices)
 	state.Clients = mergeClients(state.Clients)
 	sort.Slice(state.Devices, func(i, j int) bool { return state.Devices[i].ID < state.Devices[j].ID })
