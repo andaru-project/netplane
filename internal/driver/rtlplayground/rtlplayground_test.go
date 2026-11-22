@@ -442,11 +442,12 @@ func TestFailingDataSetDoesNotBlockOthersAndPasswordRemovalClears(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := time.Until(drv.state("sw1").lldpS.next); d < max(retryAfter, lldpEvery/2)-time.Second {
-		t.Fatalf("lldp backoff = %v", d)
+	if d := time.Until(drv.state("sw1").lagS.next); d < max(retryAfter, lldpEvery/2)-time.Second {
+		t.Fatalf("lag backoff = %v", d)
 	}
-	if snap.Devices[0].MgmtIP == "" || len(snap.FDB) != 1 || len(snap.LLDP) != 0 {
-		t.Fatalf("info/fdb must refresh despite a failing /lag.json: ip=%q fdb=%d lldp=%d", snap.Devices[0].MgmtIP, len(snap.FDB), len(snap.LLDP))
+	// LLDP, info and the FDB all refresh although /lag.json keeps failing.
+	if snap.Devices[0].MgmtIP == "" || len(snap.FDB) != 1 || len(snap.LLDP) != 2 || len(snap.LagGroups) != 0 {
+		t.Fatalf("ip=%q fdb=%d lldp=%d lags=%d", snap.Devices[0].MgmtIP, len(snap.FDB), len(snap.LLDP), len(snap.LagGroups))
 	}
 
 	cfg.ResolvedSecrets = nil
@@ -555,5 +556,30 @@ func TestEndpointChangeResetsState(t *testing.T) {
 	}
 	if st.base != srv2.URL || st.session == "" || (st.session == old && st.lldpS.ok.IsZero()) {
 		t.Fatalf("state not rebuilt for the new endpoint: base=%q", st.base)
+	}
+}
+
+func TestScrapeWithoutPortSamplesFails(t *testing.T) {
+	f, srv := newFakeSwitch(t)
+	f.metrics = []byte("<html><body>status page</body></html>\n")
+	if _, err := New().Poll(context.Background(), cfgFor(srv, "")); err == nil {
+		t.Fatal("a reply without switch port samples must fail the poll")
+	}
+}
+
+func TestMetricsURLRejectsCredentials(t *testing.T) {
+	cfg := driver.TargetConfig{ID: "r1", Endpoint: "http://192.0.2.10", Settings: map[string]any{"metrics_url": "http://u:p@192.0.2.10:9100/metrics"}}
+	if err := New().ValidateConfig(cfg); err == nil {
+		t.Fatal("metrics_url with credentials accepted")
+	}
+}
+
+func TestNonFiniteReadingsDropped(t *testing.T) {
+	in := "node_hwmon_temp_celsius{chip=\"thermal_thermal_zone0\",sensor=\"temp1\"} NaN\n" +
+		"node_network_carrier{device=\"lan9\"} 1\n" +
+		"rtlplayground_sfp_voltage_volts{device=\"lan9\"} +Inf\n"
+	m := parseMetrics(parsePromText([]byte(in)))
+	if m.socTemp != nil || m.ports[9].sfp == nil || m.ports[9].sfp.VoltageV != nil {
+		t.Fatalf("non-finite readings kept: temp=%v sfp=%+v", m.socTemp, m.ports[9].sfp)
 	}
 }

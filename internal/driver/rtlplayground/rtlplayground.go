@@ -6,6 +6,10 @@
 // keeps at most 4 login sessions, evicting the least recently used. Its Prometheus exporter
 // has its own port and connection slot, shared with any Prometheus scraper.
 //
+// Written against the firmware's HTTP, JSON and exporter interfaces as of upstream
+// logicog/RTLPlayground main in November 2026 and the andrebrait fork (v0.1.0-fe02652c),
+// built with PROMETHEUS=1 and without UNIFI. Checked live on RTL8373 and RTL8367 boards.
+//
 // So the driver:
 //   - reads link state, speed, counters, SFP DOM, temperatures and identity from the public
 //     /metrics exporter, once per poll;
@@ -80,18 +84,21 @@ type target struct {
 	session  string    // "session" cookie value
 	jsonNext time.Time // after a global failure, no JSON request (or login) before this
 
-	lldpS, infoS, fdbS schedule
-	lldp               []lldpNeighbor
-	lag                *lagReply
-	info               *infoReply
-	fdb                []l2Entry
+	lldpS, lagS, infoS, fdbS schedule
+	lldp                     []lldpNeighbor
+	lag                      *lagReply
+	info                     *infoReply
+	fdb                      []l2Entry
 }
 
 // expire drops cached data that has not refreshed for three periods, so a broken login
 // cannot keep stale neighbours alive forever.
 func (t *target) expire(now time.Time) {
 	if now.Sub(t.lldpS.ok) > 3*lldpEvery {
-		t.lldp, t.lag = nil, nil
+		t.lldp = nil
+	}
+	if now.Sub(t.lagS.ok) > 3*lldpEvery {
+		t.lag = nil
 	}
 	if now.Sub(t.infoS.ok) > 3*infoEvery {
 		t.info = nil
@@ -127,8 +134,16 @@ func (d *Driver) ValidateConfig(cfg driver.TargetConfig) error {
 
 // metricsURL is the metrics_url setting, else the endpoint's host on the exporter port.
 func metricsURL(cfg driver.TargetConfig) (string, error) {
-	if u := cfg.StringSetting("metrics_url", ""); u != "" {
-		return u, nil
+	if raw := cfg.StringSetting("metrics_url", ""); raw != "" {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return "", fmt.Errorf("invalid metrics_url %q", raw)
+		}
+		if u.User != nil {
+			// The exporter is public; credentials here would only travel in clear text.
+			return "", errors.New("metrics_url must not contain credentials")
+		}
+		return raw, nil
 	}
 	u, err := url.Parse(strings.TrimRight(cfg.Endpoint, "/"))
 	if err != nil || u.Hostname() == "" {
@@ -183,25 +198,29 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				return true
 			}
 			err := fetch()
+			done := time.Now() // back-offs run from the failure, not from before a long walk
 			switch {
 			case err == nil:
-				s.ok, s.next = now, now.Add(every)
+				s.ok, s.next = done, done.Add(every)
 			case ctx.Err() != nil:
 				return false // cancelled by the caller, not the device's fault
 			case errors.Is(err, errLoginRefused), errors.Is(err, errSessionRejected), errors.As(err, new(transportError)):
-				st.jsonNext = now.Add(retryAfter)
+				st.jsonNext = done.Add(retryAfter)
 				return false
 			default:
-				s.next = now.Add(max(retryAfter, every/2))
+				s.next = done.Add(max(retryAfter, every/2))
 			}
 			return true
 		}
-		_ = refresh(&st.lldpS, lldpEvery, func() error { return c.fetchLLDPAndLAG(ctx, st) }) &&
+		_ = refresh(&st.lldpS, lldpEvery, func() error { return c.fetchLLDP(ctx, st) }) &&
+			refresh(&st.lagS, lldpEvery, func() error { return c.fetchLAG(ctx, st) }) &&
 			refresh(&st.infoS, infoEvery, func() error { return c.fetchInfo(ctx, st) }) &&
 			refresh(&st.fdbS, fdbEvery, func() error { return c.fetchFDB(ctx, st) })
 	}
-	st.expire(now)
-	return buildSnapshot(cfg, samples, st, now), nil
+	// Expire against the time the snapshot is built: the JSON work above can take a while.
+	built := time.Now()
+	st.expire(built)
+	return buildSnapshot(cfg, samples, st, built), nil
 }
 
 // client sends one request at a time to one switch.
@@ -286,9 +305,27 @@ func (c *client) scrape(ctx context.Context, u string) ([]sample, error) {
 			err = fmt.Errorf("HTTP %d", resp.StatusCode)
 			continue
 		}
-		return parsePromText(body), nil
+		samples := parsePromText(body)
+		if !hasPortSample(samples) {
+			// A 200 that is not this exporter (an HTML page, a cut reply) must not replace the
+			// last snapshot with a switch that has no ports.
+			err = errors.New("reply has no switch port samples")
+			continue
+		}
+		return samples, nil
 	}
 	return nil, err
+}
+
+func hasPortSample(samples []sample) bool {
+	for _, s := range samples {
+		if s.name == "node_network_info" || s.name == "node_network_carrier" {
+			if _, ok := portOf(s.labels["device"]); ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var (
@@ -389,18 +426,26 @@ type l2Entry struct {
 	Idx  string `json:"idx"`  // hex table index
 }
 
-func (c *client) fetchLLDPAndLAG(ctx context.Context, st *target) error {
+func (c *client) fetchLLDP(ctx context.Context, st *target) error {
 	var l struct {
 		Neighbors []lldpNeighbor `json:"neighbors"`
 	}
 	if err := c.getJSON(ctx, st, "/lldp.json", &l); err != nil {
 		return err
 	}
+	st.lldp = l.Neighbors
+	if st.lldp == nil {
+		st.lldp = []lldpNeighbor{} // fetched, no neighbours: still reports the capability
+	}
+	return nil
+}
+
+func (c *client) fetchLAG(ctx context.Context, st *target) error {
 	var lag lagReply
 	if err := c.getJSON(ctx, st, "/lag.json", &lag); err != nil {
 		return err
 	}
-	st.lldp, st.lag = l.Neighbors, &lag
+	st.lag = &lag
 	return nil
 }
 
@@ -522,10 +567,10 @@ func parseMetrics(samples []sample) metricsData {
 		case "node_hwmon_temp_celsius":
 			chip := s.labels["chip"]
 			if chip == "thermal_thermal_zone0" {
-				m.socTemp = new(s.value)
+				m.socTemp = finite(s.value)
 			} else if dev, ok := strings.CutPrefix(chip, "sfp_"); ok {
 				if p := port(dev); p != nil {
-					sfp(p).TempC = new(s.value)
+					sfp(p).TempC = finite(s.value)
 				}
 			}
 			continue
@@ -551,9 +596,9 @@ func parseMetrics(samples []sample) metricsData {
 			d := sfp(p)
 			d.Vendor, d.PartNumber, d.Serial = s.labels["vendor"], s.labels["model"], s.labels["serial"]
 		case "rtlplayground_sfp_voltage_volts":
-			sfp(p).VoltageV = new(s.value)
+			sfp(p).VoltageV = finite(s.value)
 		case "rtlplayground_sfp_tx_bias_amperes":
-			sfp(p).BiasMa = new(s.value * 1000)
+			sfp(p).BiasMa = finite(s.value * 1000)
 		case "rtlplayground_sfp_tx_power_watts":
 			sfp(p).TxPowerDbm = dbm(s.value)
 		case "rtlplayground_sfp_rx_power_watts":
@@ -656,8 +701,11 @@ func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target, now ti
 	if hasSFP {
 		caps = append(caps, model.CapSfpDom)
 	}
+	if st.lldp != nil {
+		caps = append(caps, model.CapLLDP)
+	}
 	if st.lag != nil {
-		caps = append(caps, model.CapLLDP, model.CapLAG)
+		caps = append(caps, model.CapLAG)
 	}
 	if !st.fdbS.ok.IsZero() {
 		caps = append(caps, model.CapFDB)
@@ -731,6 +779,14 @@ func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target, now ti
 		snap.FDB = append(snap.FDB, model.FdbEntry{DeviceID: devID, LinkName: ifName(e.Port), MAC: e.MAC, VLAN: int(vlan)})
 	}
 	return snap
+}
+
+// finite returns a pointer to v, or nil for NaN and infinities (an unavailable reading).
+func finite(v float64) *float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return nil
+	}
+	return &v
 }
 
 // dbm converts optical power in watts to dBm; zero or negative power has no dBm value.

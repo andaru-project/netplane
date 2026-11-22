@@ -322,3 +322,9 @@ func TestPollIntervalHonoursDriverFloor(t *testing.T) {
 		}
 	}
 }
+
+func TestBackoffNeverBelowBase(t *testing.T) {
+	if got := backoffDuration(3*time.Minute, 1, 2*time.Minute); got != 3*time.Minute {
+		t.Fatalf("backoff(base 3m, cap 2m) = %v, want 3m", got)
+	}
+}

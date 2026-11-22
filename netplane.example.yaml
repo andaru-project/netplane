@@ -32,10 +32,11 @@ targets:
       # from its public exporter at http://<host>:9100/metrics (override with metrics_url).
       # The firmware has no TLS, so the optional password crosses the LAN unencrypted.
       allow_insecure_http: true
-    secrets:
-      # Optional: enables LLDP, LAG, management IP and the forwarding table. The driver
-      # keeps a single login session (the firmware has 4) and refreshes this data slowly.
-      password: "${RTL_SWITCH_PASS}"
+    # Optional: uncomment and set RTL_SWITCH_PASS to add LLDP, LAG, the management IP and
+    # the forwarding table. The driver keeps a single login session (the firmware has 4)
+    # and refreshes this data slowly.
+    # secrets:
+    #   password: "${RTL_SWITCH_PASS}"
 
   - id: unifi-controller
     name: UniFi Network

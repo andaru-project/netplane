@@ -249,6 +249,7 @@ func backoffDuration(base time.Duration, failures int, capDur time.Duration) tim
 	if failures <= 0 {
 		return base
 	}
+	capDur = max(capDur, base) // never retry sooner than the driver's floor allows
 	d := base
 	for i := 1; i < failures && d < capDur; i++ {
 		d *= 2
