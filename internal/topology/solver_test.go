@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/model"
-	"github.com/andrebrait/netplane/internal/store"
+	"github.com/andaru-project/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/store"
 )
 
 func TestSolveMultiVendorTopology(t *testing.T) {

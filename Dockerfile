@@ -38,7 +38,7 @@ FROM runtime-${TARGETARCH}
 ARG VERSION=0.1.0
 # Home Assistant Supervisor reads these labels from add-on images.
 LABEL io.hass.type="addon" io.hass.version="${VERSION}" \
-      org.opencontainers.image.source="https://github.com/andrebrait/netplane" \
+      org.opencontainers.image.source="https://github.com/andaru-project/netplane" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=go-builder /out/netplane /usr/local/bin/netplane

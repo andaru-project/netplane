@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Lets Home Assistant use this repository as an add-on store: Settings -> Add-ons ->
-# Add-on store -> Repositories -> https://github.com/andrebrait/netplane
-name: netplane
-url: https://github.com/andrebrait/netplane
-maintainer: netplane contributors
+# Add-on store -> Repositories -> https://github.com/andaru-project/netplane
+name: Andaru Netplane
+url: https://github.com/andaru-project/netplane
+maintainer: Andaru project

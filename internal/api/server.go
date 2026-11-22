@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/driver"
-	"github.com/andrebrait/netplane/internal/events"
-	"github.com/andrebrait/netplane/internal/model"
-	"github.com/andrebrait/netplane/internal/poller"
-	"github.com/andrebrait/netplane/internal/store"
-	"github.com/andrebrait/netplane/internal/topology"
-	"github.com/andrebrait/netplane/schema"
+	"github.com/andaru-project/netplane/internal/driver"
+	"github.com/andaru-project/netplane/internal/events"
+	"github.com/andaru-project/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/poller"
+	"github.com/andaru-project/netplane/internal/store"
+	"github.com/andaru-project/netplane/internal/topology"
+	"github.com/andaru-project/netplane/schema"
 )
 
 // Options configures the HTTP/SSE API server.

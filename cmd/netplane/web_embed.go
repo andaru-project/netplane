@@ -6,7 +6,7 @@ package main
 import (
 	"io/fs"
 
-	"github.com/andrebrait/netplane/web"
+	"github.com/andaru-project/netplane/web"
 )
 
 func embeddedWebFS() fs.FS {

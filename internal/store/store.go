@@ -11,8 +11,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/driver"
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/driver"
+	"github.com/andaru-project/netplane/internal/model"
 
 	_ "modernc.org/sqlite"
 )

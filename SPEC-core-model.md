@@ -131,7 +131,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/model"
 )
 
 // Snapshot is an atomic point-in-time observed/live read returned by a Driver.

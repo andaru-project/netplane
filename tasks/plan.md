@@ -5,7 +5,7 @@ Traces to: [CAPABILITY-MAP.md](../CAPABILITY-MAP.md), [SPEC-core-model.md](../SP
 ## Component Order & Dependencies
 
 1. **Module bootstrap & wire schemas (`go.mod`, `schema/`):**
-   - Initialize `github.com/andrebrait/netplane` (Go 1.27.4+, matching the `go` directive in `go.mod`, `CGO_ENABLED=0`, `modernc.org/sqlite`).
+   - Initialize `github.com/andaru-project/netplane` (Go 1.27.4+, matching the `go` directive in `go.mod`, `CGO_ENABLED=0`, `modernc.org/sqlite`).
    - Author Apache-2.0 JSON Schema 2020-12 wire contracts (`device`, `topology`, `event`).
 2. **Canonical domain types (`internal/model`):**
    - Pure Go types with zero external dependencies, strict SPDX headers, MAC/media normalizers, SFP optical threshold checks, and wrap/reset-safe bitrate delta helpers.

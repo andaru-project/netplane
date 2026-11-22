@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/model"
 )
 
 type stubDriver struct{ kind string }

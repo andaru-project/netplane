@@ -1,4 +1,6 @@
-# netplane
+# Andaru Netplane
+
+Andaru Netplane is part of the [Andaru](https://github.com/andaru-project) project. Its identifiers (binary, container image, add-on slug, Home Assistant domain and Python package) stay `netplane`.
 
 An open, driver-based **network configuration, information, and diagnostics plane** designed to manage heterogeneous networks (OpenWrt/DSA switches and routers, pfSense gateways, UniFi gear, and SNMP v2c/v3 managed switches; OPNsense support is planned) from a single fast UI—standalone or directly inside Home Assistant via Ingress.
 
@@ -59,7 +61,7 @@ docker run --rm -p 8099:8099 -v netplane-data:/data \
 
 The container reads its configuration from `/config/netplane.yaml`. Secrets the configuration references as `${NAME}` are resolved from environment variables, so pass them with `--env-file` (or `-e NAME=value`); in the Home Assistant Add-on, set them in the add-on's `secrets` option instead.
 
-To install the add-on, add `https://github.com/andrebrait/netplane` under Settings → Add-ons → Add-on store → Repositories, then install netplane. Supervisor pulls the published multi-arch image `ghcr.io/andrebrait/netplane` (amd64 and arm64) at the add-on's version; the same image runs standalone with `docker run`.
+To install the add-on, add `https://github.com/andaru-project/netplane` under Settings → Add-ons → Add-on store → Repositories, then install Andaru Netplane. Supervisor pulls the published multi-arch image `ghcr.io/andaru-project/netplane` (amd64 and arm64) at the add-on's version; the same image runs standalone with `docker run`.
 
 Releasing: Supervisor offers whatever `version` the default branch holds, so publish the image before the version bump reaches `main`:
 

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andrebrait/netplane/internal/driver"
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/driver"
+	"github.com/andaru-project/netplane/internal/model"
 )
 
 const traceOut = `traceroute to example.com (93.184.215.14), 20 hops max, 46 byte packets

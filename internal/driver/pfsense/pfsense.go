@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/driver"
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/driver"
+	"github.com/andaru-project/netplane/internal/model"
 )
 
 // Driver polls a pfSense firewall over its REST API (v2) using a scoped least-privilege API key.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-module github.com/andrebrait/netplane
+module github.com/andaru-project/netplane
 
 go 1.27.4
 

@@ -19,11 +19,11 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/driver"
-	"github.com/andrebrait/netplane/internal/events"
-	"github.com/andrebrait/netplane/internal/model"
-	"github.com/andrebrait/netplane/internal/poller"
-	"github.com/andrebrait/netplane/internal/store"
+	"github.com/andaru-project/netplane/internal/driver"
+	"github.com/andaru-project/netplane/internal/events"
+	"github.com/andaru-project/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/poller"
+	"github.com/andaru-project/netplane/internal/store"
 )
 
 type apiMockDriver struct{}

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/driver"
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/driver"
+	"github.com/andaru-project/netplane/internal/model"
 )
 
 // Driver polls an Andaru firewall via its OpenAPI 3.1 REST API (HTTP/HTTPS or unix:// socket).

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/andrebrait/netplane/internal/model"
+	"github.com/andaru-project/netplane/internal/model"
 )
 
 // TargetConfig describes one configured device or controller target to poll.
