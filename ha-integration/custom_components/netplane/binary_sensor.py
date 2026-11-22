@@ -11,12 +11,11 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import NetplaneCoordinator, async_add_discovered
+from .entity import NetplaneDeviceEntity
 
 
 async def async_setup_entry(
@@ -38,38 +37,7 @@ async def async_setup_entry(
     async_add_discovered(entry, coordinator, async_add_entities, build)
 
 
-class _NetplaneDeviceBase(CoordinatorEntity[NetplaneCoordinator]):
-    _attr_has_entity_name = True
-
-    def __init__(self, coordinator: NetplaneCoordinator, device_id: str) -> None:
-        super().__init__(coordinator)
-        self._device_id = device_id
-
-    def _device(self) -> dict[str, Any] | None:
-        for d in (self.coordinator.data or {}).get("devices", []):
-            if d.get("id") == self._device_id:
-                return d
-        return None
-
-    @property
-    def available(self) -> bool:
-        # A device that stopped answering keeps its last readings on the server; do not report them as current.
-        d = self._device()
-        return super().available and d is not None and bool(d.get("online"))
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        d = self._device() or {}
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._device_id)},
-            name=d.get("name") or self._device_id,
-            manufacturer=d.get("vendor") or d.get("driver"),
-            model=d.get("model"),
-            sw_version=(d.get("firmware") or {}).get("current"),
-        )
-
-
-class NetplaneDeviceOnlineSensor(_NetplaneDeviceBase, BinarySensorEntity):
+class NetplaneDeviceOnlineSensor(NetplaneDeviceEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
 
     def __init__(self, coordinator: NetplaneCoordinator, device_id: str) -> None:
@@ -88,7 +56,7 @@ class NetplaneDeviceOnlineSensor(_NetplaneDeviceBase, BinarySensorEntity):
         return bool(d.get("online")) if d is not None else None
 
 
-class NetplaneSfpAlarmSensor(_NetplaneDeviceBase, BinarySensorEntity):
+class NetplaneSfpAlarmSensor(NetplaneDeviceEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
     def __init__(self, coordinator: NetplaneCoordinator, device_id: str) -> None:
@@ -107,7 +75,7 @@ class NetplaneSfpAlarmSensor(_NetplaneDeviceBase, BinarySensorEntity):
         return False
 
 
-class NetplaneGatewayOnlineSensor(_NetplaneDeviceBase, BinarySensorEntity):
+class NetplaneGatewayOnlineSensor(NetplaneDeviceEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
 
     def __init__(self, coordinator: NetplaneCoordinator, device_id: str, gw_name: str) -> None:
