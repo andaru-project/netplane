@@ -329,3 +329,46 @@ func TestPruneTargetsDropsStoredTopology(t *testing.T) {
 		t.Fatalf("stored topology survived prune: ok=%v err=%v", ok, err)
 	}
 }
+
+func TestMergeClientsThreeWayAndOfflineRace(t *testing.T) {
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	got := mergeClients([]model.Client{
+		{MAC: "aa:bb:cc:dd:ee:ff", AttachedDeviceID: "ap-a", LastSeen: t0},
+		{MAC: "aa:bb:cc:dd:ee:ff", Online: true, LastSeen: t0.Add(2 * time.Minute)},
+		{MAC: "aa:bb:cc:dd:ee:ff", AttachedDeviceID: "ap-b", Online: true, LastSeen: t0.Add(time.Minute)},
+	})
+	if len(got) != 1 || got[0].AttachedDeviceID != "ap-b" || !got[0].LastSeen.Equal(t0.Add(2*time.Minute)) {
+		t.Fatalf("merged = %+v", got)
+	}
+
+	ctx := context.Background()
+	st := openTestStore(t)
+	snap := &driver.Snapshot{TargetID: "t1", CollectedAt: t0.Add(time.Minute), Devices: []model.Device{{ID: "d1", Online: true}}}
+	if _, err := st.SaveSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+	// A failed attempt that started before the stored (successful) snapshot must not mark it offline.
+	if prev, curr, err := st.MarkTargetOffline(ctx, "t1", t0); err != nil || prev != nil || curr != nil {
+		t.Fatalf("stale mark applied: prev=%v curr=%v err=%v", prev, curr, err)
+	}
+	if _, curr, err := st.MarkTargetOffline(ctx, "t1", t0.Add(2*time.Minute)); err != nil || curr == nil || curr.Devices[0].Online {
+		t.Fatalf("mark after snapshot: curr=%+v err=%v", curr, err)
+	}
+}
+
+func TestPruneTargetsKeepsTopologyForConfigOnlyRows(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	if err := st.UpsertTarget(ctx, driver.TargetConfig{ID: "disabled", Driver: "openwrt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveTopology(ctx, time.Now(), map[string]any{"nodes": []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PruneTargets(ctx, map[string]bool{"disabled": false}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := st.LoadTopologyRaw(ctx); err != nil || !ok {
+		t.Fatalf("topology wiped for a target with no data: ok=%v err=%v", ok, err)
+	}
+}

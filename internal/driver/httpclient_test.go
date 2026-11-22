@@ -61,3 +61,16 @@ func TestNewHTTPClientRefusesHTTPSDowngrade(t *testing.T) {
 		t.Fatal("expected https -> http redirect to be refused")
 	}
 }
+
+func TestNewHTTPClientRefusesDowngradeAfterUpgrade(t *testing.T) {
+	c := NewHTTPClient(TargetConfig{}, time.Second)
+	first, _ := http.NewRequest(http.MethodGet, "http://192.0.2.1/", nil)
+	second, _ := http.NewRequest(http.MethodGet, "https://192.0.2.1/login", nil)
+	third, _ := http.NewRequest(http.MethodGet, "http://192.0.2.1/api", nil)
+	if err := c.CheckRedirect(second, []*http.Request{first}); err != nil {
+		t.Fatalf("http -> https upgrade refused: %v", err)
+	}
+	if err := c.CheckRedirect(third, []*http.Request{first, second}); err == nil {
+		t.Fatal("expected https -> http hop to be refused")
+	}
+}

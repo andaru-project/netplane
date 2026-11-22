@@ -15,7 +15,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   api,
   Client,
@@ -35,6 +35,7 @@ export function App() {
   const [tab, setTab] = useState<Tab>('devices');
   // Bumped to reopen the event stream after the browser gives up (e.g. a 401 before the token prompt).
   const [sseEpoch, setSseEpoch] = useState(0);
+  const sseFailures = useRef(0);
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<DeviceDetail | null>(null);
   const [topology, setTopology] = useState<TopologyGraph | null>(null);
@@ -75,12 +76,17 @@ export function App() {
 
   useEffect(() => {
     const es = new EventSource('./api/v1/events/stream');
-    es.onopen = () => setSseConnected(true);
+    es.onopen = () => {
+      sseFailures.current = 0;
+      setSseConnected(true);
+    };
     let retry: number | undefined;
     es.onerror = () => {
       setSseConnected(false);
       if (es.readyState === EventSource.CLOSED) {
-        retry = window.setTimeout(() => setSseEpoch((n) => n + 1), 5000);
+        // 5s, 10s, 20s, 40s, then every 60s, so a permanent 401 does not hammer the server.
+        const delay = Math.min(60000, 5000 * 2 ** sseFailures.current++);
+        retry = window.setTimeout(() => setSseEpoch((n) => n + 1), delay);
       }
     };
     const onEvent = (e: MessageEvent<string>) => {

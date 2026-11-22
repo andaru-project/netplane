@@ -171,7 +171,7 @@ func (s *Store) ListTargets(ctx context.Context) ([]driver.TargetConfig, error) 
 	return out, rows.Err()
 }
 
-// DeleteTarget removes a target and its cached snapshot/devices.
+// DeleteTarget removes a target, its cached snapshot and devices, and their link and diagnostic history.
 func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -181,6 +181,13 @@ func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM targets WHERE id = ?`, id); err != nil {
 		return err
+	}
+	// Per-device history goes too: a stale counter row would otherwise yield one bitrate
+	// averaged over the whole gap if the target is added back later.
+	for _, table := range []string{"link_counter_state", "link_samples", "diagnostic_runs"} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE device_id IN (SELECT id FROM devices WHERE target_id = ?)`, id); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM target_snapshots WHERE target_id = ?`, id); err != nil {
 		return err
@@ -194,31 +201,38 @@ func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 // PruneTargets deletes the stored config, snapshot and devices of every target whose ID is
 // not in keep, so removed or disabled targets stop showing stale (online) devices.
 func (s *Store) PruneTargets(ctx context.Context, keep map[string]bool) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM targets UNION SELECT target_id FROM target_snapshots UNION SELECT target_id FROM devices`)
+	// hasData is 1 for IDs that own snapshot or device rows, which the stored topology may show.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, 0 FROM targets UNION
+		SELECT target_id, 1 FROM target_snapshots UNION
+		SELECT target_id, 1 FROM devices`)
 	if err != nil {
 		return err
 	}
-	var stale []string
+	stale := map[string]bool{}
+	hadData := false
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var hasData bool
+		if err := rows.Scan(&id, &hasData); err != nil {
 			rows.Close()
 			return err
 		}
 		if !keep[id] {
-			stale = append(stale, id)
+			stale[id] = true
+			hadData = hadData || hasData
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for _, id := range stale {
+	for id := range stale {
 		if err := s.DeleteTarget(ctx, id); err != nil {
 			return err
 		}
 	}
-	if len(stale) > 0 {
+	if hadData {
 		// The stored graph still holds the pruned devices; readers re-solve from state without it.
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM topology_snapshots`); err != nil {
 			return err
@@ -379,7 +393,7 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 
 // MarkTargetOffline flags every device and client in the target's stored snapshot offline,
 // for a target that stopped answering. It returns the snapshot before and after the change
-// for diffing, or nil, nil when the target has no stored snapshot.
+// for diffing, or nil, nil when the target has no stored snapshot or one newer than at.
 func (s *Store) MarkTargetOffline(ctx context.Context, targetID string, at time.Time) (prev, curr *driver.Snapshot, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -397,6 +411,9 @@ func (s *Store) MarkTargetOffline(ctx context.Context, targetID string, at time.
 	prev, curr = &driver.Snapshot{}, &driver.Snapshot{}
 	if err := json.Unmarshal([]byte(raw), prev); err != nil {
 		return nil, nil, err
+	}
+	if prev.CollectedAt.After(at) {
+		return nil, nil, nil // a concurrent poll succeeded after this failed attempt started
 	}
 	_ = json.Unmarshal([]byte(raw), curr) // same bytes, cannot fail now
 	curr.CollectedAt = at.UTC()
@@ -526,16 +543,16 @@ func mergeClients(in []model.Client) []model.Client {
 	idx := make(map[string]int, len(in))
 	out := make([]model.Client, 0, len(in))
 	for _, c := range in {
-		i, ok := idx[c.MAC]
-		if !ok {
+		if i, ok := idx[c.MAC]; !ok {
 			idx[c.MAC] = len(out)
 			out = append(out, c)
-			continue
+		} else if betterClient(c, out[i]) {
+			out[i] = c
 		}
-		m := &out[i]
-		if betterClient(c, *m) {
-			*m, c = c, *m
-		}
+	}
+	// Fold the other records into each MAC's best record, compared on its own fields above.
+	for _, c := range in {
+		m := &out[idx[c.MAC]]
 		m.Online = m.Online || c.Online
 		if c.LastSeen.After(m.LastSeen) {
 			m.LastSeen = c.LastSeen

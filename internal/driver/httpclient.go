@@ -25,7 +25,7 @@ func NewHTTPClient(cfg TargetConfig, timeout time.Duration) *http.Client {
 			if req.URL.Host != via[0].URL.Host {
 				return fmt.Errorf("refusing redirect from %s to different host %s", via[0].URL.Host, req.URL.Host)
 			}
-			if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+			if via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
 				return fmt.Errorf("refusing redirect from https to %s", req.URL.Scheme)
 			}
 			return nil

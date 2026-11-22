@@ -93,8 +93,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 
 	snap, err := drv.Poll(ctx, cfg)
 	if err != nil {
-		// Retried on every failure past the threshold: idempotent, and it only re-solves
-		// the topology when something actually went offline.
+		// Retried on every failure past the threshold, so a failed mark is recovered; it only
+		// re-solves the topology when something went offline (a failed topology save is
+		// recovered by the next successful poll of any target).
 		if s.recordError(cfg, now, err) >= offlineAfterFailures {
 			s.markOffline(ctx, cfg, now)
 		}
