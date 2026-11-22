@@ -40,8 +40,26 @@ func (c TargetConfig) LogValue() slog.Value {
 // Snapshot is an atomic point-in-time observed/live read returned by a Driver.
 // One TargetID (for example, a UniFi controller) may yield multiple devices.
 type Snapshot struct {
-	TargetID        string                 `json:"target_id"`
-	CollectedAt     time.Time              `json:"collected_at"`
+	TargetID    string    `json:"target_id"`
+	CollectedAt time.Time `json:"collected_at"`
+	Inventory
+
+	// Unavailable lists sections the driver could not refresh this poll (a best-effort call
+	// failed). The store carries them over from the previous snapshot instead of treating
+	// their absence as everything having disappeared.
+	Unavailable []Section `json:"unavailable,omitempty"`
+	// Stale maps each carried-over section to when its data was last fresh.
+	Stale map[Section]time.Time `json:"stale,omitempty"`
+	// MarkedOffline is set when the store rewrote this snapshot for an unreachable target;
+	// its sections are not fresh and are never carried over.
+	MarkedOffline bool `json:"marked_offline,omitempty"`
+	// PollInterval is the target's poll interval, set by the poller so the store can size the
+	// one-time carry-over window; zero means unknown.
+	PollInterval time.Duration `json:"-"`
+}
+
+// Inventory is the observed network state a snapshot carries and the store aggregates.
+type Inventory struct {
 	Devices         []model.Device         `json:"devices"`
 	Links           []model.Link           `json:"links"`
 	LagGroups       []model.LagGroup       `json:"lag_groups"`
@@ -58,19 +76,53 @@ type Snapshot struct {
 	Radios          []model.WirelessRadio  `json:"radios"`
 	WirelessUplinks []model.WirelessUplink `json:"wireless_uplinks"`
 	Clients         []model.Client         `json:"clients"`
+}
 
-	// Unavailable lists sections the driver could not refresh this poll (a best-effort call
-	// failed). The store carries them over from the previous snapshot instead of treating
-	// their absence as everything having disappeared.
-	Unavailable []Section `json:"unavailable,omitempty"`
-	// Stale maps each carried-over section to when its data was last fresh.
-	Stale map[Section]time.Time `json:"stale,omitempty"`
-	// MarkedOffline is set when the store rewrote this snapshot for an unreachable target;
-	// its sections are not fresh and are never carried over.
-	MarkedOffline bool `json:"marked_offline,omitempty"`
-	// PollInterval is the target's poll interval, set by the poller so the store can size the
-	// one-time carry-over window; zero means unknown.
-	PollInterval time.Duration `json:"-"`
+// Append adds every entry of o to inv.
+func (inv *Inventory) Append(o Inventory) {
+	inv.Devices = append(inv.Devices, o.Devices...)
+	inv.Links = append(inv.Links, o.Links...)
+	inv.LagGroups = append(inv.LagGroups, o.LagGroups...)
+	inv.Segments = append(inv.Segments, o.Segments...)
+	inv.Zones = append(inv.Zones, o.Zones...)
+	inv.FDB = append(inv.FDB, o.FDB...)
+	inv.LLDP = append(inv.LLDP, o.LLDP...)
+	inv.Neighbors = append(inv.Neighbors, o.Neighbors...)
+	inv.DHCP = append(inv.DHCP, o.DHCP...)
+	inv.Gateways = append(inv.Gateways, o.Gateways...)
+	inv.Routes = append(inv.Routes, o.Routes...)
+	inv.VPNs = append(inv.VPNs, o.VPNs...)
+	inv.Firewalls = append(inv.Firewalls, o.Firewalls...)
+	inv.Radios = append(inv.Radios, o.Radios...)
+	inv.WirelessUplinks = append(inv.WirelessUplinks, o.WirelessUplinks...)
+	inv.Clients = append(inv.Clients, o.Clients...)
+}
+
+// FillNil replaces nil slices with empty ones, so they encode as [] rather than null.
+func (inv *Inventory) FillNil() {
+	inv.Devices = nonNil(inv.Devices)
+	inv.Links = nonNil(inv.Links)
+	inv.LagGroups = nonNil(inv.LagGroups)
+	inv.Segments = nonNil(inv.Segments)
+	inv.Zones = nonNil(inv.Zones)
+	inv.FDB = nonNil(inv.FDB)
+	inv.LLDP = nonNil(inv.LLDP)
+	inv.Neighbors = nonNil(inv.Neighbors)
+	inv.DHCP = nonNil(inv.DHCP)
+	inv.Gateways = nonNil(inv.Gateways)
+	inv.Routes = nonNil(inv.Routes)
+	inv.VPNs = nonNil(inv.VPNs)
+	inv.Firewalls = nonNil(inv.Firewalls)
+	inv.Radios = nonNil(inv.Radios)
+	inv.WirelessUplinks = nonNil(inv.WirelessUplinks)
+	inv.Clients = nonNil(inv.Clients)
+}
+
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
 
 // Section names a snapshot slice by its JSON field name.
@@ -252,4 +304,21 @@ type ConfigDriver interface {
 	ApplyChange(ctx context.Context, cfg TargetConfig, change model.ChangeRequest) (*model.ApplySession, error)
 	ConfirmApply(ctx context.Context, cfg TargetConfig, sessionID string) error
 	RollbackApply(ctx context.Context, cfg TargetConfig, sessionID string) error
+}
+
+// CollectMACs normalizes a device's interface MACs in order, dropping invalid, all-zero and
+// repeated ones. primary is the first one kept, or "" when none is.
+func CollectMACs(raw []string) (macs []string, primary string) {
+	macs = []string{}
+	for _, r := range raw {
+		m, err := model.NormalizeMAC(r)
+		if err != nil || m == "00:00:00:00:00:00" || slices.Contains(macs, m) {
+			continue
+		}
+		macs = append(macs, m)
+	}
+	if len(macs) > 0 {
+		primary = macs[0]
+	}
+	return macs, primary
 }

@@ -157,18 +157,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		mac       string
 		adminUp   bool
 		operUp    bool
-		in32      uint64 // ifInOctets
-		out32     uint64 // ifOutOctets
 		inHC      uint64 // ifHCInOctets
 		outHC     uint64 // ifHCOutOctets
 		hasInHC   bool
 		hasOutHC  bool
-		inPkts    uint64
-		outPkts   uint64
-		inErr     uint64
-		outErr    uint64
-		inDrop    uint64
-		outDrop   uint64
+		// c holds the ifTable counters; the HC octets above replace its bytes when both exist.
+		c model.PortCounters
 	}
 	ifaces := map[int]*ifAcc{}
 	getIf := func(idx int) *ifAcc {
@@ -200,17 +194,17 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		case 8:
 			a.operUp = pduUint64(p) == 1
 		case 10:
-			a.in32 = pduUint64(p)
+			a.c.RxBytes = pduUint64(p)
 		case 13:
-			a.inDrop = pduUint64(p)
+			a.c.RxDropped = pduUint64(p)
 		case 14:
-			a.inErr = pduUint64(p)
+			a.c.RxErrors = pduUint64(p)
 		case 16:
-			a.out32 = pduUint64(p)
+			a.c.TxBytes = pduUint64(p)
 		case 19:
-			a.outDrop = pduUint64(p)
+			a.c.TxDropped = pduUint64(p)
 		case 20:
-			a.outErr = pduUint64(p)
+			a.c.TxErrors = pduUint64(p)
 		}
 	}
 
@@ -226,11 +220,11 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		case 6:
 			a.inHC, a.hasInHC = pduUint64(p), true
 		case 7:
-			a.inPkts = pduUint64(p)
+			a.c.RxPackets = pduUint64(p)
 		case 10:
 			a.outHC, a.hasOutHC = pduUint64(p), true
 		case 11:
-			a.outPkts = pduUint64(p)
+			a.c.TxPackets = pduUint64(p)
 		case 15:
 			a.highSpeed = pduUint64(p)
 		case 18:
@@ -302,9 +296,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	idxs := slices.Sorted(maps.Keys(ifaces))
 
-	primaryMAC := ""
-	macs := []string{}
-	seenMAC := map[string]bool{}
+	var rawMACs []string
 	ifIdxToName := map[int]string{}
 
 	for _, idx := range idxs {
@@ -314,17 +306,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			ifName = a.descr
 		}
 		if ifName == "" {
-			ifName = fmt.Sprintf("if%d", idx)
+			ifName = ifIndexName(idx)
 		}
 		ifIdxToName[idx] = ifName
-		if a.mac != "" && a.mac != "00:00:00:00:00:00" && !seenMAC[a.mac] {
-			seenMAC[a.mac] = true
-			if primaryMAC == "" {
-				primaryMAC = a.mac
-			}
-			macs = append(macs, a.mac)
-		}
+		rawMACs = append(rawMACs, a.mac)
 	}
+	macs, primaryMAC := driver.CollectMACs(rawMACs)
 
 	now := time.Now().UTC()
 	devID := "snmp:" + cfg.ID
@@ -387,21 +374,14 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		if speedMbps == 0 && a.speed > 0 {
 			speedMbps = int(a.speed / 1_000_000)
 		}
-		oper := model.OperDown
-		if !a.adminUp {
-			oper = model.OperDisabled
-		} else if a.operUp {
-			oper = model.OperUp
-		} else {
-			oper = model.OperNoCarrier
-		}
 		mtu := a.mtu
 		media := guessSnmpMedia(ifName, speedMbps)
 		// Report both directions at one width: the store compares a single width flag per link.
 		hc := a.hasInHC && a.hasOutHC
-		rx, tx := a.in32, a.out32
+		counters := a.c
+		counters.Counter32 = !hc
 		if hc {
-			rx, tx = a.inHC, a.outHC
+			counters.RxBytes, counters.TxBytes = a.inHC, a.outHC
 		}
 		snap.Links = append(snap.Links, model.Link{
 			DeviceID:  devID,
@@ -411,22 +391,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			MAC:       a.mac,
 			AdminUp:   a.adminUp,
 			LinkUp:    a.adminUp && a.operUp,
-			OperState: oper,
+			OperState: model.OperFromAdminLink(a.adminUp, a.operUp),
 			SpeedMbps: speedMbps,
 			MTU:       &mtu,
 			Media:     media,
 			PoE:       poeByIf[idx],
-			Counters: &model.PortCounters{
-				RxBytes:   rx,
-				TxBytes:   tx,
-				RxPackets: a.inPkts,
-				TxPackets: a.outPkts,
-				RxErrors:  a.inErr,
-				TxErrors:  a.outErr,
-				RxDropped: a.inDrop,
-				TxDropped: a.outDrop,
-				Counter32: !hc,
-			},
+			Counters:  &counters,
 		})
 	}
 
@@ -543,7 +513,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		if n := ifIdxToName[lpNum]; n != "" {
 			return n
 		}
-		return fmt.Sprintf("if%d", lpNum)
+		return ifIndexName(lpNum)
 	}
 
 	// LLDP-MIB: .1.0.8802.1.1.2.1.4.1.1.<col>.<timeMark>.<localPortNum>.<remIndex>
@@ -764,3 +734,6 @@ func guessSnmpMedia(ifName string, speedMbps int) model.MediaType {
 		return model.MediaOther
 	}
 }
+
+// ifIndexName names an interface that has no ifName or ifDescr after its ifIndex.
+func ifIndexName(idx int) string { return "if" + strconv.Itoa(idx) }

@@ -254,15 +254,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		var usedPoE float64
 		for _, p := range ud.PortTable {
 			media := mapMedia(p.Media)
-			ifName := fmt.Sprintf("port%d", p.PortIdx)
-			oper := model.OperDown
-			if !p.Enable {
-				oper = model.OperDisabled
-			} else if p.Up {
-				oper = model.OperUp
-			} else {
-				oper = model.OperNoCarrier
-			}
+			ifName := portName(p.PortIdx)
 			duplex := "half"
 			if p.FullDuplex {
 				duplex = "full"
@@ -275,7 +267,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				Label:     p.Name,
 				AdminUp:   p.Enable,
 				LinkUp:    p.Up,
-				OperState: oper,
+				OperState: model.OperFromAdminLink(p.Enable, p.Up),
 				SpeedMbps: p.Speed,
 				Duplex:    duplex,
 				Autoneg:   &autoneg,
@@ -327,7 +319,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		for _, n := range ud.LLDPTable {
 			snap.LLDP = append(snap.LLDP, model.LldpNeighbor{
 				DeviceID:      devID,
-				LocalLink:     fmt.Sprintf("port%d", n.LocalPortIdx),
+				LocalLink:     portName(n.LocalPortIdx),
 				ChassisID:     n.ChassisID,
 				RemotePort:    n.PortID,
 				RemoteSysName: n.SystemName,
@@ -386,7 +378,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				attachedID = macToDevID[swMac]
 			}
 			if st.SwPort > 0 {
-				attachedLink = fmt.Sprintf("port%d", st.SwPort)
+				attachedLink = portName(st.SwPort)
 			}
 		} else {
 			if apMac, err := model.NormalizeMAC(st.ApMAC); err == nil {
@@ -660,3 +652,6 @@ type unifiClient struct {
 	RxRate   int    `json:"rx_rate"`
 	VLAN     int    `json:"vlan"`
 }
+
+// portName is the link name of a UniFi switch port.
+func portName(idx int) string { return "port" + strconv.Itoa(idx) }

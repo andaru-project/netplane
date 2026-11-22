@@ -666,13 +666,6 @@ func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target, now ti
 	hasSFP := false
 	for _, n := range nums {
 		p := m.ports[n]
-		oper := model.OperUp
-		switch {
-		case p.adminDown:
-			oper = model.OperDisabled
-		case !p.carrier:
-			oper = model.OperNoCarrier
-		}
 		l := model.Link{
 			DeviceID:   devID,
 			Index:      n,
@@ -680,7 +673,7 @@ func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target, now ti
 			Label:      p.alias,
 			AdminUp:    !p.adminDown,
 			LinkUp:     p.carrier,
-			OperState:  oper,
+			OperState:  model.OperFromAdminLink(!p.adminDown, p.carrier),
 			Media:      mediaFor(p.speedMbps, p.carrier, p.sfp != nil),
 			LagGroupID: lagOf[n],
 			SFP:        p.sfp,

@@ -72,6 +72,12 @@ func TestSNMPDriverPollWithFixtures(t *testing.T) {
 				{Name: oidIfTable + ".6.1", Type: gosnmp.OctetString, Value: []byte{0xaa, 0xbb, 0xcc, 0x00, 0x00, 0x01}},
 				{Name: oidIfTable + ".7.1", Type: gosnmp.Integer, Value: 1},
 				{Name: oidIfTable + ".8.1", Type: gosnmp.Integer, Value: 1},
+				{Name: oidIfTable + ".10.1", Type: gosnmp.Counter32, Value: uint(111)},
+				{Name: oidIfTable + ".13.1", Type: gosnmp.Counter32, Value: uint(2)},
+				{Name: oidIfTable + ".14.1", Type: gosnmp.Counter32, Value: uint(3)},
+				{Name: oidIfTable + ".16.1", Type: gosnmp.Counter32, Value: uint(222)},
+				{Name: oidIfTable + ".19.1", Type: gosnmp.Counter32, Value: uint(4)},
+				{Name: oidIfTable + ".20.1", Type: gosnmp.Counter32, Value: uint(5)},
 				{Name: oidIfTable + ".2.25", Type: gosnmp.OctetString, Value: []byte("sfp25")},
 				{Name: oidIfTable + ".4.25", Type: gosnmp.Integer, Value: 9000},
 				{Name: oidIfTable + ".7.25", Type: gosnmp.Integer, Value: 1},
@@ -80,7 +86,9 @@ func TestSNMPDriverPollWithFixtures(t *testing.T) {
 			oidIfXTable: {
 				{Name: oidIfXTable + ".1.1", Type: gosnmp.OctetString, Value: []byte("gi1")},
 				{Name: oidIfXTable + ".6.1", Type: gosnmp.Counter64, Value: uint64(123456)},
+				{Name: oidIfXTable + ".7.1", Type: gosnmp.Counter64, Value: uint64(70)},
 				{Name: oidIfXTable + ".10.1", Type: gosnmp.Counter64, Value: uint64(654321)},
+				{Name: oidIfXTable + ".11.1", Type: gosnmp.Counter64, Value: uint64(110)},
 				{Name: oidIfXTable + ".15.1", Type: gosnmp.Gauge32, Value: uint32(1000)},
 				{Name: oidIfXTable + ".18.1", Type: gosnmp.OctetString, Value: []byte("AP-Office")},
 				{Name: oidIfXTable + ".1.25", Type: gosnmp.OctetString, Value: []byte("sfp25")},
@@ -126,6 +134,10 @@ func TestSNMPDriverPollWithFixtures(t *testing.T) {
 	}
 	if len(snap.Links) != 2 || snap.Links[0].SpeedMbps != 1000 || snap.Links[0].PoE == nil || snap.Links[0].PoE.State != "delivering" {
 		t.Fatalf("unexpected links[0]: %+v", snap.Links)
+	}
+	// Both HC octet counters exist, so they replace the 32-bit ones; the rest come from ifTable.
+	if c := snap.Links[0].Counters; c == nil || *c != (model.PortCounters{RxBytes: 123456, TxBytes: 654321, RxPackets: 70, TxPackets: 110, RxErrors: 3, TxErrors: 5, RxDropped: 2, TxDropped: 4}) {
+		t.Fatalf("gi1 counters = %+v", c)
 	}
 	if !snap.Links[1].IsFiber || snap.Links[1].Media != model.MediaSFPPl {
 		t.Fatalf("unexpected sfp link: %+v", snap.Links[1])

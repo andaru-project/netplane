@@ -36,43 +36,34 @@ class NetplaneClient:
             headers["Authorization"] = f"Bearer {self._api_token}"
         return headers
 
-    async def _get(self, path: str) -> Any:
+    async def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
         url = f"{self._base_url}/api/v1{path}"
-        async with self._session.get(url, headers=self._headers()) as resp:
+        async with self._session.request(method, url, headers=self._headers(), json=payload) as resp:
             if resp.status in (401, 403):
                 raise NetplaneAuthError(f"Authentication failed (HTTP {resp.status})")
             if resp.status >= 400:
-                raise NetplaneError(f"GET {path} failed with HTTP {resp.status}")
-            return await resp.json()
-
-    async def _post(self, path: str, payload: dict[str, Any] | None = None) -> Any:
-        url = f"{self._base_url}/api/v1{path}"
-        async with self._session.post(url, headers=self._headers(), json=payload) as resp:
-            if resp.status in (401, 403):
-                raise NetplaneAuthError(f"Authentication failed (HTTP {resp.status})")
-            if resp.status >= 400:
-                raise NetplaneError(f"POST {path} failed with HTTP {resp.status}")
+                raise NetplaneError(f"{method} {path} failed with HTTP {resp.status}")
             return await resp.json()
 
     async def get_health(self) -> dict[str, Any]:
-        return await self._get("/health")
+        return await self._request("GET", "/health")
 
     async def get_state(self) -> dict[str, Any]:
-        return await self._get("/state")
+        return await self._request("GET", "/state")
 
     async def list_devices(self) -> list[dict[str, Any]]:
-        data = await self._get("/devices")
+        data = await self._request("GET", "/devices")
         return list(data.get("items", []))
 
     async def get_device(self, device_id: str) -> dict[str, Any]:
-        return await self._get(f"/devices/{quote(device_id, safe='')}")
+        return await self._request("GET", f"/devices/{quote(device_id, safe='')}")
 
     async def get_topology(self) -> dict[str, Any]:
-        return await self._get("/topology")
+        return await self._request("GET", "/topology")
 
     async def list_clients(self, online_only: bool = False) -> list[dict[str, Any]]:
         qs = "?online=true" if online_only else ""
-        data = await self._get(f"/clients{qs}")
+        data = await self._request("GET", f"/clients{qs}")
         return list(data.get("items", []))
 
     async def run_diagnostic(
@@ -84,4 +75,4 @@ class NetplaneClient:
         payload: dict[str, Any] = {"kind": kind, "target": target}
         if device_id:
             payload["device_id"] = device_id
-        return await self._post("/diagnostics", payload)
+        return await self._request("POST", "/diagnostics", payload)

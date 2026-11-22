@@ -48,6 +48,9 @@ func TestDiffSnapshots(t *testing.T) {
 		Links: []model.Link{{
 			DeviceID: "sw1", IfName: "sfp9", LinkUp: true, StpState: model.StpForwarding,
 			SFP: &model.SfpDom{Present: true, AlertState: model.AlertWarn},
+		}, {
+			// An empty cage's stale alert state raises nothing.
+			DeviceID: "sw1", IfName: "sfp10", SFP: &model.SfpDom{Present: false, AlertState: model.AlertCrit},
 		}},
 		VPNs:     []model.VpnTunnel{{DeviceID: "fw1", ID: "wg0", Name: "wg-home", Up: true}},
 		Gateways: []model.GatewayStatus{{DeviceID: "fw1", Name: "WAN_DHCP", Online: true}},
@@ -76,6 +79,9 @@ func TestDiffSnapshots(t *testing.T) {
 	seen := make(map[Type]bool)
 	for _, e := range evs {
 		seen[e.Type] = true
+		if e.Type == LinkStpChanged && (e.Details["old"] != model.StpForwarding || e.Details["new"] != model.StpBlocking) {
+			t.Errorf("STP change details = %v, want forwarding -> blocking", e.Details)
+		}
 	}
 	for _, want := range []Type{DeviceOffline, DeviceOnline, LinkDown, LinkStpChanged, SfpAlert, VpnDown, GatewayDown} {
 		if !seen[want] {

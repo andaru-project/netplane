@@ -57,21 +57,13 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	hasSaved := getJSON(ctx, client, baseURL+"/api/v1/config", token, &savedResp) == nil
 
 	now := time.Now().UTC()
-	macs := []string{}
-	primaryMAC := ""
+	var rawMACs []string
 	mgmtIP := ""
 	for _, al := range linksResp.Items {
 		if al.LinkType == "loopback" {
 			continue
 		}
-		if al.LinkAddress != "" && al.LinkAddress != "00:00:00:00:00:00" {
-			if norm, err := model.NormalizeMAC(al.LinkAddress); err == nil {
-				if primaryMAC == "" {
-					primaryMAC = norm
-				}
-				macs = append(macs, norm)
-			}
-		}
+		rawMACs = append(rawMACs, al.LinkAddress)
 		if mgmtIP == "" {
 			for _, a := range al.Addresses {
 				if a.Family == "ipv4" && a.Scope == "global" {
@@ -83,6 +75,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 
 	// Keyed by target so interface order or added interfaces never change identity; MACs stay join metadata.
+	macs, primaryMAC := driver.CollectMACs(rawMACs)
 	devID := "andaru:" + cfg.ID
 	name := cfg.Name
 	if name == "" {
