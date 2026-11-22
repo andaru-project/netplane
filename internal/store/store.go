@@ -608,32 +608,12 @@ func (s *Store) QueryLinkSamples(ctx context.Context, deviceID, ifName string, s
 	out := []LinkSample{}
 	for rows.Next() {
 		var ts, rxErr, txErr int64
-		var rxBps, txBps float64
-		var sfpRx, sfpTemp, poeW sql.NullFloat64
-		if err := rows.Scan(&ts, &rxBps, &txBps, &rxErr, &txErr, &sfpRx, &sfpTemp, &poeW); err != nil {
+		sample := LinkSample{DeviceID: deviceID, IfName: ifName}
+		if err := rows.Scan(&ts, &sample.RxBps, &sample.TxBps, &rxErr, &txErr, &sample.SfpRxDbm, &sample.SfpTempC, &sample.PoEWatts); err != nil {
 			return nil, err
 		}
-		sample := LinkSample{
-			DeviceID: deviceID,
-			IfName:   ifName,
-			Time:     time.Unix(0, ts).UTC(),
-			RxBps:    rxBps,
-			TxBps:    txBps,
-			RxErrors: uint64(rxErr),
-			TxErrors: uint64(txErr),
-		}
-		if sfpRx.Valid {
-			v := sfpRx.Float64
-			sample.SfpRxDbm = &v
-		}
-		if sfpTemp.Valid {
-			v := sfpTemp.Float64
-			sample.SfpTempC = &v
-		}
-		if poeW.Valid {
-			v := poeW.Float64
-			sample.PoEWatts = &v
-		}
+		sample.Time = time.Unix(0, ts).UTC()
+		sample.RxErrors, sample.TxErrors = uint64(rxErr), uint64(txErr)
 		out = append(out, sample)
 	}
 	return out, rows.Err()
