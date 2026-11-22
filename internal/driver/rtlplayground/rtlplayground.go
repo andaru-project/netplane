@@ -83,8 +83,8 @@ type target struct {
 	fdb                []l2Entry
 }
 
-// expire drops cached data that has not refreshed for three periods (or whose password was
-// removed), so a broken login cannot keep stale neighbours alive forever.
+// expire drops cached data that has not refreshed for three periods, so a broken login
+// cannot keep stale neighbours alive forever.
 func (t *target) expire(now time.Time) {
 	if now.Sub(t.lldpS.ok) > 3*lldpEvery {
 		t.lldp, t.lag = nil, nil
@@ -160,18 +160,28 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 
 	st := d.state(cfg.ID)
 	now := time.Now()
-	if c.password != "" && !now.Before(st.jsonNext) {
-		// Best effort: a failure keeps the caches and pauses all JSON work for retryAfter,
-		// so a wrong password costs one refused login per retry period.
+	if c.password == "" {
+		*st = target{} // password removed: drop the session and every cached data set
+	} else if !now.Before(st.jsonNext) {
+		// Best effort: a failure keeps that data set's cache. A refused login pauses all JSON
+		// work for retryAfter (one refused login per period); any other failure backs off only
+		// its own data set, by half its period and at least retryAfter.
 		refresh := func(s *schedule, every time.Duration, fetch func() error) bool {
 			if now.Before(s.next) {
 				return true
 			}
-			if err := fetch(); err != nil {
+			err := fetch()
+			switch {
+			case err == nil:
+				s.ok, s.next = now, now.Add(every)
+			case ctx.Err() != nil:
+				return false // cancelled by the caller, not the device's fault
+			case errors.Is(err, errLoginRefused):
 				st.jsonNext = now.Add(retryAfter)
 				return false
+			default:
+				s.next = now.Add(max(retryAfter, every/2))
 			}
-			s.ok, s.next = now, now.Add(every)
 			return true
 		}
 		_ = refresh(&st.lldpS, lldpEvery, func() error { return c.fetchLLDPAndLAG(ctx, st) }) &&
@@ -227,8 +237,8 @@ func sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// scrape reads /metrics, retrying once: a busy exporter slot (a Prometheus scrape) drops
-// the connection, and two failed polls would mark a healthy switch offline.
+// scrape reads /metrics, retrying a fast failure once: a busy exporter slot (a Prometheus
+// scrape) drops the connection, and two failed polls would mark a healthy switch offline.
 func (c *client) scrape(ctx context.Context, u string) ([]sample, error) {
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {
@@ -244,6 +254,10 @@ func (c *client) scrape(ctx context.Context, u string) ([]sample, error) {
 		var resp *http.Response
 		var body []byte
 		if resp, body, err = c.do(ctx, req, 256<<10); err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				return nil, err // a dead switch: one timeout is enough
+			}
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
@@ -254,6 +268,8 @@ func (c *client) scrape(ctx context.Context, u string) ([]sample, error) {
 	}
 	return nil, err
 }
+
+var errLoginRefused = errors.New("rtlplayground login refused (wrong password?)")
 
 // login takes a session. It is only called without a valid session, so the driver holds at
 // most one of the firmware's 4 slots at a time.
@@ -275,7 +291,7 @@ func (c *client) login(ctx context.Context, st *target) error {
 		}
 	}
 	// A failed login redirects to login.html without a cookie, whatever the status code.
-	return errors.New("rtlplayground login refused (wrong password?)")
+	return errLoginRefused
 }
 
 // getJSON fetches an authenticated JSON endpoint, logging in first or again after a 401.
@@ -304,7 +320,7 @@ func (c *client) getJSON(ctx context.Context, st *target, path string, out any) 
 			return fmt.Errorf("rtlplayground %s: HTTP %d", path, resp.StatusCode)
 		}
 	}
-	return fmt.Errorf("rtlplayground %s: unauthorized after login", path)
+	return fmt.Errorf("rtlplayground %s: unauthorized after login: %w", path, errLoginRefused)
 }
 
 type lldpNeighbor struct {
@@ -627,9 +643,11 @@ func buildSnapshot(cfg driver.TargetConfig, samples []sample, st *target, now ti
 		m.release = cmp.Or(m.release, info.SwVer)
 		m.machine = cmp.Or(m.machine, info.HwVer)
 		m.mac = cmp.Or(m.mac, info.MACAddress)
-		if uptime == 0 { // no NTP sync: the exporter omits boot time; age the cached value
+		// Without NTP sync the exporter omits boot time; the cached value is not aged, since
+		// aging it would hide a reboot until the next refresh.
+		if uptime == 0 {
 			if v, err := strconv.ParseUint(strings.TrimPrefix(info.Uptime, "0x"), 16, 64); err == nil {
-				uptime = v + uint64(now.Sub(st.infoS.ok).Seconds())
+				uptime = v
 			}
 		}
 	}

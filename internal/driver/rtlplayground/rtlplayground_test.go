@@ -386,7 +386,7 @@ func TestFdbWalkWrapsAndNullPageKeepsTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snap.FDB) != 3 || st.jsonNext.IsZero() {
+	if len(snap.FDB) != 3 || !st.jsonNext.IsZero() || time.Until(st.fdbS.next) < retryAfter-time.Second {
 		t.Fatalf("fdb after null page = %d entries", len(snap.FDB))
 	}
 }
@@ -422,5 +422,36 @@ func TestClientIsGentle(t *testing.T) {
 	}
 	if el := time.Since(start); el < 60*time.Millisecond {
 		t.Fatalf("3 requests took %v, want at least two pacing gaps", el)
+	}
+}
+
+func TestFailingDataSetDoesNotBlockOthersAndPasswordRemovalClears(t *testing.T) {
+	f, _ := newFakeSwitch(t)
+	f.fdb = []string{`{"vlan":"001","mac":"02:00:5e:00:53:10","type":"l","port":2,"lag":0,"idx":"0010"}`}
+	breakLag := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/lag.json" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		f.serve(w, r)
+	}))
+	defer breakLag.Close()
+	drv := New()
+	cfg := cfgFor(breakLag, "s3cret")
+	snap, err := drv.Poll(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Devices[0].MgmtIP == "" || len(snap.FDB) != 1 || len(snap.LLDP) != 0 {
+		t.Fatalf("info/fdb must refresh despite a failing /lag.json: ip=%q fdb=%d lldp=%d", snap.Devices[0].MgmtIP, len(snap.FDB), len(snap.LLDP))
+	}
+
+	cfg.ResolvedSecrets = nil
+	snap, err = drv.Poll(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Devices[0].MgmtIP != "" || len(snap.FDB) != 0 || drv.state("sw1").session != "" {
+		t.Fatal("removing the password must drop the session and cached data")
 	}
 }
