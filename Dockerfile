@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+ARG TARGETARCH
+
 # Requires BuildKit (the default since Docker 23). Both builder stages run on the build host's
 # platform: the UI is platform-independent and Go cross-compiles, so a multi-arch build never
 # runs a compiler under emulation.
@@ -26,10 +28,15 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -tags embedui -trimpath -ldflags="-s -w -X main.Version=${VERSION}" \
     -o /out/netplane ./cmd/netplane
 
-FROM alpine:3.21
+# Each platform image in the multi-arch manifest carries its own Home Assistant arch name.
+FROM alpine:3.21 AS runtime-amd64
+LABEL io.hass.arch="amd64"
+FROM alpine:3.21 AS runtime-arm64
+LABEL io.hass.arch="aarch64"
+
+FROM runtime-${TARGETARCH}
 ARG VERSION=0.1.0
-# Home Assistant Supervisor reads these labels from add-on images. One multi-arch manifest
-# serves every platform, so there is no per-platform io.hass.arch label.
+# Home Assistant Supervisor reads these labels from add-on images.
 LABEL io.hass.type="addon" io.hass.version="${VERSION}" \
       org.opencontainers.image.source="https://github.com/andrebrait/netplane" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later"

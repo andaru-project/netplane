@@ -61,10 +61,10 @@ The container reads its configuration from `/config/netplane.yaml`. Secrets the 
 
 To install the add-on, add `https://github.com/andrebrait/netplane` under Settings → Add-ons → Add-on store → Repositories, then install netplane. Supervisor pulls the published multi-arch image `ghcr.io/andrebrait/netplane` (amd64 and arm64) at the add-on's version; the same image runs standalone with `docker run`.
 
-Releasing: Supervisor offers whatever `version` the default branch holds, so publish the images before the version bump reaches `main`:
+Releasing: Supervisor offers whatever `version` the default branch holds, so publish the image before the version bump reaches `main`:
 
 1. Open a pull request that sets `version` in `ha-addon/config.yaml`.
-2. Push the tag `v<version>` on that pull request's head commit. The [Add-on image](.github/workflows/addon-image.yml) workflow checks the tag against the file and publishes both images.
+2. Push the tag `v<version>` on that pull request's head commit. The [Add-on image](.github/workflows/addon-image.yml) workflow checks the tag against the file and publishes the image.
 3. The first time only, make the GHCR package `netplane` public under package settings → Change visibility, so Supervisor can pull it anonymously.
 4. Merge the pull request.
 

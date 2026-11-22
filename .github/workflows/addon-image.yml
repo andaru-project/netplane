@@ -4,7 +4,7 @@ name: Add-on image
 # Publishes the multi-arch image ghcr.io/<owner>/netplane:<version> (linux/amd64, linux/arm64)
 # for Home Assistant, which pulls the image named in ha-addon/config.yaml at the tag equal to
 # its `version`, and for standalone `docker run`. Pull requests
-# build both images without pushing: the image depends on the whole tree.
+# build the image without pushing: it depends on the whole tree.
 on:
   push:
     tags: ["v*"]
