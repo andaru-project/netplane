@@ -283,6 +283,22 @@ func TestStorePruneTargetsAndStaleDevices(t *testing.T) {
 	}
 }
 
+func TestLinkSampleHugeErrorCounters(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	snap := &driver.Snapshot{TargetID: "t", CollectedAt: t0, Links: []model.Link{{
+		DeviceID: "d", IfName: "p1", Counters: &model.PortCounters{RxErrors: 1 << 63, TxErrors: ^uint64(0)},
+	}}}
+	if _, err := st.SaveSnapshot(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.QueryLinkSamples(ctx, "d", "p1", t0.Add(-time.Second))
+	if err != nil || len(got) != 1 || got[0].RxErrors != 1<<63 || got[0].TxErrors != ^uint64(0) {
+		t.Fatalf("samples = %+v, err = %v", got, err)
+	}
+}
+
 func TestLoadStateEmptyEncodesNoNull(t *testing.T) {
 	state, err := openTestStore(t).LoadState(context.Background())
 	if err != nil {

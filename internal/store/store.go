@@ -561,12 +561,15 @@ func (s *Store) QueryLinkSamples(ctx context.Context, deviceID, ifName string, s
 
 	out := []LinkSample{}
 	for rows.Next() {
-		var ts int64
+		// Error counters are stored as int64 bit patterns (SQLite integers are signed), so a
+		// counter at or above 1<<63 reads back negative and must convert, not scan, to uint64.
+		var ts, rxErr, txErr int64
 		sample := LinkSample{DeviceID: deviceID, IfName: ifName}
-		if err := rows.Scan(&ts, &sample.RxBps, &sample.TxBps, &sample.RxErrors, &sample.TxErrors, &sample.SfpRxDbm, &sample.SfpTempC, &sample.PoEWatts); err != nil {
+		if err := rows.Scan(&ts, &sample.RxBps, &sample.TxBps, &rxErr, &txErr, &sample.SfpRxDbm, &sample.SfpTempC, &sample.PoEWatts); err != nil {
 			return nil, err
 		}
 		sample.Time = time.Unix(0, ts).UTC()
+		sample.RxErrors, sample.TxErrors = uint64(rxErr), uint64(txErr)
 		out = append(out, sample)
 	}
 	return out, rows.Err()
