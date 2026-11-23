@@ -506,7 +506,7 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 			}
 			// When one side reaches a gateway, the break strands the other side; when neither
 			// does, the break cannot be told from an upstream one, so both sides are listed.
-			var stranded []string
+			stranded := []string{}
 			if len(gateways) > 0 {
 				sides := []string{h.FromID, h.ToID}
 				if reached[h.FromID] {
@@ -521,9 +521,6 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 				}
 			}
 			slices.Sort(stranded)
-			if stranded == nil {
-				stranded = []string{}
-			}
 			findings = append(findings, Finding{
 				Kind: FindingDeadEnd, Severity: SeverityWarn, VLANs: []int{v}, EdgeID: h.EdgeID,
 				DeviceID: dev, Link: link, PeerID: peer, PeerLink: peerLink, Stranded: stranded,
