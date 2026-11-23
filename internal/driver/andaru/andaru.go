@@ -3,9 +3,7 @@ package andaru
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -204,22 +202,11 @@ func buildClient(cfg driver.TargetConfig) (*http.Client, string) {
 }
 
 func getJSON(ctx context.Context, client *http.Client, url, token string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out)
+	return driver.DoJSON(ctx, client, http.MethodGet, url, func(r *http.Request) {
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+	}, nil, out)
 }
 
 func mapOperState(s string) model.OperState {

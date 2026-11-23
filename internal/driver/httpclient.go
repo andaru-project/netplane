@@ -2,9 +2,14 @@
 package driver
 
 import (
+	"bytes"
+	"cmp"
+	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -67,4 +72,77 @@ func effectivePort(u *url.URL) string {
 		return "443"
 	}
 	return "80"
+}
+
+// DoJSON sends body (when not nil) as JSON to url, with auth (when not nil) adding the
+// credentials, and decodes the response into out. A non-2xx answer is a *StatusError.
+func DoJSON(ctx context.Context, client *http.Client, method, url string, auth func(*http.Request), body, out any) error {
+	var reqBody io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reqBody = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	if err != nil {
+		return err
+	}
+	// OPNsense rejects an empty body sent as JSON, so only a real body gets the header.
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if auth != nil {
+		auth(req)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// REST APIs explain a refusal in "message" (pfSense, OPNsense auth failures) or
+		// "errorMessage" (OPNsense application errors).
+		var e struct {
+			Message      string `json:"message"`
+			ErrorMessage string `json:"errorMessage"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+		return &StatusError{Code: resp.StatusCode, Message: cmp.Or(e.Message, e.ErrorMessage)}
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
+}
+
+// StatusError is a non-2xx HTTP answer.
+type StatusError struct {
+	Code    int
+	Message string
+}
+
+func (e *StatusError) Error() string {
+	if e.Message == "" {
+		return fmt.Sprintf("HTTP %d", e.Code)
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.Code, e.Message)
+}
+
+// HTTPStatus returns the status code of a *StatusError in err's chain, or 0.
+func HTTPStatus(err error) int {
+	if se, ok := errors.AsType[*StatusError](err); ok {
+		return se.Code
+	}
+	return 0
+}
+
+// Sleep waits for d or until ctx is done, returning ctx's error then.
+func Sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }

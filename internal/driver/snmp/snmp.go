@@ -715,24 +715,7 @@ func pduUint64(p gosnmp.SnmpPDU) uint64 {
 
 func guessSnmpMedia(ifName string, speedMbps int) model.MediaType {
 	lower := strings.ToLower(ifName)
-	if strings.Contains(lower, "sfp") || strings.Contains(lower, "fiber") || strings.Contains(lower, "ten") {
-		if speedMbps >= 10000 {
-			return model.MediaSFPPl
-		}
-		return model.MediaSFP
-	}
-	switch {
-	case speedMbps >= 10000:
-		return model.Media10GE
-	case speedMbps >= 2500:
-		return model.Media25GE
-	case speedMbps >= 1000:
-		return model.MediaGE
-	case speedMbps >= 100:
-		return model.MediaFE
-	default:
-		return model.MediaOther
-	}
+	return model.MediaForSpeed(speedMbps, strings.Contains(lower, "sfp") || strings.Contains(lower, "fiber") || strings.Contains(lower, "ten"))
 }
 
 // ifIndexName names an interface that has no ifName or ifDescr after its ifIndex.

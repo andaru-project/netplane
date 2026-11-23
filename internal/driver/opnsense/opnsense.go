@@ -9,13 +9,11 @@
 package opnsense
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -86,61 +84,9 @@ func (d *Driver) newAPI(cfg driver.TargetConfig, timeout time.Duration) *api {
 	}
 }
 
-// statusError is a non-2xx answer from the REST API.
-type statusError struct {
-	code    int
-	message string
-}
-
-func (e *statusError) Error() string {
-	if e.message == "" {
-		return fmt.Sprintf("HTTP %d", e.code)
-	}
-	return fmt.Sprintf("HTTP %d: %s", e.code, e.message)
-}
-
-func httpStatus(err error) int {
-	var se *statusError
-	if errors.As(err, &se) {
-		return se.code
-	}
-	return 0
-}
-
 // do sends body (when not nil) as JSON and decodes the response into out.
 func (a *api) do(ctx context.Context, method, path string, body, out any) error {
-	var reqBody io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		reqBody = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, a.base+path, reqBody)
-	if err != nil {
-		return err
-	}
-	// OPNsense rejects an empty body sent as JSON, so only a real body gets the header.
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.SetBasicAuth(a.key, a.secret)
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Auth failures carry "message", application errors "errorMessage".
-		var e struct {
-			Message      string `json:"message"`
-			ErrorMessage string `json:"errorMessage"`
-		}
-		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		return &statusError{code: resp.StatusCode, message: cmp.Or(e.Message, e.ErrorMessage)}
-	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out)
+	return driver.DoJSON(ctx, a.client, method, a.base+path, func(r *http.Request) { r.SetBasicAuth(a.key, a.secret) }, body, out)
 }
 
 // get tries each spelling of an endpoint, the one that last answered first, moving on only
@@ -177,7 +123,7 @@ func (a *api) search(ctx context.Context, out any, path string) error {
 // (404: the plugin or service is not installed). An optional section is then empty, not
 // stale, so the store does not carry its old rows over.
 func absent(err error) bool {
-	c := httpStatus(err)
+	c := driver.HTTPStatus(err)
 	return c == http.StatusForbidden || c == http.StatusNotFound
 }
 
@@ -688,31 +634,12 @@ func parseMedia(text string) (speedMbps int, duplex string, media model.MediaTyp
 	case strings.Contains(text, "half-duplex"):
 		duplex = "half"
 	}
+	pluggable := false
 	if m != nil {
 		t := strings.ToUpper(m[3])
-		copper := strings.HasPrefix(t, "T") && !strings.HasPrefix(t, "TWINAX")
-		if t != "" && !copper {
-			if speedMbps > 1000 {
-				return speedMbps, duplex, model.MediaSFPPl
-			}
-			return speedMbps, duplex, model.MediaSFP
-		}
+		pluggable = t != "" && (!strings.HasPrefix(t, "T") || strings.HasPrefix(t, "TWINAX"))
 	}
-	switch {
-	case speedMbps >= 10000:
-		media = model.Media10GE
-	case speedMbps >= 5000:
-		media = model.Media5GE
-	case speedMbps >= 2500:
-		media = model.Media25GE
-	case speedMbps >= 1000:
-		media = model.MediaGE
-	case speedMbps > 0:
-		media = model.MediaFE
-	default:
-		media = model.MediaOther
-	}
-	return speedMbps, duplex, media
+	return speedMbps, duplex, model.MediaForSpeed(speedMbps, pluggable)
 }
 
 // parsePrefix reads "192.0.2.1/24" or "fe80::1%igc1/64".

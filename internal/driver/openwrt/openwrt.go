@@ -531,27 +531,7 @@ func parseOpenWrtSpeed(raw string) (int, string) {
 }
 
 func guessMedia(ifName string, speedMbps int) model.MediaType {
-	lower := strings.ToLower(ifName)
-	if strings.Contains(lower, "sfp") {
-		if speedMbps >= 10000 {
-			return model.MediaSFPPl
-		}
-		return model.MediaSFP
-	}
-	switch {
-	case speedMbps >= 10000:
-		return model.Media10GE
-	case speedMbps >= 5000:
-		return model.Media5GE
-	case speedMbps >= 2500:
-		return model.Media25GE
-	case speedMbps >= 1000:
-		return model.MediaGE
-	case speedMbps >= 100:
-		return model.MediaFE
-	default:
-		return model.MediaOther
-	}
+	return model.MediaForSpeed(speedMbps, strings.Contains(strings.ToLower(ifName), "sfp"))
 }
 
 type ubusNetDev struct {

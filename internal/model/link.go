@@ -20,6 +20,29 @@ const (
 	MediaOther  MediaType = "other"
 )
 
+// MediaForSpeed classifies a port from its link speed: a pluggable cage is SFP+ above 1 Gb/s
+// (2.5G and 5G modules sit in SFP+ cages) and SFP otherwise, copper the Ethernet class of its
+// speed. A copper port with no speed is other.
+func MediaForSpeed(speedMbps int, pluggable bool) MediaType {
+	switch {
+	case pluggable && speedMbps > 1000:
+		return MediaSFPPl
+	case pluggable:
+		return MediaSFP
+	case speedMbps >= 10000:
+		return Media10GE
+	case speedMbps >= 5000:
+		return Media5GE
+	case speedMbps >= 2500:
+		return Media25GE
+	case speedMbps >= 1000:
+		return MediaGE
+	case speedMbps > 0:
+		return MediaFE
+	}
+	return MediaOther
+}
+
 // OperState reflects observed kernel/switch link operational state.
 type OperState string
 

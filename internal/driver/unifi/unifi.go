@@ -428,25 +428,15 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 }
 
 func getJSON(ctx context.Context, client *http.Client, url, apiKey string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	if apiKey != "" {
-		req.Header.Set("X-API-KEY", apiKey)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusUnauthorized {
+	err := driver.DoJSON(ctx, client, http.MethodGet, url, func(r *http.Request) {
+		if apiKey != "" {
+			r.Header.Set("X-API-KEY", apiKey)
+		}
+	}, nil, out)
+	if driver.HTTPStatus(err) == http.StatusUnauthorized {
 		return errUnauthorized
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
+	return err
 }
 
 // errUnauthorized is the controller rejecting the login cookie (expired or revoked).
