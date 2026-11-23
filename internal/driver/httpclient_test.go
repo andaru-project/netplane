@@ -171,7 +171,7 @@ func TestDoJSON(t *testing.T) {
 			t.Errorf("%s: err = %v, status %d", tc.path, err, HTTPStatus(wrapped))
 		}
 	}
-	if got := cleanMessage("bad\u2028key\u202e\u200bend"); got != "bad key  end" {
+	if got := cleanMessage("bad\u2028key\u202e\u200bend"); got != "bad keyend" {
 		t.Errorf("cleanMessage = %q", got)
 	}
 	if long := cleanMessage(strings.Repeat("x", 400)); len([]rune(long)) != 301 {

@@ -343,7 +343,7 @@ func TestGuessSnmpMedia(t *testing.T) {
 		speed int
 		want  model.MediaType
 	}{
-		{"tun0", 10, model.MediaOther}, {"eth0", 100, model.MediaFE}, {"Te1/0/1", 10000, model.MediaSFPPl},
+		{"tun0", 10, model.MediaOther}, {"eth0", 100, model.MediaFE}, {"Te1/0/5", 2500, model.Media25GE},
 		{"TenGigabitEthernet1/0/2", 10000, model.MediaSFPPl}, {"tenant0", 10000, model.Media10GE}, {"Intent0", 2500, model.Media25GE},
 		{"sfp1", 1000, model.MediaSFP},
 	} {

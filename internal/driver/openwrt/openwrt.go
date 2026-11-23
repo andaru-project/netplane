@@ -238,7 +238,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 		idx++
 		speedMbps, duplex := parseOpenWrtSpeed(nd.Speed)
-		media := model.MediaForSpeed(speedMbps, strings.Contains(strings.ToLower(ifName), "sfp"))
+		media := guessMedia(ifName, speedMbps)
 		mtu := nd.MTU
 		oper := model.OperDown
 		if nd.Up && nd.Carrier {
@@ -508,6 +508,16 @@ func parseOpenWrtSpeed(raw string) (int, string) {
 	var speed int
 	_, _ = fmt.Sscanf(s, "%d", &speed)
 	return speed, duplex
+}
+
+// guessMedia classifies a device by name and speed. Every non-bridge device is listed, and tun
+// devices report 10 Mb/s, so copper below 100 Mb/s is other.
+func guessMedia(ifName string, speedMbps int) model.MediaType {
+	pluggable := strings.Contains(strings.ToLower(ifName), "sfp")
+	if !pluggable && speedMbps < 100 {
+		return model.MediaOther
+	}
+	return model.MediaForSpeed(speedMbps, pluggable)
 }
 
 type ubusNetDev struct {

@@ -283,3 +283,18 @@ func TestOpenWrtSessionLossAndReloginFailure(t *testing.T) {
 		t.Fatalf("want the re-login error, got %v", err)
 	}
 }
+
+func TestGuessMedia(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		speed int
+		want  model.MediaType
+	}{
+		{"tun0", 10, model.MediaOther}, {"lan1", 100, model.MediaFE}, {"lan2", 2500, model.Media25GE},
+		{"sfp1", 2500, model.MediaSFPPl}, {"sfp2", 1000, model.MediaSFP},
+	} {
+		if got := guessMedia(tc.name, tc.speed); got != tc.want {
+			t.Errorf("guessMedia(%q, %d) = %s, want %s", tc.name, tc.speed, got, tc.want)
+		}
+	}
+}
