@@ -47,8 +47,11 @@ export function DiagnosticsScreen({
 
   const capableDevices = devices.filter((d) => d.capabilities.includes(`cap:diag_${diagKind}`));
 
+  // Enter in the target field and the Run button both go through runDiag, so it owns the checks.
+  const canRun = diagTarget.trim() !== '' && (diagKind === 'fdb_lookup' || diagDeviceId !== '');
+
   const runDiag = async () => {
-    if (!diagTarget.trim()) return;
+    if (!canRun || diagBusy) return;
     setDiagBusy(true);
     setDiagError(null);
     try {
@@ -129,7 +132,7 @@ export function DiagnosticsScreen({
             )}
             <Button
               loading={diagBusy}
-              disabled={!diagTarget.trim() || (diagKind !== 'fdb_lookup' && !diagDeviceId)}
+              disabled={!canRun}
               onClick={() => void runDiag()}
             >
               Run
