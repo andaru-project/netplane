@@ -56,7 +56,12 @@ cmd/
 - `GET /api/v1/devices/{id}` → `DeviceDetail` (device + links, lag_groups, segments, zones, gateways, routes, vpns, firewall, radios, clients, recent_diagnostics)
 - `GET /api/v1/devices/{id}/links/{ifName}/samples?since=<RFC3339|duration>` → `{"items":[LinkSample...]}`
 - `GET /api/v1/topology` → `topology.Graph`
-- `GET /api/v1/vlans/flow` → `vlanflow.Flow`: every VLAN traced across the topology's infrastructure links (each end's mode `tagged`/`untagged`/`none`/`unknown` and the hop's state `carried`/`dead_end`/`unused`/`mismatch`/`leak`/`unverified`), its gateways, access ports, SSIDs and reached devices, plus `findings` (`leak` for a PVID mismatch, `dead_end`, `tag_mismatch`). Wireless uplinks report no VLAN membership, so they are `unverified`; a VLAN carried toward a device that uses it nowhere (an unpruned trunk, or VLAN 1 on most trunks) is `unused` and raises no finding.
+- `GET /api/v1/vlans/flow` → `vlanflow.Flow`: every VLAN traced across the topology's infrastructure links, plus `findings` (`leak` for a PVID mismatch, `dead_end`, `tag_mismatch`).
+  - Each hop gives both ends' mode (`tagged`/`untagged`/`none`/`unknown`) and VLAN configuration (`*_pvid`, `*_tagged`), and a state: `carried`, `dead_end`, `unused`, `mismatch`, `leak` or `unverified`.
+  - A hop missing the VLAN on an end whose whole side of the network has no use for it is `unused` (an unpruned trunk, such as VLAN 1 on most trunks) and raises no finding. A transit switch missing a VLAN used beyond it is a `dead_end`.
+  - Wireless uplinks report no VLAN membership: they are `unverified` and still pass the VLAN, as does any link with an unknown end, unless the other end is known not to carry it. Unverified links appear only when the VLAN is used on both sides.
+  - Gateways are the VLAN's L3 segments. An untagged routed segment takes the VLAN of its peer port's PVID.
+  - Each VLAN also lists its reached devices, access ports and SSIDs (each with `reachable`).
 - `GET /api/v1/clients?online=true&q=<query>` → `{"items":[Client...]}`
 - `GET /api/v1/targets` → `{"items":[TargetConfig...]}` (strictly redacted; zero secrets)
 - `POST /api/v1/targets/{id}/poll` → triggers an immediate poll of an enabled target (409 `TARGET_DISABLED` for a disabled one); returns updated `TargetStatus`

@@ -56,6 +56,11 @@ type Hop struct {
 	FromMode Mode              `json:"from_mode"`
 	ToMode   Mode              `json:"to_mode"`
 	State    HopState          `json:"state"`
+	// The two ends' VLAN configuration as the analysis read it (nil and empty when not reported).
+	FromPVID   *int  `json:"from_pvid,omitempty"`
+	FromTagged []int `json:"from_tagged"`
+	ToPVID     *int  `json:"to_pvid,omitempty"`
+	ToTagged   []int `json:"to_tagged"`
 }
 
 // Gateway is an L3 segment that routes the VLAN.
@@ -92,7 +97,7 @@ type SSID struct {
 type VLAN struct {
 	ID   int    `json:"id"`
 	Name string `json:"name,omitempty"`
-	// Gateways are the L3 segments routing the VLAN; empty means L2 only.
+	// Gateways are the L3 interfaces (VLAN segments) on the VLAN; empty means L2 only.
 	Gateways []Gateway `json:"gateways"`
 	// Devices configure the VLAN on a port, segment or SSID.
 	Devices []string `json:"devices"`
@@ -179,6 +184,17 @@ type analyzer struct {
 	edges    []topology.Edge
 	zoneName map[portKey]string
 	names    map[string]string
+	// adj is the infrastructure graph: each device's peers with the index of the edge into edges.
+	adj map[string][]peerEdge
+	// native maps a routed port with an untagged segment to the VLAN its peer's PVID puts it in.
+	native map[portKey]int
+	// segVLAN maps an index into state.Segments to the segment's VLAN, native ones included.
+	segVLAN map[int]int
+}
+
+type peerEdge struct {
+	peer string
+	edge int
 }
 
 // Analyze traces every VLAN in state across the infrastructure edges of g.
@@ -195,6 +211,9 @@ func Analyze(state *store.NetworkState, g topology.Graph) Flow {
 		infra:    map[portKey]bool{},
 		zoneName: map[portKey]string{},
 		names:    map[string]string{},
+		adj:      map[string][]peerEdge{},
+		native:   map[portKey]int{},
+		segVLAN:  map[int]int{},
 	}
 	for _, d := range state.Devices {
 		a.names[d.ID] = d.Name
@@ -217,6 +236,8 @@ func Analyze(state *store.NetworkState, g topology.Graph) Flow {
 		if !a.devices[e.FromID] || !a.devices[e.ToID] {
 			continue
 		}
+		a.adj[e.FromID] = append(a.adj[e.FromID], peerEdge{e.ToID, len(a.edges)})
+		a.adj[e.ToID] = append(a.adj[e.ToID], peerEdge{e.FromID, len(a.edges)})
 		a.edges = append(a.edges, e)
 		for _, p := range []portKey{{e.FromID, e.FromLink}, {e.ToID, e.ToLink}} {
 			a.infra[p] = true
@@ -225,6 +246,8 @@ func Analyze(state *store.NetworkState, g topology.Graph) Flow {
 			}
 		}
 	}
+
+	a.nativeVLANs()
 
 	for _, v := range a.vlanIDs() {
 		vl, findings := a.trace(v)
@@ -245,28 +268,36 @@ func rank(s Severity) int {
 	return 1
 }
 
-// port returns the VLAN membership of a port; a LAG falls back to its first member that reports one,
-// and a routed port falls back to the VLAN segments on it.
+// portNames returns a port's name plus, for a LAG, its members' names.
+func (a *analyzer) portNames(dev, name string) []string {
+	return append([]string{name}, a.lags[portKey{dev, name}].MemberLinks...)
+}
+
+// port returns the VLAN membership of a port. A LAG combines its members' VLANs (the first reported
+// PVID wins). A port that reports no VLANs falls back to the segments routed on it; an untagged
+// segment takes the VLAN its peer's PVID gives it, when known.
 func (a *analyzer) port(dev, name string) membership {
+	m := membership{tagged: map[int]bool{}}
 	if name == "" {
-		return membership{}
+		return m
 	}
-	names := []string{name}
-	if lag, ok := a.lags[portKey{dev, name}]; ok {
-		names = append(names, lag.MemberLinks...)
-	}
+	names := a.portNames(dev, name)
 	for _, n := range names {
 		l, ok := a.links[portKey{dev, n}]
 		if !ok || (l.PVID == nil && len(l.TaggedVLANs) == 0) {
 			continue
 		}
-		m := membership{known: true, pvid: l.PVID, tagged: map[int]bool{}}
+		m.known = true
+		if m.pvid == nil {
+			m.pvid = l.PVID
+		}
 		for _, t := range l.TaggedVLANs {
 			m.tagged[t] = true
 		}
+	}
+	if m.known {
 		return m
 	}
-	m := membership{tagged: map[int]bool{}}
 	for _, s := range a.state.Segments {
 		if s.DeviceID != dev || !slices.Contains(names, s.ParentLink) {
 			continue
@@ -278,7 +309,58 @@ func (a *analyzer) port(dev, name string) membership {
 			m.nativeUnknown = true
 		}
 	}
+	if p, ok := a.native[portKey{dev, name}]; ok && m.nativeUnknown {
+		m.pvid, m.nativeUnknown = &p, false
+	}
 	return m
+}
+
+// nativeVLANs resolves untagged routed segments: when a routed port carries an untagged segment and
+// its peer port reports a PVID, that segment is the gateway of the peer's PVID VLAN.
+func (a *analyzer) nativeVLANs() {
+	for i, s := range a.state.Segments {
+		if s.VLANID != nil {
+			a.segVLAN[i] = *s.VLANID
+		}
+	}
+	for _, e := range a.edges {
+		if e.Kind == topology.EdgeWirelessUplink {
+			continue
+		}
+		for _, end := range [][2]portKey{{{e.FromID, e.FromLink}, {e.ToID, e.ToLink}}, {{e.ToID, e.ToLink}, {e.FromID, e.FromLink}}} {
+			self, peer := a.port(end[0].dev, end[0].link), a.port(end[1].dev, end[1].link)
+			if !self.nativeUnknown || peer.pvid == nil || !validVLAN(*peer.pvid) {
+				continue
+			}
+			a.native[end[0]] = *peer.pvid
+			names := a.portNames(end[0].dev, end[0].link)
+			for i, s := range a.state.Segments {
+				if s.DeviceID == end[0].dev && s.VLANID == nil && slices.Contains(names, s.ParentLink) {
+					a.segVLAN[i] = *peer.pvid
+				}
+			}
+		}
+	}
+}
+
+// sideUses reports whether start, or any device it reaches without crossing edge skip, uses the VLAN.
+func (a *analyzer) sideUses(skip int, start string, using map[string]bool) bool {
+	seen := map[string]bool{start: true}
+	queue := []string{start}
+	for len(queue) > 0 {
+		d := queue[0]
+		queue = queue[1:]
+		if using[d] {
+			return true
+		}
+		for _, pe := range a.adj[d] {
+			if pe.edge != skip && !seen[pe.peer] {
+				seen[pe.peer] = true
+				queue = append(queue, pe.peer)
+			}
+		}
+	}
+	return false
 }
 
 // vlanIDs returns every VLAN ID configured on a port, segment or SSID, sorted.
@@ -292,10 +374,8 @@ func (a *analyzer) vlanIDs() []int {
 			ids[t] = true
 		}
 	}
-	for _, s := range a.state.Segments {
-		if s.VLANID != nil {
-			ids[*s.VLANID] = true
-		}
+	for _, v := range a.segVLAN {
+		ids[v] = true
 	}
 	for _, r := range a.state.Radios {
 		for _, s := range r.SSIDs {
@@ -304,8 +384,13 @@ func (a *analyzer) vlanIDs() []int {
 			}
 		}
 	}
-	delete(ids, 0)
-	return slices.Sorted(maps.Keys(ids))
+	return slices.Sorted(maps.Keys(maps.Collect(func(yield func(int, bool) bool) {
+		for id := range ids {
+			if validVLAN(id) && !yield(id, true) {
+				return
+			}
+		}
+	})))
 }
 
 func (a *analyzer) trace(v int) (VLAN, []Finding) {
@@ -313,8 +398,8 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 	using := map[string]bool{}
 	gateways := map[string]bool{}
 
-	for _, s := range a.state.Segments {
-		if s.VLANID == nil || *s.VLANID != v {
+	for i, s := range a.state.Segments {
+		if sv, ok := a.segVLAN[i]; !ok || sv != v {
 			continue
 		}
 		gw := Gateway{
@@ -326,9 +411,7 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 		}
 		vl.Gateways = append(vl.Gateways, gw)
 		using[s.DeviceID] = true
-		if len(s.Addresses) > 0 {
-			gateways[s.DeviceID] = true
-		}
+		gateways[s.DeviceID] = true
 		if vl.Name == "" {
 			vl.Name = s.Name
 		}
@@ -350,28 +433,37 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 	}
 
 	adj := map[string][]string{}
-	for _, e := range a.edges {
-		h := Hop{EdgeID: e.ID, FromID: e.FromID, FromLink: e.FromLink, ToID: e.ToID, ToLink: e.ToLink, Kind: e.Kind}
+	for i, e := range a.edges {
+		h := Hop{EdgeID: e.ID, FromID: e.FromID, FromLink: e.FromLink, ToID: e.ToID, ToLink: e.ToLink, Kind: e.Kind, FromTagged: []int{}, ToTagged: []int{}}
 		if e.Kind == topology.EdgeWirelessUplink {
-			if !using[e.FromID] || !using[e.ToID] {
-				continue
-			}
+			// Wireless uplinks report no VLAN membership: never a dead end, only unverified.
 			h.FromMode, h.ToMode = ModeUnknown, ModeUnknown
 		} else {
 			from, to := a.port(e.FromID, e.FromLink), a.port(e.ToID, e.ToLink)
 			h.FromMode, h.ToMode = from.mode(v), to.mode(v)
+			h.FromPVID, h.FromTagged, h.ToPVID, h.ToTagged = from.pvid, from.taggedList(), to.pvid, to.taggedList()
 			if h.FromMode == ModeUntagged && otherPVID(to, v) || h.ToMode == ModeUntagged && otherPVID(from, v) {
 				h.State = HopLeak
 			}
 		}
 		h.State = cmp.Or(h.State, hopState(h.FromMode, h.ToMode))
-		if h.State == HopDeadEnd && (h.FromMode == ModeNone && !using[e.FromID] || h.ToMode == ModeNone && !using[e.ToID]) {
-			h.State = HopUnused
+		switch h.State {
+		case HopDeadEnd:
+			// Missing on an end whose whole side of the network has no use for the VLAN is unpruned, not broken.
+			if h.FromMode == ModeNone && !a.sideUses(i, e.FromID, using) || h.ToMode == ModeNone && !a.sideUses(i, e.ToID, using) {
+				h.State = HopUnused
+			}
+		case HopUnverified:
+			// An unverified link matters only when the VLAN is used on both of its sides.
+			if !a.sideUses(i, e.FromID, using) || !a.sideUses(i, e.ToID, using) {
+				h.State = ""
+			}
 		}
 		if h.State == "" {
 			continue
 		}
-		if h.State == HopCarried || h.State == HopUnverified {
+		// An unverified hop passes the VLAN unless one end is known not to carry it.
+		if h.State == HopCarried || h.State == HopUnverified && h.FromMode != ModeNone && h.ToMode != ModeNone {
 			adj[e.FromID] = append(adj[e.FromID], e.ToID)
 			adj[e.ToID] = append(adj[e.ToID], e.FromID)
 		}
@@ -382,10 +474,13 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 	vl.Devices = slices.Sorted(maps.Keys(using))
 	vl.Reached = slices.Sorted(maps.Keys(reached))
 
+	seenPort := map[portKey]bool{}
 	for _, l := range a.state.Links {
-		if l.PVID == nil || *l.PVID != v || a.infra[portKey{l.DeviceID, l.IfName}] || !a.devices[l.DeviceID] {
+		k := portKey{l.DeviceID, l.IfName}
+		if l.PVID == nil || *l.PVID != v || a.infra[k] || !a.devices[l.DeviceID] || seenPort[k] {
 			continue
 		}
+		seenPort[k] = true
 		vl.AccessPorts = append(vl.AccessPorts, AccessPort{DeviceID: l.DeviceID, Link: l.IfName, Label: l.Label, OperState: l.OperState, Reachable: reached[l.DeviceID]})
 	}
 	for _, r := range a.state.Radios {
@@ -409,9 +504,17 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 			if h.FromMode == ModeNone {
 				dev, link, peer, peerLink, mode = h.ToID, h.ToLink, h.FromID, h.FromLink, h.ToMode
 			}
+			// When one side reaches a gateway, the break strands the other side; when neither
+			// does, the break cannot be told from an upstream one, so both sides are listed.
 			var stranded []string
 			if len(gateways) > 0 {
-				for d := range reach(adj, []string{h.FromID, h.ToID}) {
+				sides := []string{h.FromID, h.ToID}
+				if reached[h.FromID] {
+					sides = []string{h.ToID}
+				} else if reached[h.ToID] {
+					sides = []string{h.FromID}
+				}
+				for d := range reach(adj, sides) {
 					if using[d] && !reached[d] {
 						stranded = append(stranded, d)
 					}
@@ -436,6 +539,12 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 	}
 	return vl, findings
 }
+
+// validVLAN reports whether id is a usable 802.1Q VLAN ID (0 and 4095 are reserved).
+func validVLAN(id int) bool { return id >= 1 && id <= 4094 }
+
+// taggedList returns the port's tagged VLANs, sorted.
+func (m membership) taggedList() []int { return slices.Sorted(maps.Keys(m.tagged)) }
 
 // otherPVID reports whether m classifies untagged frames into a VLAN other than v.
 func otherPVID(m membership, v int) bool { return m.pvid != nil && *m.pvid != v }
@@ -466,7 +575,7 @@ func (a *analyzer) leaks() []Finding {
 			continue
 		}
 		from, to := a.port(e.FromID, e.FromLink), a.port(e.ToID, e.ToLink)
-		if from.pvid == nil || to.pvid == nil || *from.pvid == *to.pvid {
+		if from.pvid == nil || to.pvid == nil || *from.pvid == *to.pvid || !validVLAN(*from.pvid) || !validVLAN(*to.pvid) {
 			continue
 		}
 		out = append(out, Finding{

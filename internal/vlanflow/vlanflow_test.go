@@ -185,3 +185,157 @@ func TestAnalyzeNil(t *testing.T) {
 		t.Fatal("nil state must yield empty, non-nil slices")
 	}
 }
+
+// chain builds fw -> a -> b -> c over wired edges e1..e3 with the given ports, for edge cases.
+func chain(links []model.Link, segs []model.Segment) (*store.NetworkState, topology.Graph) {
+	state := &store.NetworkState{Links: links, Segments: segs}
+	g := topology.Graph{}
+	for _, d := range []string{"fw", "a", "b", "c"} {
+		state.Devices = append(state.Devices, model.Device{ID: d, Name: d})
+		g.Nodes = append(g.Nodes, topology.Node{ID: d, Kind: topology.NodeDevice})
+	}
+	g.Edges = []topology.Edge{
+		{ID: "e1", FromID: "fw", FromLink: "p0", ToID: "a", ToLink: "up", Kind: topology.EdgeWired},
+		{ID: "e2", FromID: "a", FromLink: "down", ToID: "b", ToLink: "up", Kind: topology.EdgeWired},
+		{ID: "e3", FromID: "b", FromLink: "down", ToID: "c", ToLink: "up", Kind: topology.EdgeWired},
+	}
+	return state, g
+}
+
+func TestAnalyzeEdgeCases(t *testing.T) {
+	seg := []model.Segment{{DeviceID: "fw", ID: "s", Name: "S", ParentLink: "p0", VLANID: ip(20)}} // no address: still a gateway
+
+	t.Run("unknown end facing a known none blocks reach", func(t *testing.T) {
+		// a reports no VLAN data on any port (unknown); b's uplink excludes VLAN 20.
+		f := Analyze(chain([]model.Link{
+			{DeviceID: "b", IfName: "up", PVID: ip(1), TaggedVLANs: []int{10}},
+			{DeviceID: "b", IfName: "down", PVID: ip(1), TaggedVLANs: []int{20}},
+			{DeviceID: "c", IfName: "up", PVID: ip(1), TaggedVLANs: []int{20}},
+		}, seg))
+		v := vlan(t, f, 20)
+		if h := hop(t, v, "e2"); h.FromMode != ModeUnknown || h.ToMode != ModeNone || h.State != HopUnverified {
+			t.Errorf("e2 = %+v", h)
+		}
+		if !slices.Equal(v.Reached, []string{"a", "fw"}) {
+			t.Errorf("reached = %v: a known none end must block the VLAN", v.Reached)
+		}
+	})
+
+	t.Run("stranded lists only the side cut off from the gateway", func(t *testing.T) {
+		// VLAN 20 is carried fw -> a, missing on a:down, and b, c use it.
+		f := Analyze(chain([]model.Link{
+			{DeviceID: "a", IfName: "up", PVID: ip(1), TaggedVLANs: []int{20}},
+			{DeviceID: "a", IfName: "down", PVID: ip(1), TaggedVLANs: []int{10}},
+			{DeviceID: "b", IfName: "up", PVID: ip(1), TaggedVLANs: []int{20}},
+			{DeviceID: "b", IfName: "down", PVID: ip(1), TaggedVLANs: []int{20}},
+			{DeviceID: "c", IfName: "up", PVID: ip(1), TaggedVLANs: []int{20}},
+		}, seg))
+		if v := vlan(t, f, 20); len(v.Gateways) != 1 || !slices.Equal(v.Reached, []string{"a", "fw"}) {
+			t.Fatalf("VLAN 20 gateways = %+v reached = %v", v.Gateways, v.Reached)
+		}
+		if len(f.Findings) != 1 || f.Findings[0].EdgeID != "e2" || !slices.Equal(f.Findings[0].Stranded, []string{"b", "c"}) {
+			t.Errorf("findings = %+v", f.Findings)
+		}
+	})
+
+	t.Run("a transit switch missing the VLAN is a dead end, not unused", func(t *testing.T) {
+		// a carries only VLAN 10 but sits between the gateway and b, which uses VLAN 20.
+		f := Analyze(chain([]model.Link{
+			{DeviceID: "a", IfName: "up", PVID: ip(1), TaggedVLANs: []int{10}},
+			{DeviceID: "a", IfName: "down", PVID: ip(1), TaggedVLANs: []int{10}},
+			{DeviceID: "b", IfName: "up", PVID: ip(1), TaggedVLANs: []int{10, 20}},
+			{DeviceID: "b", IfName: "p5", PVID: ip(20)},
+		}, []model.Segment{{DeviceID: "fw", ID: "s", ParentLink: "p0", VLANID: ip(20)}}))
+		v := vlan(t, f, 20)
+		if h := hop(t, v, "e1"); h.State != HopDeadEnd {
+			t.Errorf("e1 = %+v", h)
+		}
+		if h := hop(t, v, "e2"); h.State != HopDeadEnd {
+			t.Errorf("e2 = %+v", h)
+		}
+		var stranded []string
+		for _, x := range f.Findings {
+			if x.Kind == FindingDeadEnd && x.EdgeID == "e2" {
+				stranded = x.Stranded
+			}
+		}
+		if !slices.Equal(stranded, []string{"b"}) || len(v.AccessPorts) != 1 || v.AccessPorts[0].Reachable {
+			t.Errorf("stranded = %v, access ports = %+v", stranded, v.AccessPorts)
+		}
+	})
+
+	t.Run("an untagged routed segment is the gateway of its peer's PVID", func(t *testing.T) {
+		f := Analyze(chain([]model.Link{
+			{DeviceID: "a", IfName: "up", PVID: ip(1), TaggedVLANs: []int{20}},
+		}, []model.Segment{
+			{DeviceID: "fw", ID: "lan", Name: "LAN", ParentLink: "p0"},
+			{DeviceID: "fw", ID: "iot", Name: "IoT", ParentLink: "p0", VLANID: ip(20)},
+		}))
+		v1 := vlan(t, f, 1)
+		if v1.Name != "LAN" || len(v1.Gateways) != 1 || !slices.Equal(v1.Reached, []string{"a", "fw"}) {
+			t.Errorf("VLAN 1 = %+v", v1)
+		}
+		if h := hop(t, v1, "e1"); h.FromMode != ModeUntagged || h.ToMode != ModeUntagged || h.State != HopCarried {
+			t.Errorf("VLAN 1 on e1 = %+v", h)
+		}
+		if h := hop(t, vlan(t, f, 20), "e1"); h.FromMode != ModeTagged || h.State != HopCarried || !slices.Equal(h.FromTagged, []int{20}) {
+			t.Errorf("VLAN 20 on e1 = %+v", h)
+		}
+	})
+
+	t.Run("a wireless uplink stays unverified when the parent AP only bridges the VLAN", func(t *testing.T) {
+		state, g := chain([]model.Link{
+			{DeviceID: "a", IfName: "up", PVID: ip(1), TaggedVLANs: []int{50}},
+		}, []model.Segment{{DeviceID: "fw", ID: "s", ParentLink: "p0", VLANID: ip(50)}})
+		state.Radios = []model.WirelessRadio{{DeviceID: "c", Name: "r", SSIDs: []model.Ssid{{Name: "Mesh", VLANID: ip(50)}}}}
+		g.Edges = []topology.Edge{g.Edges[0], {ID: "w", FromID: "a", ToID: "c", Kind: topology.EdgeWirelessUplink}}
+		v := vlan(t, Analyze(state, g), 50)
+		if h := hop(t, v, "w"); h.State != HopUnverified {
+			t.Errorf("wireless hop = %+v", h)
+		}
+		if len(v.SSIDs) != 1 || !v.SSIDs[0].Reachable {
+			t.Errorf("SSIDs = %+v", v.SSIDs)
+		}
+	})
+
+	t.Run("tag mismatch and LAG member union", func(t *testing.T) {
+		state, g := chain([]model.Link{
+			{DeviceID: "a", IfName: "m1", PVID: ip(1), TaggedVLANs: []int{20}},
+			{DeviceID: "a", IfName: "m2", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "a", IfName: "down", PVID: ip(20), TaggedVLANs: []int{20}},
+			{DeviceID: "b", IfName: "up", PVID: ip(20)},
+		}, []model.Segment{
+			{DeviceID: "fw", ID: "s20", ParentLink: "p0", VLANID: ip(20)},
+			{DeviceID: "fw", ID: "s30", ParentLink: "p0", VLANID: ip(30)},
+		})
+		state.LagGroups = []model.LagGroup{{DeviceID: "a", ID: "bond", Name: "bond", MemberLinks: []string{"m1", "m2"}}}
+		g.Edges[0].ToLink = "bond"
+		f := Analyze(state, g)
+		if h := hop(t, vlan(t, f, 30), "e1"); h.ToMode != ModeTagged || h.State != HopCarried {
+			t.Errorf("VLAN 30 on the LAG = %+v (members' VLANs must be combined)", h)
+		}
+		var kinds []FindingKind
+		for _, x := range f.Findings {
+			kinds = append(kinds, x.Kind)
+		}
+		// a:down tags VLAN 20 (its PVID too) while b:up carries it untagged: same PVID, so no leak.
+		if !slices.Equal(kinds, []FindingKind{FindingTagMismatch}) {
+			t.Errorf("findings = %+v", f.Findings)
+		}
+	})
+
+	t.Run("reserved VLAN IDs are ignored", func(t *testing.T) {
+		f := Analyze(chain([]model.Link{
+			{DeviceID: "a", IfName: "down", PVID: ip(4095), TaggedVLANs: []int{0}},
+			{DeviceID: "b", IfName: "up", PVID: ip(1)},
+		}, nil))
+		for _, v := range f.VLANs {
+			if v.ID == 0 || v.ID == 4095 {
+				t.Errorf("reserved VLAN %d listed", v.ID)
+			}
+		}
+		if len(f.Findings) != 0 {
+			t.Errorf("findings = %+v: a reserved PVID is no leak", f.Findings)
+		}
+	})
+}
