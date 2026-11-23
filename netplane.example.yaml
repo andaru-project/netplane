@@ -22,10 +22,22 @@ targets:
     driver: pfsense
     endpoint: "https://192.0.2.1"
     poll_interval: "15s"
-    settings:
-      insecure_skip_verify: true
+    # Certificates are verified; see the OPNsense target below.
     secrets:
       api_key: "${PFSENSE_API_KEY}"
+
+  - id: core-opnsense
+    name: Edge Firewall
+    driver: opnsense
+    endpoint: "https://192.0.2.2"
+    poll_interval: "15s"
+    # The certificate is verified: give the firewall one the system trusts (for example
+    # from an ACME CA). insecure_skip_verify: true accepts any certificate, so anyone who
+    # can intercept the connection gets the API secret; use it only on a network you trust.
+    # An API key of a dedicated user; README lists the privileges it needs.
+    secrets:
+      api_key: "${OPNSENSE_API_KEY}"
+      api_secret: "${OPNSENSE_API_SECRET}"
 
   - id: sw-rtl
     name: Access Switch
@@ -52,7 +64,6 @@ targets:
     settings:
       site: "default"
       is_unifi_os: true
-      insecure_skip_verify: true
     secrets:
       username: "${UNIFI_USER}"
       password: "${UNIFI_PASS}"

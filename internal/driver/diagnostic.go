@@ -87,18 +87,24 @@ func parsePing(out string) (stats PingStats, ok bool) {
 
 // PingResult builds the result of a ping run from the tool's output.
 func PingResult(req model.DiagnosticRequest, host, output string) *model.DiagnosticResult {
-	res := &model.DiagnosticResult{Kind: req.Kind, DeviceID: req.DeviceID, Target: host, RawOutput: output}
 	stats, ok := parsePing(output)
 	if !ok {
+		res := &model.DiagnosticResult{Kind: req.Kind, DeviceID: req.DeviceID, Target: host, RawOutput: output}
 		res.Summary = fmt.Sprintf("ping %s failed", host)
 		res.Error = LastLine(output)
 		return res
 	}
+	return PingStatsResult(req, host, stats, output, toolError(output, "no replies"))
+}
+
+// PingStatsResult builds the result of a ping run from its statistics; noReplies is the
+// error reported when no reply came back.
+func PingStatsResult(req model.DiagnosticRequest, host string, stats PingStats, output, noReplies string) *model.DiagnosticResult {
+	res := &model.DiagnosticResult{Kind: req.Kind, DeviceID: req.DeviceID, Target: host, RawOutput: output, Structured: stats}
 	res.OK = stats.Received > 0
 	if !res.OK {
-		res.Error = toolError(output, "no replies")
+		res.Error = noReplies
 	}
-	res.Structured = stats
 	res.Summary = fmt.Sprintf("%d/%d replies from %s (%.0f%% loss)", stats.Received, stats.Transmitted, host, stats.LossPct)
 	if stats.RTTAvgMs != nil {
 		res.Summary += fmt.Sprintf(", avg %.1f ms", *stats.RTTAvgMs)

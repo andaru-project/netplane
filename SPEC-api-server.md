@@ -62,6 +62,7 @@ cmd/
 - `POST /api/v1/diagnostics` → runs `DiagnosticRequest` (`fdb_lookup` locally, or delegates to `DiagnosticDriver`), saves to store, returns `DiagnosticResult`; if the save fails it returns 500 `STORE_ERROR` without re-running the diagnostic. An unknown `kind` returns 400 `INVALID_REQUEST`. A driver's invalid-request error (`driver.ErrDiagnosticRequest`) returns 400 `INVALID_REQUEST`, a kind the driver cannot run (`driver.ErrDiagnosticUnsupported`, or no `DiagnosticDriver`) returns 501 `UNSUPPORTED`, and any other driver error returns 502 `DIAG_FAILED`. Device-side kinds:
   - OpenWrt: `ping` and `traceroute` through rpcd `file.exec` (the account needs LuCI's `luci-mod-network-diagnostics` ACL grant). Each run logs in to its own session and destroys it afterwards when the account may call `session.destroy` (LuCI's grants do not include it, so rpcd otherwise expires the session after 300 s).
   - pfSense: `ping` through `POST /api/v2/diagnostics/ping` (REST API package v2.7.0 or later; the API key needs the `api-v2-diagnostics-ping-post` privilege).
+  - OPNsense: `ping` through a ping job (`POST /api/diagnostics/ping/set`, `start/{id}`, read `search_jobs` until `count` probes went out, then `stop/{id}` and `remove/{id}`, even after a timeout). The API user needs `page-diagnostics-ping`, and `user-config-readonly` refuses the job.
   - Andaru, UniFi, SNMP and RTLPlayground run no device-side diagnostic: Andaru's API (its embedded OpenAPI document) has no diagnostic route, UniFi's controller API has none netplane uses, SNMP has none, and RTLPlayground's tools sit behind its command endpoint.
   - No driver runs `cable_test` yet. RTLPlayground's cable test is reachable only through its command endpoint, which netplane never calls, and it powers the port down.
   - `target` must be an IP address or a DNS name (never starting with `-`); `params.count` sets ping probes, 1 to 10, default 3. Traceroute probes at most 20 hops, one probe per hop, without reverse DNS.
@@ -83,5 +84,5 @@ Error envelope (matching Andaru's clean structure):
 2. `X-Ingress-Path` prefix handling works for both API routes and SPA fallback.
 3. Optional bearer auth rejects unauthenticated requests with `401` while allowing authorized tokens and configured Ingress proxy headers.
 4. SSE stream delivers live published events and closes cleanly on client disconnect.
-5. `POST /api/v1/diagnostics` with `kind: "fdb_lookup"` resolves a MAC or IP to its exact switch/port/AP/VLAN across merged multi-vendor state; `ping` and `traceroute` run on OpenWrt devices and `ping` on pfSense.
+5. `POST /api/v1/diagnostics` with `kind: "fdb_lookup"` resolves a MAC or IP to its exact switch/port/AP/VLAN across merged multi-vendor state; `ping` and `traceroute` run on OpenWrt devices and `ping` on pfSense and OPNsense.
 6. `CGO_ENABLED=0` `cmd/netplane` compiles cleanly for `linux/amd64` and `linux/arm64`.

@@ -2,7 +2,7 @@
 
 Andaru Netplane is part of the [Andaru Project](https://github.com/andaru-project). Its identifiers stay as they were: the binary, container image, add-on slug and Home Assistant domain are `netplane`, and the Python package is `netplane-client`.
 
-An open, driver-based **network configuration, information, and diagnostics plane** designed to manage heterogeneous networks (OpenWrt/DSA switches and routers, pfSense gateways, UniFi gear, and SNMP v2c/v3 managed switches; OPNsense support is planned) from a single fast UI—standalone or directly inside Home Assistant via Ingress.
+An open, driver-based **network configuration, information, and diagnostics plane** designed to manage heterogeneous networks (OpenWrt/DSA switches and routers, pfSense and OPNsense gateways, UniFi gear, and SNMP v2c/v3 managed switches) from a single fast UI—standalone or directly inside Home Assistant via Ingress.
 
 ## Architecture
 
@@ -10,8 +10,8 @@ An open, driver-based **network configuration, information, and diagnostics plan
 
 1. **Standalone Core + Embedded Web UI** (Go + React/TypeScript SPA, single static binary/container, embedded SQLite in WAL mode):
    - Capability-based canonical data model (devices, ports, media/SFP DOM, EEE/Flow Control, VLANs, FDB, ARP, LLDP, wireless radios/SSIDs, clients, gateways, DHCP leases).
-   - Native API/SSH drivers (**OpenWrt**, **pfSense**, **UniFi**) plus a standards-based **SNMP v2c/v3** driver.
-   - Cross-vendor L2/L3 topology solver (LLDP + FDB + ARP + wireless associations) and diagnostics: a cross-vendor FDB/MAC/IP lookup (`fdb_lookup`), ping and traceroute run on OpenWrt devices (the account needs LuCI's `luci-mod-network-diagnostics` ACL grant), and ping run on pfSense (REST API v2.7.0 or later, with the `api-v2-diagnostics-ping-post` privilege). Andaru, UniFi, SNMP and RTLPlayground run no device-side diagnostic, and cable tests are planned.
+   - Native API/SSH drivers (**OpenWrt**, **pfSense**, **OPNsense**, **UniFi**) plus a standards-based **SNMP v2c/v3** driver.
+   - Cross-vendor L2/L3 topology solver (LLDP + FDB + ARP + wireless associations) and diagnostics: a cross-vendor FDB/MAC/IP lookup (`fdb_lookup`), ping and traceroute run on OpenWrt devices (the account needs LuCI's `luci-mod-network-diagnostics` ACL grant), and ping run on pfSense (REST API v2.7.0 or later, with the `api-v2-diagnostics-ping-post` privilege) and on OPNsense (the `page-diagnostics-ping` privilege). Andaru, UniFi, SNMP and RTLPlayground run no device-side diagnostic, and cable tests are planned.
 2. **Home Assistant Add-on with Ingress:**
    - Embeds the full UI directly into the Home Assistant sidebar and Android/iOS Companion Apps with SSO and zero extra exposed ports.
 3. **Thin Home Assistant Integration (`ha-integration/`):**
@@ -39,6 +39,20 @@ export NETPLANE_API_TOKEN="$(openssl rand -hex 32)"  # the example requires a be
 The example configuration requires a bearer token (`api_token_secret`). Remove it only when the server listens on a loopback address; in the Home Assistant Add-on, set the `api_token` option instead. Without a token, the server answers only requests addressed to an IP address, a single-label name (`netplane`) or a private suffix (`.local`, `.lan`, `.home.arpa`, `.internal`, `.localhost`), so a malicious web page cannot reach it by DNS rebinding; list any other names under `server.allowed_hosts` (bare host names). This trusts your local resolver and search domain. Writes from another origin are always refused (Go's cross-origin protection: `Sec-Fetch-Site`, else `Origin` against `Host`). A reverse proxy in front of netplane should pass the browser's `Host` through with its port (nginx: `proxy_set_header Host $http_host;`); if it rewrites `Host`, list the public origin under `server.trusted_origins` (for example `https://netplane.example.net`).
 
 Drivers refuse to send credentials to a plain `http://` endpoint unless the target sets `allow_insecure_http: true` under `settings`. Use `https://` (or a `unix://` socket) where the device supports it.
+
+#### OPNsense
+
+The `opnsense` driver reads OPNsense 25.1 or later through its core REST API. Create an API key for a dedicated user and set the `api_key` and `api_secret` secrets. The user needs these privileges. OPNsense grants whole pages, so several also allow changes on that page, as noted:
+
+- **Required:** `Lobby: Dashboard` (identity, uptime, memory, pf states) and `Status: Interfaces` (also allows reloading an interface).
+- **Optional, each adding its section:**
+  - `Diagnostics: ARP Table` and `Diagnostics: NDP Table`.
+  - `System: Gateways` (also allows editing gateways).
+  - One of these per DHCP server in use, each of which also allows editing that server: `Services: DHCP: Kea(v4)`, `Services: Dnsmasq DNS/DHCP: Settings`, or `Status: DHCP leases` for ISC dhcpd.
+  - `VPN: WireGuard: Status` (25.7 or later; on 25.1 `VPN: WireGuard` grants it, together with WireGuard configuration).
+  - `Diagnostics: Ping` for the ping diagnostic.
+- **Missing privileges and services:** a section whose privilege is missing, or whose service is not installed, stays empty. Any other failure keeps the section's last data.
+- **Ping:** it runs as an OPNsense ping job, which the driver removes afterwards. A user with `System: Deny config write` cannot create the job, and a DNS name is pinged over IPv4.
 
 #### RTLPlayground switches
 
