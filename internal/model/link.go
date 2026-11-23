@@ -16,19 +16,34 @@ const (
 	MediaSFP    MediaType = "SFP"
 	MediaSFPPl  MediaType = "SFP+"
 	MediaSFP28  MediaType = "SFP28"
+	MediaQSFPPl MediaType = "QSFP+"
 	MediaQSFP28 MediaType = "QSFP28"
 	MediaOther  MediaType = "other"
 )
 
-// MediaForSpeed classifies a port from its link speed: a pluggable cage is SFP+ above 1 Gb/s
-// (2.5G and 5G modules sit in SFP+ cages) and SFP otherwise, copper the Ethernet class of its
-// speed (FE for 10/100, as UniFi reports it). A copper port with no speed is other.
+// MediaForSpeed classifies a port from its link speed. A pluggable cage is QSFP28 from 100 Gb/s,
+// QSFP+ from 40 Gb/s, SFP28 from 25 Gb/s, SFP+ above 1 Gb/s (2.5G and 5G modules sit in SFP+
+// cages) and SFP otherwise. Any other port is the Ethernet class of its speed (FE for 10/100, as
+// UniFi reports it), and other with no speed.
+// shortcut: 200G and 400G cages (QSFP56, QSFP-DD) read as QSFP28; add types when a driver sees one.
 func MediaForSpeed(speedMbps int, pluggable bool) MediaType {
 	switch {
+	case pluggable && speedMbps >= 100000:
+		return MediaQSFP28
+	case pluggable && speedMbps >= 40000:
+		return MediaQSFPPl
+	case pluggable && speedMbps >= 25000:
+		return MediaSFP28
 	case pluggable && speedMbps > 1000:
 		return MediaSFPPl
 	case pluggable:
 		return MediaSFP
+	case speedMbps >= 100000:
+		return Media100G
+	case speedMbps >= 40000:
+		return Media40G
+	case speedMbps >= 25000:
+		return Media25G
 	case speedMbps >= 10000:
 		return Media10GE
 	case speedMbps >= 5000:

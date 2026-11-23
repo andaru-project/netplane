@@ -714,13 +714,14 @@ func pduUint64(p gosnmp.SnmpPDU) uint64 {
 	return gosnmp.ToBigInt(p.Value).Uint64()
 }
 
-// tenGigName matches Cisco-style 10G port names (TenGigabitEthernet1/0/1, Ten-GigabitEthernet).
-// The short form Te1/0/1 also names copper mGig ports, so it is left to the speed.
-var tenGigName = regexp.MustCompile(`^ten-?gig`)
+// cageName matches Cisco-style names of ports that are always cages: TenGigabitEthernet and
+// Ten-GigabitEthernet, and TwentyFiveGigE, FortyGigabitEthernet and HundredGigE with their short
+// forms (Twe, Fo, Hu). The short form Te also names copper mGig ports, so it is left to the speed.
+var cageName = regexp.MustCompile(`^(ten-?gig|twentyfivegig|fortygig|hundredgig|(twe|fo|hu)\d)`)
 
 func guessSnmpMedia(ifName string, speedMbps int) model.MediaType {
 	lower := strings.ToLower(ifName)
-	pluggable := strings.Contains(lower, "sfp") || strings.Contains(lower, "fiber") || tenGigName.MatchString(lower)
+	pluggable := strings.Contains(lower, "sfp") || strings.Contains(lower, "fiber") || cageName.MatchString(lower)
 	// Agents report 10 Mb/s for virtual interfaces of unknown speed (net-snmp's default).
 	if !pluggable && speedMbps < 100 {
 		return model.MediaOther

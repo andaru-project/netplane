@@ -346,6 +346,8 @@ func TestGuessSnmpMedia(t *testing.T) {
 		{"tun0", 10, model.MediaOther}, {"eth0", 100, model.MediaFE}, {"Te1/0/5", 2500, model.Media25GE},
 		{"TenGigabitEthernet1/0/2", 10000, model.MediaSFPPl}, {"tenant0", 10000, model.Media10GE}, {"Intent0", 2500, model.Media25GE},
 		{"sfp1", 1000, model.MediaSFP},
+		{"Hu1/0/49", 100000, model.MediaQSFP28}, {"FortyGigabitEthernet1/1/1", 40000, model.MediaQSFPPl},
+		{"Twe1/0/1", 25000, model.MediaSFP28}, {"HundredGigE0/0/0/0", 100000, model.MediaQSFP28}, {"house0", 1000, model.MediaGE},
 	} {
 		if got := guessSnmpMedia(tc.name, tc.speed); got != tc.want {
 			t.Errorf("guessSnmpMedia(%q, %d) = %s, want %s", tc.name, tc.speed, got, tc.want)
