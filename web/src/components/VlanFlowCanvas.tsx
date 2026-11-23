@@ -32,13 +32,41 @@ import {
 const MONO = 'ui-monospace, monospace';
 const SANS = 'system-ui, sans-serif';
 
-function bezierPath(x1: number, y1: number, x2: number, y2: number, sameColumn = false): string {
+function bezierControlPoints(x1: number, y1: number, x2: number, y2: number, sameColumn = false) {
   if (sameColumn) {
     const loopX = Math.max(x1, x2) + 54;
-    return `M ${x1} ${y1} C ${loopX} ${y1}, ${loopX} ${y2}, ${x2} ${y2}`;
+    return { cx1: loopX, cy1: y1, cx2: loopX, cy2: y2 };
   }
   const dx = Math.max(36, Math.abs(x2 - x1) * 0.46);
-  return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+  return { cx1: x1 + dx, cy1: y1, cx2: x2 - dx, cy2: y2 };
+}
+
+function bezierPath(x1: number, y1: number, x2: number, y2: number, sameColumn = false): string {
+  const { cx1, cy1, cx2, cy2 } = bezierControlPoints(x1, y1, x2, y2, sameColumn);
+  return `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+}
+
+/** Splits a ribbon's cubic Bezier at t=0.5 (de Casteljau) so both dead-end halves follow the true curve. */
+function splitBezier(x1: number, y1: number, x2: number, y2: number, sameColumn = false) {
+  const { cx1, cy1, cx2, cy2 } = bezierControlPoints(x1, y1, x2, y2, sameColumn);
+  const m01x = (x1 + cx1) / 2;
+  const m01y = (y1 + cy1) / 2;
+  const m12x = (cx1 + cx2) / 2;
+  const m12y = (cy1 + cy2) / 2;
+  const m23x = (cx2 + x2) / 2;
+  const m23y = (cy2 + y2) / 2;
+  const q1x = (m01x + m12x) / 2;
+  const q1y = (m01y + m12y) / 2;
+  const q2x = (m12x + m23x) / 2;
+  const q2y = (m12y + m23y) / 2;
+  const mx = (q1x + q2x) / 2;
+  const my = (q1y + q2y) / 2;
+  return {
+    first: `M ${x1} ${y1} C ${m01x} ${m01y}, ${q1x} ${q1y}, ${mx} ${my}`,
+    second: `M ${mx} ${my} C ${q2x} ${q2y}, ${m23x} ${m23y}, ${x2} ${y2}`,
+    mx,
+    my,
+  };
 }
 
 function truncate(text: string, max: number): string {
@@ -356,7 +384,8 @@ export function VlanFlowCanvas({
 
         {/* Multi-lane edge bundles */}
         {allLayout.edgeBundles.map((bundle) => {
-          const laneGap = Math.min(11, 44 / Math.max(bundle.lanes.length, 1));
+          const laneGap = Math.min(11, Math.max(5, 64 / Math.max(bundle.lanes.length, 1)));
+          const hitWidth = Math.max(laneGap, 8);
           const midX = ribbonMidX(bundle);
           const midY = (bundle.y1 + bundle.y2) / 2;
           const topFinding = bundle.findings[0];
@@ -377,21 +406,23 @@ export function VlanFlowCanvas({
                 if (lane.finding) stops.add(findingKey(lane.finding));
 
                 if (lane.state === 'dead_end') {
-                  const stopY = (y1 + y2) / 2;
                   // The layout already swapped the modes into display order: style the half that lacks the VLAN.
                   const fromCarries = lane.fromMode !== 'none';
                   const carried = { stroke: col, strokeWidth: 2.4 };
                   const missing = { stroke: C.amber, strokeWidth: 1.8, strokeDasharray: '4,3' };
-                  const left = bezierPath(bundle.x1, y1, midX - 4, stopY);
-                  const right = bezierPath(midX + 4, stopY, bundle.x2, y2);
+                  const { first, second, mx, my } = splitBezier(bundle.x1, y1, bundle.x2, y2, bundle.sameColumn);
                   return (
                     <Lane
                       key={`${bundle.edgeId}-v${lane.vlanId}`}
-                      d={`${left} ${right}`}
-                      finding={lane.finding} hitWidth={laneGap} focusable={laneStop} onClick={onLaneClick}>
-                      <path d={left} fill="none" {...(fromCarries ? carried : missing)} />
-                      <path d={right} fill="none" {...(fromCarries ? missing : carried)} />
-                      <line x1={midX} y1={stopY - 7} x2={midX} y2={stopY + 7} stroke={C.amber} strokeWidth={2.6} />
+                      d={`${first} ${second}`}
+                      finding={lane.finding} hitWidth={hitWidth} focusable={laneStop} onClick={onLaneClick}>
+                      <path d={first} fill="none" {...(fromCarries ? carried : missing)} />
+                      <path d={second} fill="none" {...(fromCarries ? missing : carried)} />
+                      {bundle.sameColumn ? (
+                        <line x1={mx - 7} y1={my} x2={mx + 7} y2={my} stroke={C.amber} strokeWidth={2.6} />
+                      ) : (
+                        <line x1={mx} y1={my - 7} x2={mx} y2={my + 7} stroke={C.amber} strokeWidth={2.6} />
+                      )}
                     </Lane>
                   );
                 }
@@ -403,7 +434,7 @@ export function VlanFlowCanvas({
                   (bundle.linkKind === 'lag' || (lane.fromMode === 'untagged' && lane.toMode === 'untagged'))
                 ) {
                   return (
-                    <Lane key={`${bundle.edgeId}-v${lane.vlanId}`} d={laneD} finding={lane.finding} hitWidth={laneGap} focusable={laneStop} onClick={onLaneClick}>
+                    <Lane key={`${bundle.edgeId}-v${lane.vlanId}`} d={laneD} finding={lane.finding} hitWidth={hitWidth} focusable={laneStop} onClick={onLaneClick}>
                       <Rail d={laneD} stroke={col} width={bundle.linkKind === 'lag' ? 4.4 : 3.8} innerWidth={1.4} canvas={C.canvas} />
                     </Lane>
                   );
@@ -412,7 +443,7 @@ export function VlanFlowCanvas({
                 const dash =
                   lane.state === 'unverified' ? '3,4' : bundle.linkKind === 'wireless_uplink' ? '5,4' : lane.state === 'mismatch' ? '6,3' : undefined;
                 return (
-                  <Lane key={`${bundle.edgeId}-v${lane.vlanId}`} d={laneD} finding={lane.finding} hitWidth={laneGap} focusable={laneStop} onClick={onLaneClick}>
+                  <Lane key={`${bundle.edgeId}-v${lane.vlanId}`} d={laneD} finding={lane.finding} hitWidth={hitWidth} focusable={laneStop} onClick={onLaneClick}>
                     <path
                       d={laneD}
                       fill="none" stroke={strokeColor} strokeWidth={lane.state === 'leak' ? 3.2 : 2.3} strokeDasharray={dash}
@@ -602,22 +633,25 @@ export function VlanFlowCanvas({
     }
 
     if (r.state === 'dead_end') {
-      const midX = ribbonMidX(r);
-      const stopY = (r.y1 + r.y2) / 2;
       const fromCarries = r.fromMode !== 'none';
+      const { first, second, mx, my } = splitBezier(r.x1, r.y1, r.x2, r.y2, r.sameColumn);
       return (
         <RibbonGroup key={`path-${r.id}`} d={d} selected={isSelFinding} onClick={handleClick}>
           <path
-            d={bezierPath(r.x1, r.y1, midX - 6, stopY)} fill="none"
+            d={first} fill="none"
             stroke={fromCarries ? vColor : C.amber} strokeWidth={fromCarries ? 3.2 : 2}
             strokeDasharray={fromCarries ? undefined : '4,4'} opacity={fromCarries ? 1 : 0.72}
           />
           <path
-            d={bezierPath(midX + 6, stopY, r.x2, r.y2)} fill="none"
+            d={second} fill="none"
             stroke={fromCarries ? C.amber : vColor} strokeWidth={fromCarries ? 2 : 3.2}
             strokeDasharray={fromCarries ? '4,4' : undefined} opacity={fromCarries ? 0.72 : 1}
           />
-          <line x1={midX} y1={stopY - 12} x2={midX} y2={stopY + 12} stroke={C.amber} strokeWidth={3.2} strokeLinecap="round" />
+          {r.sameColumn ? (
+            <line x1={mx - 12} y1={my} x2={mx + 12} y2={my} stroke={C.amber} strokeWidth={3.2} strokeLinecap="round" />
+          ) : (
+            <line x1={mx} y1={my - 12} x2={mx} y2={my + 12} stroke={C.amber} strokeWidth={3.2} strokeLinecap="round" />
+          )}
         </RibbonGroup>
       );
     }
@@ -663,7 +697,7 @@ export function VlanFlowCanvas({
     }
 
     if (r.state === 'leak') {
-      const lbl = r.finding ? `⚠ LEAK ${r.finding.vlans[0]}→${r.finding.vlans[1]}` : '⚠ LEAK';
+      const lbl = r.finding ? `⚠ LEAK ${r.finding.vlans[0]}⇄${r.finding.vlans[1]}` : '⚠ LEAK';
       return (
         <SvgButton key={`ov-${r.id}`} label={r.finding?.message || 'VLAN leak'} onClick={handleClick}>
           <Pill x={mx} y={my} width={Math.max(96, lbl.length * 6.2 + 16)} height={22} fill={C.red} textFill="#ffffff" stroke={C.surface} strokeWidth={1.2} fontWeight={800} label={lbl} />

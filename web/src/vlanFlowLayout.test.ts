@@ -349,4 +349,42 @@ describe('computeAllVlansLayout', () => {
     // The pill centre sits 46 units right of the column and is 88 wide.
     expect(layout.width).toBeGreaterThanOrEqual(Math.max(sameCol.x1, sameCol.x2) + 46 + 44);
   });
+
+  it('anchors an L2-only VLAN to its leftmost participating device instead of alphabetically first', () => {
+    const flow: VLANFlow = {
+      generated_at: '2026-01-01T00:00:00Z',
+      vlans: [
+        {
+          id: 10,
+          gateways: [{ device_id: 'gw', segment_id: 's10', segment_name: 'lan', addresses: [] }],
+          devices: ['gw', 'sw-core', 'ap-edge'],
+          reached: ['gw', 'sw-core', 'ap-edge'],
+          hops: [
+            { edge_id: 'e1', from_id: 'gw', to_id: 'sw-core', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [10], to_tagged: [10] },
+            { edge_id: 'e2', from_id: 'sw-core', to_id: 'ap-edge', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [10], to_tagged: [10] },
+          ],
+          access_ports: [],
+          ssids: [],
+          clients: 0,
+        },
+        {
+          id: 99,
+          gateways: [],
+          // Alphabetically 'ap-edge' comes before 'sw-core', but 'sw-core' is closer to Col 0.
+          devices: ['ap-edge', 'sw-core'],
+          reached: [],
+          hops: [
+            { edge_id: 'e2', from_id: 'sw-core', to_id: 'ap-edge', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [99], to_tagged: [99] },
+          ],
+          access_ports: [],
+          ssids: [],
+          clients: 0,
+        },
+      ],
+      findings: [],
+    };
+    const layout = computeAllVlansLayout(flow);
+    const l2Link = layout.segmentLinks.find((l) => l.vlanId === 99);
+    expect(l2Link?.deviceId).toBe('sw-core');
+  });
 });

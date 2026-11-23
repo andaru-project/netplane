@@ -423,6 +423,49 @@ describe('VlanFlowCanvas', () => {
     const grad = container.querySelector('linearGradient');
     expect(grad).toHaveAttribute('gradientUnits', 'userSpaceOnUse');
     expect(container.querySelector(`path[stroke="url(#${grad?.id})"]`)).not.toBeNull();
+    expect(screen.getByText('⚠ LEAK 10⇄20')).toBeInTheDocument();
+  });
+
+  it('keeps same-column dead-end Bezier control points to the right of the card edge', () => {
+    const flow: VLANFlow = {
+      generated_at: '2026-01-01T00:00:00Z',
+      vlans: [
+        {
+          ...vlan(10, [
+            hop({ edge_id: 'e1', from_id: 'fw', to_id: 'a' }),
+            hop({ edge_id: 'e2', from_id: 'fw', to_id: 'b' }),
+            hop({ edge_id: 'e3', from_id: 'a', to_id: 'b', from_mode: 'tagged', to_mode: 'none', state: 'dead_end' }),
+          ]),
+          devices: ['fw', 'a', 'b'],
+          reached: ['fw', 'a', 'b'],
+        },
+      ],
+      findings: [],
+    };
+    const { container } = draw('single', flow);
+    const dashed = container.querySelector('path[stroke-dasharray="4,4"]');
+    expect(dashed).not.toBeNull();
+    const nums = (dashed?.getAttribute('d') ?? '').match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+    // M mx my C q2x q2y, m23x m23y, x2 y2 -> every X control point must stay >= x2 (the card's right edge).
+    const x2 = nums[6];
+    expect(nums[0]).toBeGreaterThan(x2);
+    expect(nums[2]).toBeGreaterThan(x2);
+    expect(nums[4]).toBeGreaterThan(x2);
+  });
+
+  it('keeps All-VLANs trunk lane spacing and hit targets usable with 12+ VLANs', () => {
+    const vlans = Array.from({ length: 14 }, (_, i) => vlan(10 + i, [hop({})]));
+    const flow: VLANFlow = { generated_at: '2026-01-01T00:00:00Z', vlans, findings: [] };
+    const { container } = draw('all', flow);
+    const hitPaths = Array.from(container.querySelectorAll('path[stroke="transparent"]'));
+    expect(hitPaths).toHaveLength(14);
+    const ys = hitPaths.map((p) => {
+      expect(Number(p.getAttribute('stroke-width'))).toBeGreaterThanOrEqual(8);
+      return Number((p.getAttribute('d') ?? '').split(' ')[2]);
+    });
+    for (let i = 1; i < ys.length; i++) {
+      expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(5);
+    }
   });
 });
 

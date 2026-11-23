@@ -921,7 +921,7 @@ export function computeAllVlansLayout(
         x: col.x,
         y: 0,
         width: col.width,
-        height: Math.max(106, 68 + Math.min(vIds.length, 6) * 14),
+        height: Math.max(106, 68 + Math.min(vIds.length, 10) * 12),
       };
     },
   );
@@ -952,9 +952,15 @@ export function computeAllVlansLayout(
   const segmentLinks: AllVlansSegmentLink[] = [];
   const segLinksByDev = new Map<string, AllVlansSegmentLink[]>();
   for (const vc of vlanCards) {
+    const l2Anchor = vc.vlan.gateways.length === 0
+      ? vc.vlan.devices
+          .map((id) => deviceCardsById.get(id))
+          .filter((dc): dc is AllVlansDeviceCard => dc != null)
+          .sort((a, b) => a.columnIndex - b.columnIndex || a.y - b.y)[0]?.deviceId
+      : undefined;
     const targets = vc.vlan.gateways.length > 0
       ? Array.from(new Set(vc.vlan.gateways.map((g) => g.device_id)))
-      : vc.vlan.devices.slice(0, 1);
+      : l2Anchor ? [l2Anchor] : [];
     for (const devId of targets) {
       const dc = deviceCardsById.get(devId);
       if (!dc) continue;
