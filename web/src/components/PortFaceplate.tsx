@@ -181,7 +181,11 @@ export function PortFaceplate({
     );
   };
 
-  const selPeer = selected ? findPeerForLink(topology, devicesById, device.id, selected.if_name, selected.lag_group_id) : null;
+  // A LAG member's topology edge names the LAG, so look the peer up by the LAG's name.
+  const selLag = selected ? lagGroups.find((g) => g.member_links.includes(selected.if_name)) : undefined;
+  const selPeer = selected
+    ? findPeerForLink(topology, devicesById, device.id, selected.if_name, selLag?.name ?? selected.lag_group_id)
+    : null;
   const selAnoms: VLANFlowFinding[] = selected
     ? findingsForPort(findings, device.id, selected.if_name, selected.lag_group_id)
     : [];

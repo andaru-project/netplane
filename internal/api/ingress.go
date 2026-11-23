@@ -185,7 +185,7 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "UI bundle missing index.html")
 		return
 	}
-	baseHref := "./"
+	baseHref := "/"
 	if s.isTrustedIngressPeer(r.RemoteAddr) {
 		if ingressPath := sanitizeIngressPath(r.Header.Get("X-Ingress-Path")); ingressPath != "" {
 			baseHref = html.EscapeString(ingressPath) + "/"

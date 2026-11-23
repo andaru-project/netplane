@@ -232,7 +232,7 @@ func TestAPIEndpointsAndIngressAndAuth(t *testing.T) {
 		req.Header.Set("X-Ingress-Path", evil)
 		rec = httptest.NewRecorder()
 		srv.ServeHTTP(rec, req)
-		if strings.Contains(rec.Body.String(), "evil") || !strings.Contains(rec.Body.String(), `<base href="./">`) {
+		if strings.Contains(rec.Body.String(), "evil") || !strings.Contains(rec.Body.String(), `<base href="/">`) {
 			t.Fatalf("hostile X-Ingress-Path %q leaked into base href: %s", evil, rec.Body.String())
 		}
 	}
