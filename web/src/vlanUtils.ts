@@ -274,7 +274,7 @@ export function describeFinding(
 
     return {
       title: `Cross-VLAN Leak: PVID ${v0} (${vlan0?.name || `VLAN ${v0}`}) ⇄ PVID ${v1} (${vlan1?.name || `VLAN ${v1}`})`,
-      shortLabel: `LEAK · PVID ${v0} → ${v1}`,
+      shortLabel: `LEAK · PVID ${v0} ⇄ ${v1}`,
       consequence: zoneNote,
       affected,
       remediation: `Configure the same native PVID on both ${portA} and ${portB}, and tag VLANs [${f.vlans.join(', ')}] symmetrically on both ends.`,

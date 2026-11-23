@@ -352,6 +352,28 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		if f.Findings[0].Kind != FindingLeak || f.Findings[0].Link != "bond" || !slices.Equal(f.Findings[0].VLANs, []int{1, 20}) {
 			t.Errorf("findings = %+v", f.Findings)
 		}
+		if h := hop(t, vlan(t, f, 1), "e1"); h.State != HopLeak {
+			t.Errorf("VLAN 1 hop on split-PVID LAG = %+v, want leak", h)
+		}
+		if h := hop(t, vlan(t, f, 20), "e1"); h.State != HopLeak {
+			t.Errorf("VLAN 20 hop on split-PVID LAG = %+v, want leak", h)
+		}
+
+		// Peer with a third PVID (30) facing the split-PVID LAG [1, 20] emits cross-end leak findings too.
+		state.Links = append(state.Links, model.Link{DeviceID: "fw", IfName: "p0", PVID: ip(30), TaggedVLANs: []int{20}})
+		f = Analyze(state, g)
+		if h := hop(t, vlan(t, f, 30), "e1"); h.State != HopLeak {
+			t.Errorf("VLAN 30 hop facing split-PVID LAG = %+v, want leak", h)
+		}
+		var leaks []string
+		for _, x := range f.Findings {
+			if x.Kind == FindingLeak && x.EdgeID == "e1" {
+				leaks = append(leaks, fmt.Sprint(x.VLANs))
+			}
+		}
+		if want := []string{"[1 20]", "[30 1]", "[30 20]"}; !slices.Equal(leaks, want) {
+			t.Errorf("split-PVID LAG leaks = %v, want %v", leaks, want)
+		}
 	})
 
 	t.Run("a ring does not turn an unpruned trunk into a dead end", func(t *testing.T) {
@@ -533,6 +555,36 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		b, err := json.Marshal(Analyze(chain([]model.Link{{DeviceID: "a", IfName: "down", PVID: ip(70)}, {DeviceID: "b", IfName: "up", PVID: ip(70)}}, nil)))
 		if err != nil || bytes.Contains(b, []byte("null")) {
 			t.Errorf("JSON = %s, err = %v", b, err)
+		}
+	})
+
+	t.Run("access ports, SSIDs, and SSID fallback name are sorted deterministically", func(t *testing.T) {
+		state, g := chain([]model.Link{
+			{DeviceID: "b", IfName: "p9", PVID: ip(55)},
+			{DeviceID: "a", IfName: "p2", PVID: ip(55)},
+			{DeviceID: "a", IfName: "p1", PVID: ip(55)},
+		}, nil)
+		state.Radios = []model.WirelessRadio{
+			{DeviceID: "b", Name: "radio1", SSIDs: []model.Ssid{{Name: "Zulu", VLANID: ip(55)}}},
+			{DeviceID: "a", Name: "radio0", SSIDs: []model.Ssid{{Name: "Alpha", VLANID: ip(55)}}},
+		}
+		v := vlan(t, Analyze(state, g), 55)
+		if v.Name != "Alpha" {
+			t.Errorf("fallback VLAN name = %q, want Alpha", v.Name)
+		}
+		var apKeys []string
+		for _, ap := range v.AccessPorts {
+			apKeys = append(apKeys, ap.DeviceID+":"+ap.Link)
+		}
+		if want := []string{"a:p1", "a:p2", "b:p9"}; !slices.Equal(apKeys, want) {
+			t.Errorf("access ports = %v, want %v", apKeys, want)
+		}
+		var ssidKeys []string
+		for _, s := range v.SSIDs {
+			ssidKeys = append(ssidKeys, s.DeviceID+":"+s.Radio+":"+s.Name)
+		}
+		if want := []string{"a:radio0:Alpha", "b:radio1:Zulu"}; !slices.Equal(ssidKeys, want) {
+			t.Errorf("SSIDs = %v, want %v", ssidKeys, want)
 		}
 	})
 

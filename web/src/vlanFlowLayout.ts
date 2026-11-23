@@ -143,12 +143,14 @@ interface AllVlansEndpointCard extends Rect {
 interface AllVlansEdgeBundle {
   edgeId: string;
   fromDeviceId: string;
+  toDeviceId: string;
   linkKind: string;
   sameColumn: boolean;
   x1: number;
   y1: number;
   x2: number;
   y2: number;
+  maxSpread: number;
   lanes: { vlanId: number; state: HopState; fromMode: VLANMode; toMode: VLANMode; finding?: VLANFlowFinding }[];
   findings: VLANFlowFinding[];
 }
@@ -921,7 +923,7 @@ export function computeAllVlansLayout(
         x: col.x,
         y: 0,
         width: col.width,
-        height: Math.max(106, 68 + Math.min(vIds.length, 6) * 14),
+        height: Math.max(106, 68 + Math.min(vIds.length, 10) * 12),
       };
     },
   );
@@ -952,9 +954,15 @@ export function computeAllVlansLayout(
   const segmentLinks: AllVlansSegmentLink[] = [];
   const segLinksByDev = new Map<string, AllVlansSegmentLink[]>();
   for (const vc of vlanCards) {
+    const l2Anchor = vc.vlan.gateways.length === 0
+      ? vc.vlan.devices
+          .map((id) => deviceCardsById.get(id))
+          .filter((dc): dc is AllVlansDeviceCard => dc != null)
+          .sort((a, b) => a.columnIndex - b.columnIndex || a.y - b.y)[0]?.deviceId
+      : undefined;
     const targets = vc.vlan.gateways.length > 0
       ? Array.from(new Set(vc.vlan.gateways.map((g) => g.device_id)))
-      : vc.vlan.devices.slice(0, 1);
+      : l2Anchor ? [l2Anchor] : [];
     for (const devId of targets) {
       const dc = deviceCardsById.get(devId);
       if (!dc) continue;
@@ -990,12 +998,14 @@ export function computeAllVlansLayout(
         bundle = {
           edgeId: h.edge_id,
           fromDeviceId: leftCard.deviceId,
+          toDeviceId: rightCard.deviceId,
           linkKind: h.kind,
           sameColumn: sameCol,
           x1,
           y1: leftCard.y + leftCard.height / 2,
           x2,
           y2: rightCard.y + rightCard.height / 2,
+          maxSpread: 64,
           lanes: [],
           findings: flow.findings.filter((f) => f.edge_id === h.edge_id),
         };
@@ -1020,6 +1030,15 @@ export function computeAllVlansLayout(
     bundles.sort((a, b) => a.y2 - b.y2);
     const span = Math.max(0, dc.height - 62);
     bundles.forEach((b, i) => (b.y1 = railY(dc.y + 44, span, i, bundles.length)));
+  }
+  const halfRoom = (dc: AllVlansDeviceCard, y: number) =>
+    Math.max(0, Math.min(y - dc.y, dc.y + dc.height - y) - 10);
+  for (const b of edgeBundles) {
+    const cFrom = deviceCardsById.get(b.fromDeviceId);
+    const cTo = deviceCardsById.get(b.toDeviceId);
+    if (cFrom && cTo) {
+      b.maxSpread = Math.min(halfRoom(cFrom, b.y1), halfRoom(cTo, b.y2)) * 2;
+    }
   }
 
   const endpointLinks: AllVlansEndpointLink[] = [];
