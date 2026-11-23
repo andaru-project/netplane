@@ -126,6 +126,7 @@ export function TopologyScreen({ graph, state, flow, devicesById, vlanColors }: 
               graph={graph}
               state={state}
               flow={flow}
+              devicesById={devicesById}
               vlanOverlay={overlayVid}
               showClients={showClients}
               showEvidence={showEvidence}

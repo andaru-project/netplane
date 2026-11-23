@@ -102,7 +102,7 @@ describe('computeSingleVlanLayout', () => {
     expect(meshRibbon?.toMode).toBe('unknown');
 
     const apHallChips = byDev.get('ap-hallway')!.rightPorts;
-    expect(apHallChips.some((c) => c.hopEdgeId === 'e4' && c.mode === 'unknown' && !c.isDeadEndMissing)).toBe(true);
+    expect(apHallChips.some((c) => c.hopEdgeId === 'e4' && c.mode === 'unknown' && c.state === 'unverified')).toBe(true);
   });
 
   it('adds foreign zone card and leaked endpoints card when a leak finding involves the VLAN', () => {

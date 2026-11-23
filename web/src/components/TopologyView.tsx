@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Text, useComputedColorScheme } from '@mantine/core';
-import { type KeyboardEvent, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   type Device,
   formatSpeed,
@@ -16,6 +16,8 @@ import {
   findWirelessSignal,
   getSfpAlerts,
   isEdgeStpBlocked,
+  onActivate,
+  svgPalette,
 } from '../vlanUtils';
 import { RoleSvgIcon } from './Icons';
 
@@ -28,6 +30,7 @@ interface Props {
   graph: TopologyGraph | null;
   state: NetworkState | null;
   flow: VLANFlow | null;
+  devicesById: Map<string, Device>;
   vlanOverlay: number | null;
   showClients: boolean;
   showEvidence: boolean;
@@ -39,6 +42,7 @@ export function TopologyView({
   graph,
   state,
   flow,
+  devicesById,
   vlanOverlay,
   showClients,
   showEvidence,
@@ -47,11 +51,6 @@ export function TopologyView({
 }: Props) {
   const isDark = useComputedColorScheme('light') === 'dark';
   const [focusedId, setFocusedId] = useState<string | null>(null);
-
-  const devicesById = useMemo(
-    () => new Map<string, Device>((state?.devices ?? []).map((d) => [d.id, d])),
-    [state],
-  );
 
   const overlayHopByEdge = useMemo(() => {
     const map = new Map<string, VLANFlowHop>();
@@ -156,7 +155,7 @@ export function TopologyView({
       showClients ? Math.min(clientGroups.length, 4) : 1,
       1,
     );
-    const svgW = Math.max(760, maxCols * nodeW + (maxCols - 1) * gapX + padX * 2);
+    let svgW = Math.max(760, maxCols * nodeW + (maxCols - 1) * gapX + padX * 2);
     const devRowsH = levels.length * nodeH + Math.max(0, levels.length - 1) * gapY;
     const clientRowY = padY + devRowsH + 68;
     const svgH = padY * 2 + devRowsH + (showClients && clientGroups.length > 0 ? 124 : 10);
@@ -177,23 +176,11 @@ export function TopologyView({
     const clientPos = new Map<string, { x: number; y: number }>();
     if (clientGroups.length > 0) {
       const cRowW = clientGroups.length * nodeW + Math.max(0, clientGroups.length - 1) * 24;
-      const totalW = Math.max(svgW, cRowW + padX * 2);
-      const startX = (totalW - cRowW) / 2;
+      svgW = Math.max(svgW, cRowW + padX * 2);
+      const startX = (svgW - cRowW) / 2;
       clientGroups.forEach((cg, idx) => {
         clientPos.set(cg.devId, { x: startX + idx * (nodeW + 24), y: clientRowY });
       });
-      return {
-        deviceNodes,
-        infraEdges,
-        layer,
-        pos,
-        clientGroups,
-        clientPos,
-        nodeW,
-        nodeH,
-        svgW: totalW,
-        svgH,
-      };
     }
 
     return {
@@ -220,20 +207,7 @@ export function TopologyView({
     );
   }
 
-  const C = {
-    surface: isDark ? '#1a1b1e' : '#ffffff',
-    subtle: isDark ? '#25262b' : '#f1f3f5',
-    border: isDark ? '#373a40' : '#ced4da',
-    text: isDark ? '#e9ecef' : '#17212c',
-    dim: isDark ? '#909296' : '#526171',
-    teal: isDark ? '#20c997' : '#0ca678',
-    blue: isDark ? '#4dabf7' : '#1971c2',
-    violet: isDark ? '#9775fa' : '#7048e8',
-    amber: isDark ? '#fab005' : '#e67700',
-    red: isDark ? '#ff6b6b' : '#c92a2a',
-    green: isDark ? '#40c057' : '#2b8a3e',
-    gray: isDark ? '#5c5f66' : '#adb5bd',
-  };
+  const C = svgPalette(isDark);
 
   // Group parallel edges between the same pair so curves fan out cleanly without colliding.
   const pairGroups = new Map<string, TopologyEdge[]>();
@@ -383,12 +357,7 @@ export function TopologyView({
             role="button"
             tabIndex={0}
             aria-label={`Inspect link ${mainCap}`}
-            onKeyDown={(ev: KeyboardEvent) => {
-              if (ev.key === 'Enter' || ev.key === ' ') {
-                ev.preventDefault();
-                onSelect({ type: 'edge', id: e.id });
-              }
-            }}
+            onKeyDown={onActivate(() => onSelect({ type: 'edge', id: e.id }))}
           >
             <path d={pathD} fill="none" stroke="transparent" strokeWidth={16} />
             {isSelected && (
@@ -506,12 +475,7 @@ export function TopologyView({
             tabIndex={0}
             aria-label={`Select ${n.label}`}
             onClick={() => onSelect({ type: 'device', id: n.id })}
-            onKeyDown={(ev: KeyboardEvent) => {
-              if (ev.key === 'Enter' || ev.key === ' ') {
-                ev.preventDefault();
-                onSelect({ type: 'device', id: n.id });
-              }
-            }}
+            onKeyDown={onActivate(() => onSelect({ type: 'device', id: n.id }))}
             onFocus={() => setFocusedId(n.id)}
             onBlur={() => setFocusedId(null)}
           >

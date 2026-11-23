@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import type { KeyboardEvent } from 'react';
 import type {
   Client,
   Device,
@@ -12,6 +13,55 @@ import type {
   VLANFlowVLAN,
   VLANMode,
 } from './api';
+
+export interface SvgPalette {
+  isDark: boolean;
+  canvas: string;
+  surface: string;
+  subtle: string;
+  border: string;
+  borderSoft: string;
+  text: string;
+  dim: string;
+  teal: string;
+  blue: string;
+  violet: string;
+  green: string;
+  amber: string;
+  amberInk: string;
+  red: string;
+  gray: string;
+}
+
+export function svgPalette(isDark: boolean): SvgPalette {
+  return {
+    isDark,
+    canvas: isDark ? '#121417' : '#fbfcfd',
+    surface: isDark ? '#1a1b1e' : '#ffffff',
+    subtle: isDark ? '#25262b' : '#f1f3f5',
+    border: isDark ? '#373a40' : '#ced4da',
+    borderSoft: isDark ? '#2c2e33' : '#e9ecef',
+    text: isDark ? '#e9ecef' : '#17212c',
+    dim: isDark ? '#909296' : '#526171',
+    teal: isDark ? '#20c997' : '#0ca678',
+    blue: isDark ? '#4dabf7' : '#1971c2',
+    violet: isDark ? '#9775fa' : '#7048e8',
+    green: isDark ? '#40c057' : '#2b8a3e',
+    amber: isDark ? '#fab005' : '#e67700',
+    amberInk: '#17212c',
+    red: isDark ? '#ff6b6b' : '#c92a2a',
+    gray: isDark ? '#787b82' : '#868e96',
+  };
+}
+
+export function onActivate(fn: () => void) {
+  return (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      fn();
+    }
+  };
+}
 
 export interface ColorPair {
   light: string;
@@ -56,9 +106,25 @@ export function deviceName(devicesById: Map<string, Device>, id: string): string
   return devicesById.get(id)?.name || id;
 }
 
+export function portLabel(devicesById: Map<string, Device>, deviceId: string, link?: string | null): string {
+  const name = deviceName(devicesById, deviceId);
+  return link ? `${name}:${link}` : name;
+}
+
 export function vlanLabel(vlansById: Map<number, VLANFlowVLAN>, vid: number): string {
   const v = vlansById.get(vid);
   return v?.name ? `${vid} · ${v.name}` : `VLAN ${vid}`;
+}
+
+export type VlanHealth = 'leak' | 'dead_end' | 'mismatch' | 'unverified' | 'ok';
+
+export function vlanHealth(vlan: VLANFlowVLAN, findings: VLANFlowFinding[]): VlanHealth {
+  const vf = findings.filter((f) => f.vlans.includes(vlan.id));
+  if (vf.some((f) => f.kind === 'leak')) return 'leak';
+  if (vf.some((f) => f.kind === 'dead_end')) return 'dead_end';
+  if (vf.some((f) => f.kind === 'tag_mismatch')) return 'mismatch';
+  if (vlan.hops.some((h) => h.state === 'unverified')) return 'unverified';
+  return 'ok';
 }
 
 export function modeShort(mode: VLANMode): string {
@@ -74,7 +140,7 @@ export function modeShort(mode: VLANMode): string {
   }
 }
 
-export function portMatchesFinding(
+function portMatchesFinding(
   f: VLANFlowFinding,
   deviceId: string,
   ifName: string,
@@ -174,10 +240,8 @@ export function describeFinding(
   devicesById: Map<string, Device>,
 ): FindingPresentation {
   const vlansById = new Map(flow.vlans.map((v) => [v.id, v]));
-  const devA = deviceName(devicesById, f.device_id);
-  const devB = deviceName(devicesById, f.peer_id);
-  const portA = f.link ? `${devA}:${f.link}` : devA;
-  const portB = f.peer_link ? `${devB}:${f.peer_link}` : devB;
+  const portA = portLabel(devicesById, f.device_id, f.link);
+  const portB = portLabel(devicesById, f.peer_id, f.peer_link);
 
   if (f.kind === 'leak') {
     const v0 = f.vlans[0];
