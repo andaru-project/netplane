@@ -87,6 +87,8 @@ interface ShellProps {
   events: NetplaneEvent[];
   sseConnected: boolean;
   errMsg: string | null;
+  /** Targets the last "Poll all" could not poll, reported apart from refresh errors. */
+  pollErr?: string | null;
   pollBusy: boolean;
   refreshNonce: number;
   onPollAll: () => void;
@@ -102,6 +104,7 @@ export function Shell({
   events,
   sseConnected,
   errMsg,
+  pollErr,
   pollBusy,
   refreshNonce,
   onPollAll,
@@ -199,7 +202,7 @@ export function Shell({
             <Button
               size="xs"
               variant="default"
-              className="header-action np-hide-xs"
+              className="header-action"
               loading={pollBusy}
               onClick={onPollAll}
               title={enabledTargets.length > 0 ? 'Poll all enabled targets now' : 'Refresh network state'}
@@ -261,6 +264,11 @@ export function Shell({
           {errMsg && (
             <Alert color="red" role="alert" title="API error">
               {errMsg}
+            </Alert>
+          )}
+          {pollErr && (
+            <Alert color="yellow" role="alert" title="Poll failed">
+              {pollErr}
             </Alert>
           )}
           <Routes>

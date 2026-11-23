@@ -41,6 +41,7 @@ export function App() {
   const [events, setEvents] = useState<NetplaneEvent[]>([]);
   const [sseConnected, setSseConnected] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [pollErr, setPollErr] = useState<string | null>(null);
   const [pollBusy, setPollBusy] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
@@ -86,8 +87,9 @@ export function App() {
   useEffect(() => {
     const onAuth = () => {
       sseFailures.current = 0;
+      // SSE only: in-flight requests retry with the new cookie themselves, and a fresh refresh
+      // here would hit 401 again before the server has accepted the token.
       setSseEpoch((n) => n + 1);
-      void refreshRef.current();
     };
     window.addEventListener(AUTH_EVENT, onAuth);
     return () => window.removeEventListener(AUTH_EVENT, onAuth);
@@ -132,10 +134,11 @@ export function App() {
     setPollBusy(true);
     try {
       const enabled = targets.filter((t) => t.enabled);
-      if (enabled.length > 0) {
-        await Promise.allSettled(enabled.map((t) => api.pollTarget(t.id)));
-      }
+      const results = await Promise.allSettled(enabled.map((t) => api.pollTarget(t.id)));
+      const failed = enabled.filter((_, i) => results[i].status === 'rejected').map((t) => t.name || t.id);
+      // Refresh anyway so targets that did poll show their new state.
       await refreshAll();
+      setPollErr(failed.length > 0 ? `Poll failed for: ${failed.join(', ')}` : null);
     } catch (e) {
       setErrMsg(e instanceof Error ? e.message : String(e));
     } finally {
@@ -158,6 +161,7 @@ export function App() {
       events={events}
       sseConnected={sseConnected}
       errMsg={errMsg}
+      pollErr={pollErr}
       pollBusy={pollBusy}
       refreshNonce={refreshNonce}
       onPollAll={() => void handlePollAll()}
