@@ -59,8 +59,9 @@ cmd/
 - `GET /api/v1/vlans/flow` → `vlanflow.Flow`: every VLAN traced across the topology's infrastructure links, plus `findings` (`leak` for a PVID mismatch, `dead_end`, `tag_mismatch`).
   - Each hop gives both ends' mode (`tagged`/`untagged`/`none`/`unknown`) and VLAN configuration (`*_pvid`, `*_tagged`), and a state: `carried`, `dead_end`, `unused`, `mismatch`, `leak` or `unverified`.
   - A hop missing the VLAN on an end whose whole side of the network has no use for it is `unused` (an unpruned trunk, such as VLAN 1 on most trunks) and raises no finding. A transit switch missing a VLAN used beyond it is a `dead_end`.
-  - Wireless uplinks report no VLAN membership: they are `unverified` and still pass the VLAN, as does any link with an unknown end, unless the other end is known not to carry it. Unverified links appear only when the VLAN is used on both sides.
-  - Gateways are the VLAN's L3 segments. An untagged routed segment takes the VLAN of its peer port's PVID.
+  - Wireless uplinks report no VLAN membership: they are `unverified` and still pass the VLAN, as does any link with an unknown end. Unverified links appear only when the VLAN is used on both sides.
+  - Gateways are the segments that route the VLAN: enabled, on a device with gateway capability or a router/gateway/firewall role, and not only a DHCP/SLAAC/PPPoE client. An untagged routed segment takes the VLAN of its peer port's PVID.
+  - A link with one end known not to carry a VLAN used on both of its sides is a `dead_end`, even when the other end reports no VLAN data.
   - Each VLAN also lists its reached devices, access ports and SSIDs (each with `reachable`).
 - `GET /api/v1/clients?online=true&q=<query>` → `{"items":[Client...]}`
 - `GET /api/v1/targets` → `{"items":[TargetConfig...]}` (strictly redacted; zero secrets)

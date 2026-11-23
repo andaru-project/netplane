@@ -56,6 +56,8 @@ export function svgPalette(isDark: boolean): SvgPalette {
 
 export function onActivate(fn: () => void) {
   return (e: KeyboardEvent) => {
+    // Keys pressed on a nested link or button belong to that control.
+    if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       fn();

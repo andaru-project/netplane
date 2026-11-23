@@ -18,7 +18,7 @@ func ip(v int) *int { return &v }
 func fixture() (*store.NetworkState, topology.Graph) {
 	state := &store.NetworkState{}
 	state.Devices = []model.Device{
-		{ID: "fw", Name: "fw-core"}, {ID: "core", Name: "sw-core"}, {ID: "office", Name: "sw-office"},
+		{ID: "fw", Name: "fw-core", Role: model.RoleFirewall}, {ID: "core", Name: "sw-core"}, {ID: "office", Name: "sw-office"},
 		{ID: "poe", Name: "sw-poe"}, {ID: "ap", Name: "ap-mesh"},
 	}
 	state.LagGroups = []model.LagGroup{
@@ -26,10 +26,10 @@ func fixture() (*store.NetworkState, topology.Graph) {
 		{DeviceID: "core", ID: "lag1", Name: "lag1", MemberLinks: []string{"sfp9", "sfp10"}},
 	}
 	state.Segments = []model.Segment{
-		{DeviceID: "fw", ID: "lan", Name: "LAN", ParentLink: "bond0", VLANID: ip(10), ZoneID: "z-lan", Addresses: []model.IPAddress{{Address: "10.10.10.1", PrefixLength: 24}}},
-		{DeviceID: "fw", ID: "iot", Name: "IoT", ParentLink: "bond0", VLANID: ip(20), Addresses: []model.IPAddress{{Address: "10.10.20.1", PrefixLength: 24}}},
-		{DeviceID: "fw", ID: "guest", Name: "Guest", ParentLink: "bond0", VLANID: ip(30), Addresses: []model.IPAddress{{Address: "10.10.30.1", PrefixLength: 24}}},
-		{DeviceID: "fw", ID: "lab", Name: "Lab", ParentLink: "bond0", VLANID: ip(40), Addresses: []model.IPAddress{{Address: "10.10.40.1", PrefixLength: 24}}},
+		{DeviceID: "fw", AdminUp: true, ID: "lan", Name: "LAN", ParentLink: "bond0", VLANID: ip(10), ZoneID: "z-lan", Addresses: []model.IPAddress{{Address: "10.10.10.1", PrefixLength: 24}}},
+		{DeviceID: "fw", AdminUp: true, ID: "iot", Name: "IoT", ParentLink: "bond0", VLANID: ip(20), Addresses: []model.IPAddress{{Address: "10.10.20.1", PrefixLength: 24}}},
+		{DeviceID: "fw", AdminUp: true, ID: "guest", Name: "Guest", ParentLink: "bond0", VLANID: ip(30), Addresses: []model.IPAddress{{Address: "10.10.30.1", PrefixLength: 24}}},
+		{DeviceID: "fw", AdminUp: true, ID: "lab", Name: "Lab", ParentLink: "bond0", VLANID: ip(40), Addresses: []model.IPAddress{{Address: "10.10.40.1", PrefixLength: 24}}},
 	}
 	state.Zones = []model.Zone{{DeviceID: "fw", ID: "z-lan", Name: "lan"}}
 	state.Links = []model.Link{
@@ -170,7 +170,8 @@ func TestHopState(t *testing.T) {
 		{ModeTagged, ModeNone, HopDeadEnd},
 		{ModeNone, ModeUntagged, HopDeadEnd},
 		{ModeTagged, ModeUntagged, HopMismatch},
-		{ModeUnknown, ModeNone, HopUnverified},
+		{ModeUnknown, ModeNone, HopDeadEnd},
+		{ModeUnknown, ModeUnknown, HopUnverified},
 		{ModeTagged, ModeUnknown, HopUnverified},
 	} {
 		if got := hopState(c.from, c.to); got != c.want {
@@ -191,7 +192,11 @@ func chain(links []model.Link, segs []model.Segment) (*store.NetworkState, topol
 	state := &store.NetworkState{Links: links, Segments: segs}
 	g := topology.Graph{}
 	for _, d := range []string{"fw", "a", "b", "c"} {
-		state.Devices = append(state.Devices, model.Device{ID: d, Name: d})
+		dev := model.Device{ID: d, Name: d}
+		if d == "fw" {
+			dev.Role = model.RoleFirewall
+		}
+		state.Devices = append(state.Devices, dev)
 		g.Nodes = append(g.Nodes, topology.Node{ID: d, Kind: topology.NodeDevice})
 	}
 	g.Edges = []topology.Edge{
@@ -203,7 +208,7 @@ func chain(links []model.Link, segs []model.Segment) (*store.NetworkState, topol
 }
 
 func TestAnalyzeEdgeCases(t *testing.T) {
-	seg := []model.Segment{{DeviceID: "fw", ID: "s", Name: "S", ParentLink: "p0", VLANID: ip(20)}} // no address: still a gateway
+	seg := []model.Segment{{DeviceID: "fw", AdminUp: true, ID: "s", Name: "S", ParentLink: "p0", VLANID: ip(20)}} // no address: still a gateway
 
 	t.Run("unknown end facing a known none blocks reach", func(t *testing.T) {
 		// a reports no VLAN data on any port (unknown); b's uplink excludes VLAN 20.
@@ -213,11 +218,15 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 			{DeviceID: "c", IfName: "up", PVID: ip(1), TaggedVLANs: []int{20}},
 		}, seg))
 		v := vlan(t, f, 20)
-		if h := hop(t, v, "e2"); h.FromMode != ModeUnknown || h.ToMode != ModeNone || h.State != HopUnverified {
+		if h := hop(t, v, "e2"); h.FromMode != ModeUnknown || h.ToMode != ModeNone || h.State != HopDeadEnd {
 			t.Errorf("e2 = %+v", h)
 		}
 		if !slices.Equal(v.Reached, []string{"a", "fw"}) {
 			t.Errorf("reached = %v: a known none end must block the VLAN", v.Reached)
+		}
+		if len(f.Findings) != 1 || !slices.Equal(f.Findings[0].Stranded, []string{"b", "c"}) ||
+			f.Findings[0].Message != "VLAN 20 is missing on b:up, and a:down reports no VLAN membership" {
+			t.Errorf("findings = %+v", f.Findings)
 		}
 	})
 
@@ -245,7 +254,7 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 			{DeviceID: "a", IfName: "down", PVID: ip(1), TaggedVLANs: []int{10}},
 			{DeviceID: "b", IfName: "up", PVID: ip(1), TaggedVLANs: []int{10, 20}},
 			{DeviceID: "b", IfName: "p5", PVID: ip(20)},
-		}, []model.Segment{{DeviceID: "fw", ID: "s", ParentLink: "p0", VLANID: ip(20)}}))
+		}, []model.Segment{{DeviceID: "fw", AdminUp: true, ID: "s", ParentLink: "p0", VLANID: ip(20)}}))
 		v := vlan(t, f, 20)
 		if h := hop(t, v, "e1"); h.State != HopDeadEnd {
 			t.Errorf("e1 = %+v", h)
@@ -268,8 +277,8 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		f := Analyze(chain([]model.Link{
 			{DeviceID: "a", IfName: "up", PVID: ip(1), TaggedVLANs: []int{20}},
 		}, []model.Segment{
-			{DeviceID: "fw", ID: "lan", Name: "LAN", ParentLink: "p0"},
-			{DeviceID: "fw", ID: "iot", Name: "IoT", ParentLink: "p0", VLANID: ip(20)},
+			{DeviceID: "fw", AdminUp: true, ID: "lan", Name: "LAN", ParentLink: "p0"},
+			{DeviceID: "fw", AdminUp: true, ID: "iot", Name: "IoT", ParentLink: "p0", VLANID: ip(20)},
 		}))
 		v1 := vlan(t, f, 1)
 		if v1.Name != "LAN" || len(v1.Gateways) != 1 || !slices.Equal(v1.Reached, []string{"a", "fw"}) {
@@ -286,7 +295,7 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 	t.Run("a wireless uplink stays unverified when the parent AP only bridges the VLAN", func(t *testing.T) {
 		state, g := chain([]model.Link{
 			{DeviceID: "a", IfName: "up", PVID: ip(1), TaggedVLANs: []int{50}},
-		}, []model.Segment{{DeviceID: "fw", ID: "s", ParentLink: "p0", VLANID: ip(50)}})
+		}, []model.Segment{{DeviceID: "fw", AdminUp: true, ID: "s", ParentLink: "p0", VLANID: ip(50)}})
 		state.Radios = []model.WirelessRadio{{DeviceID: "c", Name: "r", SSIDs: []model.Ssid{{Name: "Mesh", VLANID: ip(50)}}}}
 		g.Edges = []topology.Edge{g.Edges[0], {ID: "w", FromID: "a", ToID: "c", Kind: topology.EdgeWirelessUplink}}
 		v := vlan(t, Analyze(state, g), 50)
@@ -305,8 +314,8 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 			{DeviceID: "a", IfName: "down", PVID: ip(20), TaggedVLANs: []int{20}},
 			{DeviceID: "b", IfName: "up", PVID: ip(20)},
 		}, []model.Segment{
-			{DeviceID: "fw", ID: "s20", ParentLink: "p0", VLANID: ip(20)},
-			{DeviceID: "fw", ID: "s30", ParentLink: "p0", VLANID: ip(30)},
+			{DeviceID: "fw", AdminUp: true, ID: "s20", ParentLink: "p0", VLANID: ip(20)},
+			{DeviceID: "fw", AdminUp: true, ID: "s30", ParentLink: "p0", VLANID: ip(30)},
 		})
 		state.LagGroups = []model.LagGroup{{DeviceID: "a", ID: "bond", Name: "bond", MemberLinks: []string{"m1", "m2"}}}
 		g.Edges[0].ToLink = "bond"
@@ -321,6 +330,34 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		// a:down tags VLAN 20 (its PVID too) while b:up carries it untagged: same PVID, so no leak.
 		if !slices.Equal(kinds, []FindingKind{FindingTagMismatch}) {
 			t.Errorf("findings = %+v", f.Findings)
+		}
+	})
+
+	t.Run("a parallel link does not turn an unpruned trunk into a dead end", func(t *testing.T) {
+		state, g := chain([]model.Link{
+			{DeviceID: "a", IfName: "down", PVID: ip(1), TaggedVLANs: []int{20}},
+			{DeviceID: "a", IfName: "down2", PVID: ip(1)},
+			{DeviceID: "b", IfName: "up", PVID: ip(1)},
+			{DeviceID: "b", IfName: "up2", PVID: ip(1)},
+		}, nil)
+		g.Edges = append(g.Edges[:2], topology.Edge{ID: "e2b", FromID: "a", FromLink: "down2", ToID: "b", ToLink: "up2", Kind: topology.EdgeWired})
+		if h := hop(t, vlan(t, Analyze(state, g), 20), "e2"); h.State != HopUnused {
+			t.Errorf("e2 = %+v", h)
+		}
+	})
+
+	t.Run("only enabled, non-client segments on routing devices are gateways", func(t *testing.T) {
+		addr := func(src string) []model.IPAddress { return []model.IPAddress{{Address: "192.0.2.1", PrefixLength: 24, Source: src}} }
+		f := Analyze(chain(nil, []model.Segment{
+			{DeviceID: "fw", AdminUp: true, ID: "lan", ParentLink: "p0", VLANID: ip(10), Addresses: addr("static")},
+			{DeviceID: "fw", AdminUp: false, ID: "off", ParentLink: "p0", VLANID: ip(20)},
+			{DeviceID: "fw", AdminUp: true, ID: "wan", ParentLink: "p0", VLANID: ip(30), Addresses: addr("dhcp")},
+			{DeviceID: "a", AdminUp: true, ID: "mgmt", ParentLink: "up", VLANID: ip(40), Addresses: addr("static")},
+		}))
+		for id, want := range map[int]int{10: 1, 20: 0, 30: 0, 40: 0} {
+			if got := len(vlan(t, f, id).Gateways); got != want {
+				t.Errorf("VLAN %d gateways = %d, want %d", id, got, want)
+			}
 		}
 	})
 

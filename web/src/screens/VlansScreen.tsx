@@ -48,7 +48,11 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
   const findings = flow?.findings ?? [];
   const links = state?.links ?? [];
   const devices = state?.devices ?? [];
-  const nonVlanSegments = (state?.segments ?? []).filter((s) => s.vlan_id == null);
+  // Untagged segments the API resolved to a VLAN (as its gateway) are listed with that VLAN instead.
+  const vlanGateways = new Set(vlans.flatMap((v) => v.gateways.map((g) => `${g.device_id}\u0000${g.segment_id}`)));
+  const nonVlanSegments = (state?.segments ?? []).filter(
+    (s) => s.vlan_id == null && !vlanGateways.has(`${s.device_id}\u0000${s.id}`),
+  );
 
   // Build lookup of unreachable access ports reported by /api/v1/vlans/flow.
   const unreachableAccess = useMemo(() => {

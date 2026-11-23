@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, apiUrl } from './api';
-import { apiBasePath, devicePath, getRouterBasename } from './routing';
+import { apiBasePath, devicePath, getRouterBasename, pinAppRoot } from './routing';
 import { Shell } from './Shell';
 
 const testTheme = createTheme({ primaryColor: 'teal', defaultRadius: 'sm' });
@@ -160,5 +160,14 @@ describe('Ingress base href routing', () => {
       expect(screen.getByRole('heading', { name: 'Rack Switch' })).toBeInTheDocument();
     });
     expect(spy).toHaveBeenCalledWith(rawId);
+  });
+
+  // Runs last: the pinned root is module state for the rest of the file.
+  it('keeps API paths on the root pinned at startup after the route changes', () => {
+    setBaseHref('./');
+    window.history.replaceState({}, '', '/netplane/');
+    expect(pinAppRoot()).toBe('/netplane');
+    window.history.pushState({}, '', '/netplane/devices/sw-core-rack');
+    expect(apiUrl('/state')).toBe('/netplane/api/v1/state');
   });
 });

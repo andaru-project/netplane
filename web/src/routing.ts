@@ -18,8 +18,19 @@ export function getRouterBasename(doc: Pick<Document, 'baseURI'> = document): st
  * Returns the app's URL prefix with a trailing slash (`"/"` or `"/api/hassio_ingress/<token>/"`)
  * for API fetches, EventSource streams, and auth cookie scoping across nested routes.
  */
+let pinnedRoot: string | undefined;
+
+/**
+ * Reads the app root once, at startup, before the router navigates. The spec freezes a relative
+ * base URL, but an engine that re-resolved it after pushState would otherwise follow the route.
+ */
+export function pinAppRoot(doc: Pick<Document, 'baseURI'> = document): string {
+  pinnedRoot = getRouterBasename(doc);
+  return pinnedRoot;
+}
+
 export function apiBasePath(doc: Pick<Document, 'baseURI'> = document): string {
-  const base = getRouterBasename(doc);
+  const base = pinnedRoot ?? getRouterBasename(doc);
   return base === '/' ? '/' : `${base}/`;
 }
 
