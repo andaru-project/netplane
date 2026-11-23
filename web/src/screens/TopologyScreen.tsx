@@ -90,7 +90,7 @@ export function TopologyScreen({ graph, state, flow, devicesById, vlansById, vla
             onChange={(v) => setVlanOverlay(v ?? '')}
             data={(flow?.vlans ?? []).map((v) => ({
               value: String(v.id),
-              label: vlanLabel(vlansById, v.id),
+              label: vlanLabel(vlansById, v.id, true),
             }))}
           />
           <Switch

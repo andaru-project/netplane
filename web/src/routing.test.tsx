@@ -47,6 +47,12 @@ describe('Ingress base href routing', () => {
     expect(apiUrl('/devices')).toBe('/netplane/api/v1/devices');
   });
 
+  it('puts the app at the root when there is no <base> (the Vite dev server)', () => {
+    setBaseHref(null);
+    window.history.replaceState({}, '', '/devices/sw-1');
+    expect(getRouterBasename()).toBe('/');
+  });
+
   it('routes screens and prefixes every navigation link under an Ingress base href', () => {
     const prefix = '/api/hassio_ingress/ha_token_99';
     setBaseHref(`${prefix}/`);

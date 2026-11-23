@@ -6,7 +6,9 @@
  * otherwise a relative path (`./`, `../`, ...) that climbs from the current route back to the root,
  * so the app also works under a reverse-proxy sub-path.
  */
-export function getRouterBasename(doc: Pick<Document, 'baseURI'> = document): string {
+export function getRouterBasename(doc: Pick<Document, 'baseURI' | 'querySelector'> = document): string {
+  // Without a <base> (the Vite dev server), baseURI is the page URL itself: the app is at the root.
+  if (!doc.querySelector('base')) return '/';
   try {
     return new URL(doc.baseURI).pathname.replace(/\/+$/, '') || '/';
   } catch {
@@ -24,12 +26,12 @@ let pinnedRoot: string | undefined;
  * Reads the app root once, at startup, before the router navigates. The spec freezes a relative
  * base URL, but an engine that re-resolved it after pushState would otherwise follow the route.
  */
-export function pinAppRoot(doc: Pick<Document, 'baseURI'> = document): string {
+export function pinAppRoot(doc: Pick<Document, 'baseURI' | 'querySelector'> = document): string {
   pinnedRoot = getRouterBasename(doc);
   return pinnedRoot;
 }
 
-export function apiBasePath(doc: Pick<Document, 'baseURI'> = document): string {
+export function apiBasePath(doc: Pick<Document, 'baseURI' | 'querySelector'> = document): string {
   const base = pinnedRoot ?? getRouterBasename(doc);
   return base === '/' ? '/' : `${base}/`;
 }

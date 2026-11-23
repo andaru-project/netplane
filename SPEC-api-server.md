@@ -56,12 +56,11 @@ cmd/
 - `GET /api/v1/devices/{id}` → `DeviceDetail` (device + links, lag_groups, segments, zones, gateways, routes, vpns, firewall, radios, clients, recent_diagnostics)
 - `GET /api/v1/devices/{id}/links/{ifName}/samples?since=<RFC3339|duration>` → `{"items":[LinkSample...]}`
 - `GET /api/v1/topology` → `topology.Graph`
-- `GET /api/v1/vlans/flow` → `vlanflow.Flow`: every VLAN traced across the topology's infrastructure links, plus `findings` (`leak` for a PVID mismatch, `dead_end`, `tag_mismatch`).
-  - Each hop gives both ends' mode (`tagged`/`untagged`/`none`/`unknown`) and VLAN configuration (`*_pvid`, `*_tagged`), and a state: `carried`, `dead_end`, `unused`, `mismatch`, `leak` or `unverified`.
-  - A hop missing the VLAN on an end whose whole side of the network has no use for it is `unused` (an unpruned trunk, such as VLAN 1 on most trunks) and raises no finding. A transit switch missing a VLAN used beyond it is a `dead_end`.
+- `GET /api/v1/vlans/flow` → `vlanflow.Flow`: every VLAN traced across the topology's infrastructure links, plus `findings` (`leak` for a PVID mismatch, including LAG members with different PVIDs; `dead_end`; `tag_mismatch`).
+  - Each hop gives both ends' mode (`tagged`/`untagged`/`none`/`unknown`) and VLAN configuration (`*_pvid`, `*_tagged`), and a state: `carried`, `dead_end`, `mismatch`, `leak` or `unverified`. A LAG that reports no VLANs itself carries only what all of its members carry.
+  - A link missing the VLAN on one end is a `dead_end` when both of its sides use the VLAN and, for a routed VLAN, some user on either side reaches no gateway (`stranded`). Otherwise the link is left out: an unpruned trunk (such as VLAN 1 on most trunks) or a redundant link is not a break. One end known not to carry the VLAN is enough, even when the other end reports no VLAN data.
   - Wireless uplinks report no VLAN membership: they are `unverified` and still pass the VLAN, as does any link with an unknown end. Unverified links appear only when the VLAN is used on both sides.
   - Gateways are the segments that route the VLAN: enabled, on a device with gateway capability or a router/gateway/firewall role, and not only a DHCP/SLAAC/PPPoE client. An untagged routed segment takes the VLAN of its peer port's PVID.
-  - A link with one end known not to carry a VLAN used on both of its sides is a `dead_end`, even when the other end reports no VLAN data.
   - Each VLAN also lists its reached devices, access ports and SSIDs (each with `reachable`).
 - `GET /api/v1/clients?online=true&q=<query>` → `{"items":[Client...]}`
 - `GET /api/v1/targets` → `{"items":[TargetConfig...]}` (strictly redacted; zero secrets)

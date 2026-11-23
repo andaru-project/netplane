@@ -239,7 +239,7 @@ func TestAPIEndpointsAndIngressAndAuth(t *testing.T) {
 
 	// Outside Ingress, the base climbs from a nested route back to the app root; an encoded slash
 	// in a device ID is part of one path segment.
-	for path, want := range map[string]string{"/": "./", "/vlans/flow": "../", "/devices/a%2Fb": "../", "/devices/x/": "../../"} {
+	for path, want := range map[string]string{"/": "./", "/vlans/flow": "../", "/devices/a%2Fb": "../", "/devices/a%2fb|c": "../", "/devices/x/": "../../"} {
 		rec = httptest.NewRecorder()
 		srv.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 		if !strings.Contains(rec.Body.String(), `<base href="`+want+`">`) {

@@ -88,7 +88,7 @@ export function ClientsScreen({ clients, flow, devicesById, vlansById, vlanColor
               { value: 'all', label: 'All VLANs' },
               ...(flow?.vlans ?? []).map((v) => ({
                 value: String(v.id),
-                label: vlanLabel(vlansById, v.id),
+                label: vlanLabel(vlansById, v.id, true),
               })),
             ]}
           />

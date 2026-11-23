@@ -113,9 +113,11 @@ export function portLabel(devicesById: Map<string, Device>, deviceId: string, li
   return link ? `${name}:${link}` : name;
 }
 
-export function vlanLabel(vlansById: Map<number, VLANFlowVLAN>, vid: number): string {
+/** "10 · LAN" for chips; with long, "VLAN 10 · LAN" for headings and selectors. */
+export function vlanLabel(vlansById: Map<number, VLANFlowVLAN>, vid: number, long = false): string {
   const v = vlansById.get(vid);
-  return v?.name ? `${vid} · ${v.name}` : `VLAN ${vid}`;
+  if (!v?.name) return `VLAN ${vid}`;
+  return long ? `VLAN ${vid} · ${v.name}` : `${vid} · ${v.name}`;
 }
 
 export type VlanHealth = 'leak' | 'dead_end' | 'mismatch' | 'unverified' | 'ok';

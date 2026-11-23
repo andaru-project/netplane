@@ -71,6 +71,10 @@ func vlan(t *testing.T, f Flow, id int) VLAN {
 	return VLAN{}
 }
 
+func hasHop(v VLAN, edge string) bool {
+	return slices.ContainsFunc(v.Hops, func(h Hop) bool { return h.EdgeID == edge })
+}
+
 func hop(t *testing.T, v VLAN, edge string) Hop {
 	t.Helper()
 	for _, h := range v.Hops {
@@ -129,11 +133,11 @@ func TestAnalyze(t *testing.T) {
 	}
 
 	// Trunks carrying a VLAN toward a device that never uses it are unpruned, not broken: no finding.
-	if v1 := vlan(t, f, 1); len(v1.Gateways) != 0 || len(v1.Reached) != 0 || hop(t, v1, "e1").State != HopUnused {
+	if v1 := vlan(t, f, 1); len(v1.Gateways) != 0 || len(v1.Reached) != 0 || hasHop(v1, "e1") {
 		t.Errorf("VLAN 1 = %+v", v1)
 	}
-	if h := hop(t, vlan(t, f, 30), "e2"); h.FromMode != ModeTagged || h.ToMode != ModeNone || h.State != HopUnused {
-		t.Errorf("VLAN 30 on e2 = %+v", h)
+	if hasHop(vlan(t, f, 30), "e2") {
+		t.Errorf("VLAN 30 on e2: an unpruned trunk must be left out")
 	}
 
 	type key struct {
@@ -307,12 +311,12 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		}
 	})
 
-	t.Run("tag mismatch and LAG member union", func(t *testing.T) {
+	t.Run("tag mismatch, and LAG members that disagree", func(t *testing.T) {
 		state, g := chain([]model.Link{
-			{DeviceID: "a", IfName: "m1", PVID: ip(1), TaggedVLANs: []int{20}},
-			{DeviceID: "a", IfName: "m2", PVID: ip(1), TaggedVLANs: []int{30}},
-			{DeviceID: "a", IfName: "down", PVID: ip(20), TaggedVLANs: []int{20}},
-			{DeviceID: "b", IfName: "up", PVID: ip(20)},
+			{DeviceID: "a", IfName: "m1", PVID: ip(1), TaggedVLANs: []int{20, 30}},
+			{DeviceID: "a", IfName: "m2", PVID: ip(1), TaggedVLANs: []int{20}},
+			{DeviceID: "a", IfName: "down", PVID: ip(20), TaggedVLANs: []int{20, 30}},
+			{DeviceID: "b", IfName: "up", PVID: ip(20), TaggedVLANs: []int{30}},
 		}, []model.Segment{
 			{DeviceID: "fw", AdminUp: true, ID: "s20", ParentLink: "p0", VLANID: ip(20)},
 			{DeviceID: "fw", AdminUp: true, ID: "s30", ParentLink: "p0", VLANID: ip(30)},
@@ -320,44 +324,69 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		state.LagGroups = []model.LagGroup{{DeviceID: "a", ID: "bond", Name: "bond", MemberLinks: []string{"m1", "m2"}}}
 		g.Edges[0].ToLink = "bond"
 		f := Analyze(state, g)
-		if h := hop(t, vlan(t, f, 30), "e1"); h.ToMode != ModeTagged || h.State != HopCarried {
-			t.Errorf("VLAN 30 on the LAG = %+v (members' VLANs must be combined)", h)
+		// The LAG carries only what every member carries: VLAN 30 is missing on m2.
+		if h := hop(t, vlan(t, f, 20), "e1"); h.ToMode != ModeTagged || h.State != HopCarried || *h.ToPVID != 1 || !slices.Equal(h.ToTagged, []int{20}) {
+			t.Errorf("VLAN 20 on the LAG = %+v", h)
 		}
-		var kinds []FindingKind
+		if h := hop(t, vlan(t, f, 30), "e1"); h.ToMode != ModeNone || h.State != HopDeadEnd {
+			t.Errorf("VLAN 30 on the LAG = %+v", h)
+		}
+		var got []string
 		for _, x := range f.Findings {
-			kinds = append(kinds, x.Kind)
+			got = append(got, fmt.Sprint(x.Kind, x.VLANs, x.EdgeID))
 		}
 		// a:down tags VLAN 20 (its PVID too) while b:up carries it untagged: same PVID, so no leak.
-		if !slices.Equal(kinds, []FindingKind{FindingTagMismatch}) {
+		if want := []string{"tag_mismatch[20]e2", "dead_end[30]e1"}; !slices.Equal(got, want) {
+			t.Errorf("findings = %v, want %v", got, want)
+		}
+
+		// Members with different PVIDs split untagged frames across VLANs.
+		state.Links[1].PVID = ip(20)
+		f = Analyze(state, g)
+		if f.Findings[0].Kind != FindingLeak || f.Findings[0].Link != "bond" || !slices.Equal(f.Findings[0].VLANs, []int{1, 20}) {
 			t.Errorf("findings = %+v", f.Findings)
 		}
 	})
 
-	t.Run("a parallel link does not turn an unpruned trunk into a dead end", func(t *testing.T) {
+	t.Run("a ring does not turn an unpruned trunk into a dead end", func(t *testing.T) {
 		state, g := chain([]model.Link{
-			{DeviceID: "a", IfName: "down", PVID: ip(1), TaggedVLANs: []int{20}},
-			{DeviceID: "a", IfName: "down2", PVID: ip(1)},
+			{DeviceID: "a", IfName: "up", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "a", IfName: "down", PVID: ip(1), TaggedVLANs: []int{30}},
 			{DeviceID: "b", IfName: "up", PVID: ip(1)},
-			{DeviceID: "b", IfName: "up2", PVID: ip(1)},
-		}, nil)
-		g.Edges = append(g.Edges[:2], topology.Edge{ID: "e2b", FromID: "a", FromLink: "down2", ToID: "b", ToLink: "up2", Kind: topology.EdgeWired})
-		if h := hop(t, vlan(t, Analyze(state, g), 20), "e2"); h.State != HopUnused {
-			t.Errorf("e2 = %+v", h)
+		}, []model.Segment{{DeviceID: "fw", AdminUp: true, ID: "s", ParentLink: "p0", VLANID: ip(30)}})
+		g.Edges = append(g.Edges, topology.Edge{ID: "e4", FromID: "c", FromLink: "x", ToID: "a", ToLink: "x", Kind: topology.EdgeWired})
+		if f := Analyze(state, g); len(f.Findings) != 0 || hasHop(vlan(t, f, 30), "e2") {
+			t.Errorf("findings = %+v", f.Findings)
 		}
 	})
 
-	t.Run("only enabled, non-client segments on routing devices are gateways", func(t *testing.T) {
-		addr := func(src string) []model.IPAddress { return []model.IPAddress{{Address: "192.0.2.1", PrefixLength: 24, Source: src}} }
-		f := Analyze(chain(nil, []model.Segment{
-			{DeviceID: "fw", AdminUp: true, ID: "lan", ParentLink: "p0", VLANID: ip(10), Addresses: addr("static")},
-			{DeviceID: "fw", AdminUp: false, ID: "off", ParentLink: "p0", VLANID: ip(20)},
-			{DeviceID: "fw", AdminUp: true, ID: "wan", ParentLink: "p0", VLANID: ip(30), Addresses: addr("dhcp")},
-			{DeviceID: "a", AdminUp: true, ID: "mgmt", ParentLink: "up", VLANID: ip(40), Addresses: addr("static")},
-		}))
-		for id, want := range map[int]int{10: 1, 20: 0, 30: 0, 40: 0} {
-			if got := len(vlan(t, f, id).Gateways); got != want {
-				t.Errorf("VLAN %d gateways = %d, want %d", id, got, want)
-			}
+	t.Run("a link missing a VLAN every user reaches another way is redundant", func(t *testing.T) {
+		state, g := chain([]model.Link{
+			{DeviceID: "a", IfName: "up", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "a", IfName: "down", PVID: ip(1)},
+			{DeviceID: "a", IfName: "x", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "c", IfName: "x", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "c", IfName: "up", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "b", IfName: "down", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "b", IfName: "up", PVID: ip(1), TaggedVLANs: []int{30}},
+		}, []model.Segment{{DeviceID: "fw", AdminUp: true, ID: "s", ParentLink: "p0", VLANID: ip(30)}})
+		g.Edges = append(g.Edges, topology.Edge{ID: "e4", FromID: "a", FromLink: "x", ToID: "c", ToLink: "x", Kind: topology.EdgeWired})
+		f := Analyze(state, g)
+		if v := vlan(t, f, 30); len(f.Findings) != 0 || hasHop(v, "e2") || !slices.Equal(v.Reached, []string{"a", "b", "c", "fw"}) {
+			t.Errorf("VLAN 30 = %+v, findings = %+v", v, f.Findings)
+		}
+	})
+
+	t.Run("an L2-only VLAN split by a link is a dead end with nothing stranded", func(t *testing.T) {
+		f := Analyze(chain([]model.Link{
+			{DeviceID: "a", IfName: "down", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "b", IfName: "up", PVID: ip(1)},
+			{DeviceID: "b", IfName: "p", PVID: ip(60)},
+			{DeviceID: "b", IfName: "p", PVID: ip(60)}, // a duplicate row lists the port once
+		}, nil))
+		v := vlan(t, f, 60)
+		if len(f.Findings) != 1 || f.Findings[0].EdgeID != "e2" || len(f.Findings[0].Stranded) != 0 || len(v.AccessPorts) != 1 {
+			t.Errorf("findings = %+v, access ports = %+v", f.Findings, v.AccessPorts)
 		}
 	})
 

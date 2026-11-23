@@ -280,7 +280,7 @@ export function VlanFlowScreen({ flow, state, topology, devicesById, vlansById, 
               </>
             ) : activeVlan ? (
               <>
-                <Text fw={700} size="sm">{vlanLabel(vlansById, activeVlan.id)}</Text>
+                <Text fw={700} size="sm">{vlanLabel(vlansById, activeVlan.id, true)}</Text>
                 <Text size="sm" c="dimmed">
                   No dead-ends, tag mismatches, or cross-VLAN leaks detected for VLAN {activeVlan.id}.
                   {activeVlan.hops.some((h) => h.state === 'unverified')
