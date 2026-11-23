@@ -453,34 +453,40 @@ describe('VlanFlowCanvas', () => {
     expect(nums[4]).toBeGreaterThan(x2);
   });
 
-  it('keeps All-VLANs trunk lane spacing and hit targets usable with 12+ VLANs', () => {
+  it('keeps All-VLANs trunk lane spacing usable and non-overlapping with 14 VLANs', () => {
     const vlans = Array.from({ length: 14 }, (_, i) => vlan(10 + i, [hop({})]));
     const flow: VLANFlow = { generated_at: '2026-01-01T00:00:00Z', vlans, findings: [] };
     const { container } = draw('all', flow);
     const hitPaths = Array.from(container.querySelectorAll('path[stroke="transparent"]'));
     expect(hitPaths).toHaveLength(14);
-    const ys = hitPaths.map((p) => {
-      expect(Number(p.getAttribute('stroke-width'))).toBeGreaterThanOrEqual(8);
-      return Number((p.getAttribute('d') ?? '').split(' ')[2]);
-    });
+    const ys = hitPaths.map((p) => Number((p.getAttribute('d') ?? '').split(' ')[2]));
     for (let i = 1; i < ys.length; i++) {
-      expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(5);
+      const gap = ys[i] - ys[i - 1];
+      expect(gap).toBeGreaterThanOrEqual(5);
+      expect(Number(hitPaths[i].getAttribute('stroke-width'))).toBeCloseTo(gap, 5);
     }
   });
 
-  it('keeps outer lane endpoints inside device cards even with 50 VLANs on one trunk', () => {
+  it('keeps outer lane endpoints inside both cards and hit targets non-overlapping with 50 VLANs', () => {
     const vlans = Array.from({ length: 50 }, (_, i) => vlan(10 + i, [hop({})]));
     const flow: VLANFlow = { generated_at: '2026-01-01T00:00:00Z', vlans, findings: [] };
     const layout = computeAllVlansLayout(flow);
-    const card = layout.deviceCards[0];
+    const [fromCard, toCard] = layout.deviceCards;
     const { container } = draw('all', flow);
     const hitPaths = Array.from(container.querySelectorAll('path[stroke="transparent"]'));
     expect(hitPaths).toHaveLength(50);
-    for (const p of hitPaths) {
-      expect(Number(p.getAttribute('stroke-width'))).toBeGreaterThanOrEqual(8);
-      const y1 = Number((p.getAttribute('d') ?? '').split(' ')[2]);
-      expect(y1).toBeGreaterThanOrEqual(card.y);
-      expect(y1).toBeLessThanOrEqual(card.y + card.height);
+    const endpoints = hitPaths.map((p) => {
+      const nums = (p.getAttribute('d') ?? '').match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+      return { y1: nums[1], y2: nums[7], hitW: Number(p.getAttribute('stroke-width')) };
+    });
+    for (const ep of endpoints) {
+      expect(ep.y1).toBeGreaterThanOrEqual(fromCard.y);
+      expect(ep.y1).toBeLessThanOrEqual(fromCard.y + fromCard.height);
+      expect(ep.y2).toBeGreaterThanOrEqual(toCard.y);
+      expect(ep.y2).toBeLessThanOrEqual(toCard.y + toCard.height);
+    }
+    for (let i = 1; i < endpoints.length; i++) {
+      expect(endpoints[i].hitW).toBeLessThanOrEqual(endpoints[i].y1 - endpoints[i - 1].y1 + 1e-6);
     }
   });
 });

@@ -387,7 +387,7 @@ export function VlanFlowCanvas({
           const laneCount = bundle.lanes.length;
           const targetSpread = Math.min(bundle.maxSpread, Math.max(64, Math.max(laneCount - 1, 0) * 5));
           const laneGap = laneCount <= 1 ? 0 : Math.min(11, targetSpread / (laneCount - 1));
-          const hitWidth = Math.max(laneGap, 8);
+          const hitWidth = laneCount <= 1 ? 11 : laneGap;
           const midX = ribbonMidX(bundle);
           const midY = (bundle.y1 + bundle.y2) / 2;
           const topFinding = bundle.findings[0];
