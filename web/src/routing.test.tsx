@@ -33,13 +33,17 @@ describe('Ingress base href routing', () => {
     expect(apiUrl('/vlans/flow')).toBe('/api/hassio_ingress/tok_abc123/api/v1/vlans/flow');
   });
 
-  it('keeps basename at "/" for standalone <base href="./"> even on nested routes', () => {
-    setBaseHref('./');
+  it('resolves the root from the relative <base href> the server sets on nested routes', () => {
+    setBaseHref('../');
     window.history.replaceState({}, '', '/devices/sw-core-rack');
-
     expect(getRouterBasename()).toBe('/');
-    expect(apiBasePath()).toBe('/');
     expect(apiUrl('/devices')).toBe('/api/v1/devices');
+
+    // Behind a reverse proxy on a sub-path, the same relative base lands on the prefix.
+    window.history.replaceState({}, '', '/netplane/devices/sw-core-rack');
+    expect(getRouterBasename()).toBe('/netplane');
+    expect(apiBasePath()).toBe('/netplane/');
+    expect(apiUrl('/devices')).toBe('/netplane/api/v1/devices');
   });
 
   it('routes screens and prefixes every navigation link under an Ingress base href', () => {

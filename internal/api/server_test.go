@@ -232,8 +232,18 @@ func TestAPIEndpointsAndIngressAndAuth(t *testing.T) {
 		req.Header.Set("X-Ingress-Path", evil)
 		rec = httptest.NewRecorder()
 		srv.ServeHTTP(rec, req)
-		if strings.Contains(rec.Body.String(), "evil") || !strings.Contains(rec.Body.String(), `<base href="/">`) {
+		if strings.Contains(rec.Body.String(), "evil") || !strings.Contains(rec.Body.String(), `<base href="./">`) {
 			t.Fatalf("hostile X-Ingress-Path %q leaked into base href: %s", evil, rec.Body.String())
+		}
+	}
+
+	// Outside Ingress, the base climbs from a nested route back to the app root; an encoded slash
+	// in a device ID is part of one path segment.
+	for path, want := range map[string]string{"/": "./", "/vlans/flow": "../", "/devices/a%2Fb": "../", "/devices/x/": "../../"} {
+		rec = httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if !strings.Contains(rec.Body.String(), `<base href="`+want+`">`) {
+			t.Fatalf("GET %s: want <base href=%q>, got %s", path, want, rec.Body.String())
 		}
 	}
 

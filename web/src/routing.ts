@@ -1,52 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 /**
- * Resolves the React Router basename from the document's <base href> / document.baseURI.
- *
- * Behind Home Assistant Ingress, the Go server injects `<base href="/api/hassio_ingress/<token>/">`,
- * producing basename `"/api/hassio_ingress/<token>"`.
- * In standalone mode, the Go server injects `<base href="./">`, where `document.baseURI` changes
- * with nested URLs (e.g. `/devices/sw-1` -> `/devices/`), so a relative `./` base always maps to `"/"`.
+ * Resolves the React Router basename from the document's <base href>, which the Go server points at
+ * the app's root: the Ingress prefix behind Home Assistant (`/api/hassio_ingress/<token>/`), and
+ * otherwise a relative path (`./`, `../`, ...) that climbs from the current route back to the root,
+ * so the app also works under a reverse-proxy sub-path.
  */
-export function getRouterBasename(
-  doc: Pick<Document, 'baseURI' | 'querySelector'> = document,
-  loc: Pick<Location, 'href'> | undefined = typeof window !== 'undefined' ? window.location : undefined,
-): string {
-  const baseEl = doc.querySelector('base');
-  if (baseEl) {
-    const rawHref = baseEl.getAttribute('href')?.trim() ?? '';
-    if (rawHref === '' || rawHref === './' || rawHref === '.') {
-      return '/';
-    }
-    try {
-      const pathname = new URL(doc.baseURI).pathname.replace(/\/+$/, '');
-      return pathname || '/';
-    } catch {
-      return '/';
-    }
+export function getRouterBasename(doc: Pick<Document, 'baseURI'> = document): string {
+  try {
+    return new URL(doc.baseURI).pathname.replace(/\/+$/, '') || '/';
+  } catch {
+    return '/';
   }
-
-  if (doc.baseURI && loc?.href && doc.baseURI !== loc.href) {
-    try {
-      const pathname = new URL(doc.baseURI).pathname.replace(/\/+$/, '');
-      return pathname || '/';
-    } catch {
-      return '/';
-    }
-  }
-
-  return '/';
 }
 
 /**
  * Returns the app's URL prefix with a trailing slash (`"/"` or `"/api/hassio_ingress/<token>/"`)
  * for API fetches, EventSource streams, and auth cookie scoping across nested routes.
  */
-export function apiBasePath(
-  doc: Pick<Document, 'baseURI' | 'querySelector'> = document,
-  loc: Pick<Location, 'href'> | undefined = typeof window !== 'undefined' ? window.location : undefined,
-): string {
-  const base = getRouterBasename(doc, loc);
+export function apiBasePath(doc: Pick<Document, 'baseURI'> = document): string {
+  const base = getRouterBasename(doc);
   return base === '/' ? '/' : `${base}/`;
 }
 
