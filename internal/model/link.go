@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package model
 
+import "slices"
+
 // MediaType classifies physical link media.
 type MediaType string
 
@@ -22,23 +24,27 @@ const (
 )
 
 // MediaForSpeed classifies a port from its link speed. Above 10 Gb/s every port is a cage
-// (25GBASE-T and 40GBASE-T hardware is all but absent): SFP28 at 25 Gb/s, QSFP+ at 40 Gb/s and
-// QSFP28 at 50 or 100 Gb/s; any other speed there is the sum of an aggregate, so other. Up to
-// 10 Gb/s a pluggable cage is SFP+ above 1 Gb/s (2.5G and 5G modules sit in SFP+ cages) and SFP
-// otherwise, and any other port is the Ethernet class of its speed (FE for 10/100, as UniFi
-// reports it), or other with no speed.
-// shortcut: 200G and 400G cages (QSFP56, QSFP-DD) read as QSFP28; add types when a driver sees one.
+// (25GBASE-T and 40GBASE-T hardware is all but absent): SFP28 from 25 Gb/s, QSFP+ from 40 Gb/s and
+// QSFP28 from 50 Gb/s. There a port not known to be pluggable at a non-standard speed is the sum
+// of an aggregate (a 3x10G bond reports 30000), so other. Up to 10 Gb/s a pluggable cage is SFP+
+// above 1 Gb/s (2.5G and 5G modules sit in SFP+ cages) and SFP otherwise, and any other port is
+// the Ethernet class of its speed (FE for 10/100, as UniFi reports it), or other with no speed.
+// shortcut: 200G and 400G cages (QSFP56, QSFP-DD) and single-lane 50G (SFP56) read as QSFP28, and
+// a breakout lane reads as its own speed's cage; add types or lane hints when a driver sees one.
 func MediaForSpeed(speedMbps int, pluggable bool) MediaType {
 	if speedMbps > 10000 {
-		switch speedMbps {
-		case 25000:
-			return MediaSFP28
-		case 40000:
-			return MediaQSFPPl
-		case 50000, 100000, 200000, 400000:
-			return MediaQSFP28
+		if !pluggable && !slices.Contains([]int{25000, 40000, 50000, 100000, 200000, 400000}, speedMbps) {
+			return MediaOther
 		}
-		return MediaOther
+		switch {
+		case speedMbps >= 50000:
+			return MediaQSFP28
+		case speedMbps >= 40000:
+			return MediaQSFPPl
+		case speedMbps >= 25000:
+			return MediaSFP28
+		}
+		return MediaSFPPl
 	}
 	switch {
 	case pluggable && speedMbps > 1000:

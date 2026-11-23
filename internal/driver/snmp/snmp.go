@@ -729,8 +729,15 @@ var cageNames = []struct {
 // copper mGig ports, so it is left to the speed.
 var tenGigName = regexp.MustCompile(`^ten-?gig`)
 
+// lagName matches link aggregates (Cisco Port-channel, Po and Bundle-Ether, Juniper ae, Linux
+// bond, HPE Trk), whose speed is the sum of their members.
+var lagName = regexp.MustCompile(`^(port-channel|po\d|bundle-ether|be\d|ae\d|bond|trk\d)`)
+
 func guessSnmpMedia(ifName string, speedMbps int) model.MediaType {
 	lower := strings.ToLower(ifName)
+	if lagName.MatchString(lower) {
+		return model.MediaOther
+	}
 	for _, c := range cageNames {
 		if c.re.MatchString(lower) {
 			return c.media
