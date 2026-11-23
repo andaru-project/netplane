@@ -1,6 +1,6 @@
 # Andaru Netplane
 
-Andaru Netplane is part of the [Andaru Project](https://github.com/andaru-project). Its identifiers stay as they were: the binary, container image, add-on slug and Home Assistant domain are `netplane`, and the Python package is `netplane-client`.
+Andaru Netplane is part of the [Andaru Project](https://github.com/andaru-project).
 
 An open, driver-based **network configuration, information, and diagnostics plane** designed to manage heterogeneous networks (OpenWrt/DSA switches and routers, pfSense and OPNsense gateways, UniFi gear, and SNMP v2c/v3 managed switches) from a single fast UI—standalone or directly inside Home Assistant via Ingress.
 
