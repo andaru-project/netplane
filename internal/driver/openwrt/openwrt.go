@@ -510,10 +510,14 @@ func parseOpenWrtSpeed(raw string) (int, string) {
 	return speed, duplex
 }
 
-// guessMedia classifies a device by name and speed. Every non-bridge device is listed, and tun
-// devices report 10 Mb/s, so copper below 100 Mb/s is other.
+// guessMedia classifies a device by name and speed. Every non-bridge device is listed: a bond or
+// team reports its members' sum, and tun devices report 10 Mb/s, so copper below 100 Mb/s is other.
 func guessMedia(ifName string, speedMbps int) model.MediaType {
-	pluggable := strings.Contains(strings.ToLower(ifName), "sfp")
+	lower := strings.ToLower(ifName)
+	if strings.HasPrefix(lower, "bond") || strings.HasPrefix(lower, "team") {
+		return model.MediaOther
+	}
+	pluggable := strings.Contains(lower, "sfp")
 	if !pluggable && speedMbps < 100 {
 		return model.MediaOther
 	}

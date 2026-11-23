@@ -346,9 +346,19 @@ func TestGuessSnmpMedia(t *testing.T) {
 		{"tun0", 10, model.MediaOther}, {"eth0", 100, model.MediaFE}, {"Te1/0/5", 2500, model.Media25GE},
 		{"TenGigabitEthernet1/0/2", 10000, model.MediaSFPPl}, {"tenant0", 10000, model.Media10GE}, {"Intent0", 2500, model.Media25GE},
 		{"sfp1", 1000, model.MediaSFP},
+		{"Hu1/0/49", 100000, model.MediaQSFP28}, {"FortyGigabitEthernet1/1/1", 40000, model.MediaQSFPPl},
+		{"Twe1/0/1", 25000, model.MediaSFP28}, {"HundredGigE0/0/0/0", 100000, model.MediaQSFP28}, {"house0", 1000, model.MediaGE},
+		{"TwentyFiveGigE1/0/1", 10000, model.MediaSFP28}, {"Hu1/0/50", 0, model.MediaQSFP28}, {"FourHundredGigE0/0/0/1", 400000, model.MediaQSFP28},
+		{"hub0", 1000, model.MediaGE}, {"fortnight1", 1000, model.MediaGE}, {"Ethernet49/1", 100000, model.MediaQSFP28}, {"Po1", 30000, model.MediaOther}, {"Port-channel2", 40000, model.MediaOther}, {"ae0", 100000, model.MediaOther},
+		{"Bundle-Ether1", 100000, model.MediaOther}, {"BE2", 40000, model.MediaOther}, {"bond0", 40000, model.MediaOther}, {"Trk1", 40000, model.MediaOther},
+		{"Eth-Trunk1", 40000, model.MediaOther}, {"Bridge-Aggregation1", 40000, model.MediaOther}, {"team0", 40000, model.MediaOther}, {"lag 1", 40000, model.MediaOther},
+		{"power0", 1000, model.MediaGE},
 	} {
-		if got := guessSnmpMedia(tc.name, tc.speed); got != tc.want {
+		if got := guessSnmpMedia(tc.name, 6, tc.speed); got != tc.want {
 			t.Errorf("guessSnmpMedia(%q, %d) = %s, want %s", tc.name, tc.speed, got, tc.want)
 		}
+	}
+	if got := guessSnmpMedia("uplink", ifTypeLag, 40000); got != model.MediaOther {
+		t.Errorf("an ieee8023adLag interface = %s, want other", got)
 	}
 }

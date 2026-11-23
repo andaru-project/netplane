@@ -34,7 +34,7 @@ func NormalizeMAC(raw string) (string, error) {
 // features (such as EEE or copper auto-pause assumptions) must be guarded.
 func IsFiberMedia(m MediaType) bool {
 	switch MediaType(strings.ToUpper(strings.TrimSpace(string(m)))) {
-	case MediaSFP, MediaSFPPl, MediaSFP28, MediaQSFP28:
+	case MediaSFP, MediaSFPPl, MediaSFP28, MediaQSFPPl, MediaQSFP28:
 		return true
 	default:
 		return false

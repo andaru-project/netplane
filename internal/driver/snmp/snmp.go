@@ -150,6 +150,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	type ifAcc struct {
 		idx       int
 		descr     string
+		ifType    uint64
 		name      string
 		alias     string
 		mtu       int
@@ -184,6 +185,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		switch col {
 		case 2:
 			a.descr = pduString(p)
+		case 3:
+			a.ifType = pduUint64(p)
 		case 4:
 			a.mtu = int(pduUint64(p))
 		case 5:
@@ -376,7 +379,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			speedMbps = int(a.speed / 1_000_000)
 		}
 		mtu := a.mtu
-		media := guessSnmpMedia(ifName, speedMbps)
+		media := guessSnmpMedia(ifName, a.ifType, speedMbps)
 		// Report both directions at one width: the store compares a single width flag per link.
 		hc := a.hasInHC && a.hasOutHC
 		counters := a.c
@@ -714,12 +717,41 @@ func pduUint64(p gosnmp.SnmpPDU) uint64 {
 	return gosnmp.ToBigInt(p.Value).Uint64()
 }
 
-// tenGigName matches Cisco-style 10G port names (TenGigabitEthernet1/0/1, Ten-GigabitEthernet).
-// The short form Te1/0/1 also names copper mGig ports, so it is left to the speed.
+// cageNames maps Cisco names of ports that are always a given cage to it, whatever the module
+// or a down port reports as its speed.
+var cageNames = []struct {
+	re    *regexp.Regexp
+	media model.MediaType
+}{
+	{regexp.MustCompile(`^(fiftygig|hundredgig|twohundredgig|fourhundredgig|hu\d)`), model.MediaQSFP28},
+	{regexp.MustCompile(`^(fortygig|fo\d)`), model.MediaQSFPPl},
+	{regexp.MustCompile(`^(twentyfivegig|twe\d)`), model.MediaSFP28},
+}
+
+// tenGigName matches TenGigabitEthernet and Ten-GigabitEthernet. The short form Te also names
+// copper mGig ports, so it is left to the speed.
 var tenGigName = regexp.MustCompile(`^ten-?gig`)
 
-func guessSnmpMedia(ifName string, speedMbps int) model.MediaType {
+// ifTypeLag is IANAifType ieee8023adLag, which agents give link aggregates.
+const ifTypeLag = 161
+
+// lagName matches link aggregates by name for agents that give them another ifType (Cisco
+// Port-channel, Po, Bundle-Ether and BE, Juniper ae, Linux bond and team, HPE Trk, Comware
+// Bridge-Aggregation and Route-Aggregation, Huawei Eth-Trunk, and lag).
+var lagName = regexp.MustCompile(`^(port-channel|po\d|bundle-ether|be\d|ae\d|bond|team|trk\d|bridge-aggregation|route-aggregation|eth-trunk|lag ?\d)`)
+
+// guessSnmpMedia classifies an interface. A link aggregate's speed is the sum of its members',
+// so it is other.
+func guessSnmpMedia(ifName string, ifType uint64, speedMbps int) model.MediaType {
 	lower := strings.ToLower(ifName)
+	if ifType == ifTypeLag || lagName.MatchString(lower) {
+		return model.MediaOther
+	}
+	for _, c := range cageNames {
+		if c.re.MatchString(lower) {
+			return c.media
+		}
+	}
 	pluggable := strings.Contains(lower, "sfp") || strings.Contains(lower, "fiber") || tenGigName.MatchString(lower)
 	// Agents report 10 Mb/s for virtual interfaces of unknown speed (net-snmp's default).
 	if !pluggable && speedMbps < 100 {
