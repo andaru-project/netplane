@@ -61,7 +61,7 @@
                 "kind": { "type": "string", "enum": ["wired", "lag", "wireless_uplink"] },
                 "from_mode": { "$ref": "#/$defs/mode" },
                 "to_mode": { "$ref": "#/$defs/mode" },
-                "state": { "type": "string", "enum": ["carried", "dead_end", "mismatch", "leak", "unverified"] }
+                "state": { "type": "string", "enum": ["carried", "dead_end", "unused", "mismatch", "leak", "unverified"] }
               }
             }
           },

@@ -56,7 +56,7 @@ cmd/
 - `GET /api/v1/devices/{id}` → `DeviceDetail` (device + links, lag_groups, segments, zones, gateways, routes, vpns, firewall, radios, clients, recent_diagnostics)
 - `GET /api/v1/devices/{id}/links/{ifName}/samples?since=<RFC3339|duration>` → `{"items":[LinkSample...]}`
 - `GET /api/v1/topology` → `topology.Graph`
-- `GET /api/v1/vlans/flow` → `vlanflow.Flow`: every VLAN traced across the topology's infrastructure links (each end's mode `tagged`/`untagged`/`none`/`unknown` and the hop's state `carried`/`dead_end`/`mismatch`/`leak`/`unverified`), its gateways, access ports, SSIDs and reached devices, plus `findings` (`leak` for a PVID mismatch, `dead_end`, `tag_mismatch`). Wireless uplinks report no VLAN membership, so they are `unverified`; an unrouted native VLAN (such as VLAN 1) shows its dead ends but raises no finding.
+- `GET /api/v1/vlans/flow` → `vlanflow.Flow`: every VLAN traced across the topology's infrastructure links (each end's mode `tagged`/`untagged`/`none`/`unknown` and the hop's state `carried`/`dead_end`/`unused`/`mismatch`/`leak`/`unverified`), its gateways, access ports, SSIDs and reached devices, plus `findings` (`leak` for a PVID mismatch, `dead_end`, `tag_mismatch`). Wireless uplinks report no VLAN membership, so they are `unverified`; a VLAN carried toward a device that uses it nowhere (an unpruned trunk, or VLAN 1 on most trunks) is `unused` and raises no finding.
 - `GET /api/v1/clients?online=true&q=<query>` → `{"items":[Client...]}`
 - `GET /api/v1/targets` → `{"items":[TargetConfig...]}` (strictly redacted; zero secrets)
 - `POST /api/v1/targets/{id}/poll` → triggers an immediate poll of an enabled target (409 `TARGET_DISABLED` for a disabled one); returns updated `TargetStatus`

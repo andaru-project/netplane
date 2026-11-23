@@ -315,7 +315,7 @@ export interface TopologyGraph {
 }
 
 export type VLANMode = 'tagged' | 'untagged' | 'none' | 'unknown';
-export type HopState = 'carried' | 'dead_end' | 'mismatch' | 'leak' | 'unverified';
+export type HopState = 'carried' | 'dead_end' | 'unused' | 'mismatch' | 'leak' | 'unverified';
 export type FindingKind = 'leak' | 'dead_end' | 'tag_mismatch';
 
 export interface VLANFlowHop {
@@ -472,7 +472,12 @@ export const api = {
       `/devices/${encodeURIComponent(id)}/links/${encodeURIComponent(ifName)}/samples?since=${encodeURIComponent(since)}`,
     ).then((r) => r.items),
   getTopology: () => fetchJSON<TopologyGraph>('/topology'),
-  getVLANFlow: () => fetchJSON<VLANFlow>('/vlans/flow'),
+  // Unused hops (a trunk carrying a VLAN toward a device that never uses it) are not drawn.
+  getVLANFlow: () =>
+    fetchJSON<VLANFlow>('/vlans/flow').then((f) => ({
+      ...f,
+      vlans: f.vlans.map((v) => ({ ...v, hops: v.hops.filter((h) => h.state !== 'unused') })),
+    })),
   listTargets: () => fetchJSON<{ items: TargetConfig[] }>('/targets').then((r) => r.items),
   pollTarget: (id: string) => fetchJSON<unknown>(`/targets/${encodeURIComponent(id)}/poll`, { method: 'POST' }),
   listClients: (q = '', onlineOnly = false) => {

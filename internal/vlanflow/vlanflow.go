@@ -33,8 +33,10 @@ type HopState string
 
 const (
 	HopCarried HopState = "carried"
-	// HopDeadEnd: one end carries the VLAN and the other end does not.
+	// HopDeadEnd: one end carries the VLAN, and the other end does not although its device uses it.
 	HopDeadEnd HopState = "dead_end"
+	// HopUnused: one end carries the VLAN toward a device that uses it nowhere (an unpruned trunk).
+	HopUnused HopState = "unused"
 	// HopMismatch: one end tags the VLAN and the other carries it untagged.
 	HopMismatch HopState = "mismatch"
 	// HopLeak: one end sends the VLAN untagged and the other end's PVID is a different VLAN.
@@ -363,6 +365,9 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 			}
 		}
 		h.State = cmp.Or(h.State, hopState(h.FromMode, h.ToMode))
+		if h.State == HopDeadEnd && (h.FromMode == ModeNone && !using[e.FromID] || h.ToMode == ModeNone && !using[e.ToID]) {
+			h.State = HopUnused
+		}
 		if h.State == "" {
 			continue
 		}
@@ -403,11 +408,6 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 			dev, link, peer, peerLink, mode := h.FromID, h.FromLink, h.ToID, h.ToLink, h.FromMode
 			if h.FromMode == ModeNone {
 				dev, link, peer, peerLink, mode = h.ToID, h.ToLink, h.FromID, h.FromLink, h.ToMode
-			}
-			// A native VLAN nobody routes (typically the default VLAN 1 on every trunk) is idle,
-			// not broken: the hop still shows the dead end, but it is not a finding.
-			if mode == ModeUntagged && len(gateways) == 0 {
-				continue
 			}
 			var stranded []string
 			if len(gateways) > 0 {

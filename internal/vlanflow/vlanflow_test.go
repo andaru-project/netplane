@@ -28,13 +28,14 @@ func fixture() (*store.NetworkState, topology.Graph) {
 	state.Segments = []model.Segment{
 		{DeviceID: "fw", ID: "lan", Name: "LAN", ParentLink: "bond0", VLANID: ip(10), ZoneID: "z-lan", Addresses: []model.IPAddress{{Address: "10.10.10.1", PrefixLength: 24}}},
 		{DeviceID: "fw", ID: "iot", Name: "IoT", ParentLink: "bond0", VLANID: ip(20), Addresses: []model.IPAddress{{Address: "10.10.20.1", PrefixLength: 24}}},
+		{DeviceID: "fw", ID: "guest", Name: "Guest", ParentLink: "bond0", VLANID: ip(30), Addresses: []model.IPAddress{{Address: "10.10.30.1", PrefixLength: 24}}},
 		{DeviceID: "fw", ID: "lab", Name: "Lab", ParentLink: "bond0", VLANID: ip(40), Addresses: []model.IPAddress{{Address: "10.10.40.1", PrefixLength: 24}}},
 	}
 	state.Zones = []model.Zone{{DeviceID: "fw", ID: "z-lan", Name: "lan"}}
 	state.Links = []model.Link{
 		{DeviceID: "fw", IfName: "sfp0"},
-		{DeviceID: "core", IfName: "sfp9", PVID: ip(1), TaggedVLANs: []int{10, 20, 40}},
-		{DeviceID: "core", IfName: "lan1", PVID: ip(1), TaggedVLANs: []int{10, 20}},
+		{DeviceID: "core", IfName: "sfp9", PVID: ip(1), TaggedVLANs: []int{10, 20, 30, 40}},
+		{DeviceID: "core", IfName: "lan1", PVID: ip(1), TaggedVLANs: []int{10, 20, 30}},
 		{DeviceID: "core", IfName: "lan2", PVID: ip(10), TaggedVLANs: []int{20}},
 		{DeviceID: "core", IfName: "lan5", PVID: ip(10), OperState: model.OperUp},
 		{DeviceID: "office", IfName: "lan1", PVID: ip(1), TaggedVLANs: []int{10, 20, 40}},
@@ -88,7 +89,7 @@ func TestAnalyze(t *testing.T) {
 	for _, v := range f.VLANs {
 		ids = append(ids, v.ID)
 	}
-	if !slices.Equal(ids, []int{1, 10, 20, 40}) {
+	if !slices.Equal(ids, []int{1, 10, 20, 30, 40}) {
 		t.Fatalf("VLANs = %v", ids)
 	}
 
@@ -127,9 +128,12 @@ func TestAnalyze(t *testing.T) {
 		t.Errorf("VLAN 40 access ports = %+v", v40.AccessPorts)
 	}
 
-	// VLAN 1 is an unrouted native VLAN: the firewall drops it, which the hop shows but no finding reports.
-	if v1 := vlan(t, f, 1); len(v1.Gateways) != 0 || len(v1.Reached) != 0 || hop(t, v1, "e1").State != HopDeadEnd {
+	// Trunks carrying a VLAN toward a device that never uses it are unpruned, not broken: no finding.
+	if v1 := vlan(t, f, 1); len(v1.Gateways) != 0 || len(v1.Reached) != 0 || hop(t, v1, "e1").State != HopUnused {
 		t.Errorf("VLAN 1 = %+v", v1)
+	}
+	if h := hop(t, vlan(t, f, 30), "e2"); h.FromMode != ModeTagged || h.ToMode != ModeNone || h.State != HopUnused {
+		t.Errorf("VLAN 30 on e2 = %+v", h)
 	}
 
 	type key struct {
