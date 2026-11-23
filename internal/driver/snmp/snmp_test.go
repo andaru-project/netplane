@@ -350,10 +350,15 @@ func TestGuessSnmpMedia(t *testing.T) {
 		{"Twe1/0/1", 25000, model.MediaSFP28}, {"HundredGigE0/0/0/0", 100000, model.MediaQSFP28}, {"house0", 1000, model.MediaGE},
 		{"TwentyFiveGigE1/0/1", 10000, model.MediaSFP28}, {"Hu1/0/50", 0, model.MediaQSFP28}, {"FourHundredGigE0/0/0/1", 400000, model.MediaQSFP28},
 		{"hub0", 1000, model.MediaGE}, {"fortnight1", 1000, model.MediaGE}, {"Ethernet49/1", 100000, model.MediaQSFP28}, {"Po1", 30000, model.MediaOther}, {"Port-channel2", 40000, model.MediaOther}, {"ae0", 100000, model.MediaOther},
+		{"Bundle-Ether1", 100000, model.MediaOther}, {"BE2", 40000, model.MediaOther}, {"bond0", 40000, model.MediaOther}, {"Trk1", 40000, model.MediaOther},
+		{"Eth-Trunk1", 40000, model.MediaOther}, {"Bridge-Aggregation1", 40000, model.MediaOther}, {"team0", 40000, model.MediaOther}, {"lag 1", 40000, model.MediaOther},
 		{"power0", 1000, model.MediaGE},
 	} {
-		if got := guessSnmpMedia(tc.name, tc.speed); got != tc.want {
+		if got := guessSnmpMedia(tc.name, 6, tc.speed); got != tc.want {
 			t.Errorf("guessSnmpMedia(%q, %d) = %s, want %s", tc.name, tc.speed, got, tc.want)
 		}
+	}
+	if got := guessSnmpMedia("uplink", ifTypeLag, 40000); got != model.MediaOther {
+		t.Errorf("an ieee8023adLag interface = %s, want other", got)
 	}
 }

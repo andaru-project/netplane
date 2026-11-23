@@ -150,6 +150,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	type ifAcc struct {
 		idx       int
 		descr     string
+		ifType    uint64
 		name      string
 		alias     string
 		mtu       int
@@ -184,6 +185,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		switch col {
 		case 2:
 			a.descr = pduString(p)
+		case 3:
+			a.ifType = pduUint64(p)
 		case 4:
 			a.mtu = int(pduUint64(p))
 		case 5:
@@ -376,7 +379,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 			speedMbps = int(a.speed / 1_000_000)
 		}
 		mtu := a.mtu
-		media := guessSnmpMedia(ifName, speedMbps)
+		media := guessSnmpMedia(ifName, a.ifType, speedMbps)
 		// Report both directions at one width: the store compares a single width flag per link.
 		hc := a.hasInHC && a.hasOutHC
 		counters := a.c
@@ -729,13 +732,19 @@ var cageNames = []struct {
 // copper mGig ports, so it is left to the speed.
 var tenGigName = regexp.MustCompile(`^ten-?gig`)
 
-// lagName matches link aggregates (Cisco Port-channel, Po and Bundle-Ether, Juniper ae, Linux
-// bond, HPE Trk), whose speed is the sum of their members.
-var lagName = regexp.MustCompile(`^(port-channel|po\d|bundle-ether|be\d|ae\d|bond|trk\d)`)
+// ifTypeLag is IANAifType ieee8023adLag, which agents give link aggregates.
+const ifTypeLag = 161
 
-func guessSnmpMedia(ifName string, speedMbps int) model.MediaType {
+// lagName matches link aggregates by name for agents that give them another ifType (Cisco
+// Port-channel, Po, Bundle-Ether and BE, Juniper ae, Linux bond and team, HPE Trk, Comware
+// Bridge-Aggregation and Route-Aggregation, Huawei Eth-Trunk, and lag).
+var lagName = regexp.MustCompile(`^(port-channel|po\d|bundle-ether|be\d|ae\d|bond|team|trk\d|bridge-aggregation|route-aggregation|eth-trunk|lag ?\d)`)
+
+// guessSnmpMedia classifies an interface. A link aggregate's speed is the sum of its members',
+// so it is other.
+func guessSnmpMedia(ifName string, ifType uint64, speedMbps int) model.MediaType {
 	lower := strings.ToLower(ifName)
-	if lagName.MatchString(lower) {
+	if ifType == ifTypeLag || lagName.MatchString(lower) {
 		return model.MediaOther
 	}
 	for _, c := range cageNames {

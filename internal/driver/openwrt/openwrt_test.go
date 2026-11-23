@@ -291,7 +291,7 @@ func TestGuessMedia(t *testing.T) {
 		want  model.MediaType
 	}{
 		{"tun0", 10, model.MediaOther}, {"lan1", 100, model.MediaFE}, {"lan2", 2500, model.Media25GE},
-		{"sfp1", 2500, model.MediaSFPPl}, {"sfp2", 1000, model.MediaSFP}, {"bond0", 40000, model.MediaOther},
+		{"sfp1", 2500, model.MediaSFPPl}, {"sfp2", 1000, model.MediaSFP}, {"bond0", 40000, model.MediaOther}, {"bond-lan", 20000, model.MediaOther}, {"team0", 40000, model.MediaOther},
 	} {
 		if got := guessMedia(tc.name, tc.speed); got != tc.want {
 			t.Errorf("guessMedia(%q, %d) = %s, want %s", tc.name, tc.speed, got, tc.want)
