@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -713,9 +714,18 @@ func pduUint64(p gosnmp.SnmpPDU) uint64 {
 	return gosnmp.ToBigInt(p.Value).Uint64()
 }
 
+// tenGigName matches Cisco-style 10G port names: TenGigabitEthernet1/0/1, Ten-GigabitEthernet,
+// Te1/0/1.
+var tenGigName = regexp.MustCompile(`^(ten-?gig|te\d)`)
+
 func guessSnmpMedia(ifName string, speedMbps int) model.MediaType {
 	lower := strings.ToLower(ifName)
-	return model.MediaForSpeed(speedMbps, strings.Contains(lower, "sfp") || strings.Contains(lower, "fiber") || strings.HasPrefix(lower, "ten"))
+	pluggable := strings.Contains(lower, "sfp") || strings.Contains(lower, "fiber") || tenGigName.MatchString(lower)
+	// Agents report 10 Mb/s for virtual interfaces of unknown speed (net-snmp's default).
+	if !pluggable && speedMbps < 100 {
+		return model.MediaOther
+	}
+	return model.MediaForSpeed(speedMbps, pluggable)
 }
 
 // ifIndexName names an interface that has no ifName or ifDescr after its ifIndex.

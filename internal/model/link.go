@@ -22,8 +22,7 @@ const (
 
 // MediaForSpeed classifies a port from its link speed: a pluggable cage is SFP+ above 1 Gb/s
 // (2.5G and 5G modules sit in SFP+ cages) and SFP otherwise, copper the Ethernet class of its
-// speed. Copper below 100 Mb/s is other: no media type names 10BASE-T, and SNMP agents report
-// 10 Mb/s for virtual interfaces of unknown speed.
+// speed (FE for 10/100, as UniFi reports it). A copper port with no speed is other.
 func MediaForSpeed(speedMbps int, pluggable bool) MediaType {
 	switch {
 	case pluggable && speedMbps > 1000:
@@ -38,7 +37,7 @@ func MediaForSpeed(speedMbps int, pluggable bool) MediaType {
 		return Media25GE
 	case speedMbps >= 1000:
 		return MediaGE
-	case speedMbps >= 100:
+	case speedMbps > 0:
 		return MediaFE
 	}
 	return MediaOther

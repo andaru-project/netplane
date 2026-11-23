@@ -115,11 +115,11 @@ func DoJSON(ctx context.Context, client *http.Client, method, url string, auth f
 	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
 }
 
-// cleanMessage makes a device's error text safe for logs and the UI: control characters
-// become spaces and the text is cut to 300 characters.
+// cleanMessage makes a device's error text safe for logs and the UI: control, format (bidi,
+// zero-width) and line or paragraph separator characters become spaces and the text is cut to 300 characters.
 func cleanMessage(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return ' '
 		}
 		return r
