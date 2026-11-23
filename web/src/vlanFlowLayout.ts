@@ -85,6 +85,8 @@ export interface FlowEndpointCard {
   height: number;
 }
 
+export type RibbonState = HopState | 'stranded';
+
 export interface FlowRibbon {
   id: string;
   kind: 'segment_link' | 'hop' | 'endpoint_link';
@@ -101,7 +103,7 @@ export interface FlowRibbon {
   linkKind: string;
   fromMode: VLANMode;
   toMode: VLANMode;
-  state: HopState;
+  state: RibbonState;
   isForeignLeak?: boolean;
   foreignVlanId?: number;
 }
@@ -635,7 +637,7 @@ export function computeSingleVlanLayout(
 
   // Create device cards.
   const reachedSet = new Set(vlan.reached);
-  const hasGateway = vlan.gateways.some((g) => g.addresses.length > 0);
+  const hasGateway = vlan.gateways.length > 0;
   const deviceCardsById = new Map<string, FlowDeviceCard>();
   const deviceCardsByCol = new Map<number, FlowDeviceCard[]>();
 
@@ -869,7 +871,7 @@ export function computeSingleVlanLayout(
       linkKind: ep.ssids.length > 0 && ep.accessPorts.length === 0 ? 'wireless_uplink' : 'wired',
       fromMode: 'untagged',
       toMode: 'untagged',
-      state: ep.isForeignLeak ? 'leak' : ep.allUnreachable ? 'dead_end' : 'carried',
+      state: ep.isForeignLeak ? 'leak' : ep.allUnreachable ? 'stranded' : 'carried',
       isForeignLeak: ep.isForeignLeak,
       foreignVlanId: ep.isForeignLeak ? ep.vlanId : undefined,
     };
@@ -879,7 +881,7 @@ export function computeSingleVlanLayout(
       peerY: ep.y + ep.height / 2,
       label: ep.isForeignLeak ? `leak:${ep.vlanId}` : ep.ssids.length > 0 && ep.accessPorts.length === 0 ? 'wifi' : 'access',
       mode: 'untagged',
-      state: ribbon.state,
+      state: 'carried',
       hopEdgeId: ribbon.id,
       isLeak: ep.isForeignLeak,
       isDeadEndMissing: false,
@@ -1015,7 +1017,7 @@ export function computeAllVlansLayout(
       const aps = v.access_ports.filter((ap) => ap.device_id === devId);
       const ssids = v.ssids.filter((s) => s.device_id === devId);
       const devLeak = vHasLeak && flow.findings.some((f) => f.kind === 'leak' && f.vlans.includes(v.id) && (f.device_id === devId || f.peer_id === devId));
-      const hasRoutedGw = v.gateways.some((g) => g.addresses.length > 0);
+      const hasRoutedGw = v.gateways.length > 0;
       const entry: AllVlansEndpointEntry = {
         vlanId: v.id,
         vlanName: v.name,

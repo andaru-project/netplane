@@ -45,9 +45,11 @@ export function App() {
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   const refreshGen = useRef(0);
+  const diagGen = useRef(0);
 
   const refreshAll = useCallback(async () => {
     const gen = ++refreshGen.current;
+    const dGen = diagGen.current;
     try {
       const [st, topo, fl, tgts, diags] = await Promise.all([
         api.getState(),
@@ -61,7 +63,9 @@ export function App() {
       setTopology(topo);
       setFlow(fl);
       setTargets(tgts);
-      setDiagRuns(diags);
+      if (dGen === diagGen.current) {
+        setDiagRuns(diags);
+      }
       setRefreshNonce((n) => n + 1);
       setErrMsg(null);
     } catch (e) {
@@ -140,8 +144,8 @@ export function App() {
   }, [targets, refreshAll]);
 
   const handleDiagnosticCompleted = useCallback((res: DiagnosticResult) => {
-    refreshGen.current++;
-    setDiagRuns((prev) => [res, ...prev]);
+    diagGen.current++;
+    setDiagRuns((prev) => [res, ...prev.filter((d) => d.id !== res.id)]);
   }, []);
 
   return (

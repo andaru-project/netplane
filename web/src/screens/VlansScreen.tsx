@@ -53,7 +53,7 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
   const unreachableAccess = useMemo(() => {
     const map = new Map<string, number>();
     for (const v of vlans) {
-      if (!v.gateways.some((g) => g.addresses.length > 0)) continue;
+      if (v.gateways.length === 0) continue;
       for (const ap of v.access_ports) {
         if (!ap.reachable) {
           map.set(`${ap.device_id}|${ap.link}|${v.id}`, v.id);

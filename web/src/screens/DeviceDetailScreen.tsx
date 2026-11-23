@@ -57,7 +57,7 @@ export function DeviceDetailScreen({
   refreshNonce,
 }: Props) {
   const { id } = useParams<{ id: string }>();
-  const deviceId = id ? decodeURIComponent(id) : '';
+  const deviceId = id ?? '';
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -106,7 +106,7 @@ export function DeviceDetailScreen({
     const set = new Set<string>();
     if (!flow || !deviceId) return set;
     for (const v of flow.vlans) {
-      if (!v.gateways.some((g) => g.addresses.length > 0)) continue;
+      if (v.gateways.length === 0) continue;
       for (const s of v.ssids) {
         if (s.device_id === deviceId && !s.reachable) {
           set.add(`${s.radio}|${s.name}|${v.id}`);

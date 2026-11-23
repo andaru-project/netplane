@@ -98,30 +98,6 @@ export function findingsForDevice(findings: VLANFlowFinding[], deviceId: string)
   return findings.filter((f) => f.device_id === deviceId || f.peer_id === deviceId);
 }
 
-/**
- * Looks up raw reported PVID and tagged VLANs for a link (or LAG member) from state.
- * Purely reads reported fields for display in the inspector; never derives hop state or findings.
- */
-export function lookupReportedPortVlans(
-  state: NetworkState | null,
-  deviceId: string,
-  linkName?: string,
-): { pvid?: number; tagged: number[]; reported: boolean } {
-  if (!state || !linkName) return { tagged: [], reported: false };
-  const names = [linkName];
-  const lag = state.lag_groups.find((g) => g.device_id === deviceId && (g.name === linkName || g.id === linkName));
-  if (lag) {
-    names.push(...lag.member_links);
-  }
-  for (const name of names) {
-    const link = state.links.find((l) => l.device_id === deviceId && l.if_name === name);
-    if (link && (link.pvid != null || link.tagged_vlans.length > 0)) {
-      return { pvid: link.pvid, tagged: link.tagged_vlans, reported: true };
-    }
-  }
-  return { tagged: [], reported: false };
-}
-
 export function isStpBlocked(stpState?: string): boolean {
   return stpState === 'blocking' || stpState === 'discarding';
 }
@@ -300,7 +276,7 @@ export function getClientVlanIssue(
 ): { kind: 'unreachable'; vlanId: number } | null {
   if (!flow || client.vlan == null || !client.attached_device_id) return null;
   const vl = flow.vlans.find((v) => v.id === client.vlan);
-  if (!vl || !vl.gateways.some((g) => g.addresses.length > 0)) return null;
+  if (!vl || vl.gateways.length === 0) return null;
   if (client.attached_link) {
     const ap = vl.access_ports.find((p) => p.device_id === client.attached_device_id && p.link === client.attached_link);
     if (ap && !ap.reachable) return { kind: 'unreachable', vlanId: vl.id };

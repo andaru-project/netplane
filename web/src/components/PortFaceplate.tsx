@@ -131,12 +131,12 @@ export function PortFaceplate({
 
     let vlanBadge: { mode: 'U' | 'T'; vid: number } | null = null;
     if (hlVlan != null) {
-      if (l.pvid === hlVlan) {
-        classes.push('vlan-match');
-        vlanBadge = { mode: 'U', vid: hlVlan };
-      } else if (l.tagged_vlans.includes(hlVlan)) {
+      if (l.tagged_vlans.includes(hlVlan)) {
         classes.push('vlan-match');
         vlanBadge = { mode: 'T', vid: hlVlan };
+      } else if (l.pvid === hlVlan) {
+        classes.push('vlan-match');
+        vlanBadge = { mode: 'U', vid: hlVlan };
       } else {
         classes.push('vlan-dim');
       }

@@ -40,10 +40,10 @@ describe('computeSingleVlanLayout', () => {
       devices: ['fw-core', 'sw-core', 'sw-office', 'ap-hallway', 'ap-garage'],
       reached: ['fw-core', 'sw-core', 'sw-office', 'ap-hallway', 'ap-garage'],
       hops: [
-        { edge_id: 'e1', from_id: 'fw-core', from_link: 'bond0', to_id: 'sw-core', to_link: 'bond0', kind: 'lag', from_mode: 'tagged', to_mode: 'tagged', state: 'carried' },
-        { edge_id: 'e2', from_id: 'sw-core', from_link: 'lan1', to_id: 'sw-office', to_link: 'lan1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried' },
-        { edge_id: 'e3', from_id: 'sw-core', from_link: 'lan3', to_id: 'ap-hallway', to_link: 'eth0', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried' },
-        { edge_id: 'e4', from_id: 'ap-hallway', to_id: 'ap-garage', kind: 'wireless_uplink', from_mode: 'unknown', to_mode: 'unknown', state: 'unverified' },
+        { edge_id: 'e1', from_id: 'fw-core', from_link: 'bond0', to_id: 'sw-core', to_link: 'bond0', kind: 'lag', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [10], to_tagged: [10] },
+        { edge_id: 'e2', from_id: 'sw-core', from_link: 'lan1', to_id: 'sw-office', to_link: 'lan1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [10], to_tagged: [10] },
+        { edge_id: 'e3', from_id: 'sw-core', from_link: 'lan3', to_id: 'ap-hallway', to_link: 'eth0', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [10], to_tagged: [10] },
+        { edge_id: 'e4', from_id: 'ap-hallway', to_id: 'ap-garage', kind: 'wireless_uplink', from_mode: 'unknown', to_mode: 'unknown', state: 'unverified', from_tagged: [], to_tagged: [] },
       ],
       access_ports: [
         { device_id: 'sw-office', link: 'lan2', label: 'Workstation', oper_state: 'up', reachable: true },
@@ -113,8 +113,8 @@ describe('computeSingleVlanLayout', () => {
       devices: ['fw', 'sw1', 'sw2'],
       reached: ['fw', 'sw1', 'sw2'],
       hops: [
-        { edge_id: 'e1', from_id: 'fw', from_link: 'eth0', to_id: 'sw1', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried' },
-        { edge_id: 'e2', from_id: 'sw1', from_link: 'p2', to_id: 'sw2', to_link: 'p1', kind: 'wired', from_mode: 'untagged', to_mode: 'none', state: 'leak' },
+        { edge_id: 'e1', from_id: 'fw', from_link: 'eth0', to_id: 'sw1', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [10], to_tagged: [10] },
+        { edge_id: 'e2', from_id: 'sw1', from_link: 'p2', to_id: 'sw2', to_link: 'p1', kind: 'wired', from_mode: 'untagged', to_mode: 'none', state: 'leak', from_pvid: 10, from_tagged: [], to_pvid: 20, to_tagged: [] },
       ],
       access_ports: [],
       ssids: [],
@@ -127,8 +127,8 @@ describe('computeSingleVlanLayout', () => {
       devices: ['fw', 'sw1', 'sw2'],
       reached: ['fw', 'sw1'],
       hops: [
-        { edge_id: 'e1', from_id: 'fw', from_link: 'eth0', to_id: 'sw1', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried' },
-        { edge_id: 'e2', from_id: 'sw1', from_link: 'p2', to_id: 'sw2', to_link: 'p1', kind: 'wired', from_mode: 'none', to_mode: 'untagged', state: 'leak' },
+        { edge_id: 'e1', from_id: 'fw', from_link: 'eth0', to_id: 'sw1', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [20], to_tagged: [20] },
+        { edge_id: 'e2', from_id: 'sw1', from_link: 'p2', to_id: 'sw2', to_link: 'p1', kind: 'wired', from_mode: 'none', to_mode: 'untagged', state: 'leak', from_pvid: 10, from_tagged: [], to_pvid: 20, to_tagged: [] },
       ],
       access_ports: [{ device_id: 'sw2', link: 'p3', label: 'Camera', oper_state: 'up', reachable: false }],
       ssids: [],
@@ -168,8 +168,8 @@ describe('computeSingleVlanLayout', () => {
       devices: ['sw-a', 'sw-b', 'sw-c'],
       reached: [],
       hops: [
-        { edge_id: 'e1', from_id: 'sw-a', from_link: 'p1', to_id: 'sw-b', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried' },
-        { edge_id: 'e2', from_id: 'sw-b', from_link: 'p2', to_id: 'sw-c', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'none', state: 'dead_end' },
+        { edge_id: 'e1', from_id: 'sw-a', from_link: 'p1', to_id: 'sw-b', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [99], to_tagged: [99] },
+        { edge_id: 'e2', from_id: 'sw-b', from_link: 'p2', to_id: 'sw-c', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'none', state: 'dead_end', from_tagged: [99], to_tagged: [] },
       ],
       access_ports: [],
       ssids: [],
@@ -203,11 +203,11 @@ describe('computeSingleVlanLayout', () => {
     for (let core = 1; core <= 3; core++) {
       const cId = `core-${core}`;
       devices.push(cId);
-      hops.push({ edge_id: `e-gw-${cId}`, from_id: 'gw', from_link: `p${core}`, to_id: cId, to_link: 'up', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried' });
+      hops.push({ edge_id: `e-gw-${cId}`, from_id: 'gw', from_link: `p${core}`, to_id: cId, to_link: 'up', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [100], to_tagged: [100] });
       for (let dist = 1; dist <= 4; dist++) {
         const dId = `dist-${core}-${dist}`;
         devices.push(dId);
-        hops.push({ edge_id: `e-${cId}-${dId}`, from_id: cId, from_link: `d${dist}`, to_id: dId, to_link: 'up', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried' });
+        hops.push({ edge_id: `e-${cId}-${dId}`, from_id: cId, from_link: `d${dist}`, to_id: dId, to_link: 'up', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [100], to_tagged: [100] });
       }
     }
     const vlan: VLANFlowVLAN = {
@@ -250,7 +250,7 @@ describe('computeAllVlansLayout', () => {
           gateways: [{ device_id: 'fw', segment_id: 's10', segment_name: 'vlan10', zone_name: 'lan', addresses: [{ family: 'ipv4', address: '10.0.10.1', prefix_length: 24 }] }],
           devices: ['fw', 'sw1'],
           reached: ['fw', 'sw1'],
-          hops: [{ edge_id: 'e1', from_id: 'fw', from_link: 'eth0', to_id: 'sw1', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried' }],
+          hops: [{ edge_id: 'e1', from_id: 'fw', from_link: 'eth0', to_id: 'sw1', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [10], to_tagged: [10] }],
           access_ports: [{ device_id: 'sw1', link: 'p2', oper_state: 'up', reachable: true }],
           ssids: [],
           clients: 2,
@@ -261,7 +261,7 @@ describe('computeAllVlansLayout', () => {
           gateways: [{ device_id: 'fw', segment_id: 's20', segment_name: 'vlan20', zone_name: 'guest', addresses: [{ family: 'ipv4', address: '10.0.20.1', prefix_length: 24 }] }],
           devices: ['fw', 'sw1'],
           reached: ['fw'],
-          hops: [{ edge_id: 'e1', from_id: 'fw', from_link: 'eth0', to_id: 'sw1', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'none', state: 'dead_end' }],
+          hops: [{ edge_id: 'e1', from_id: 'fw', from_link: 'eth0', to_id: 'sw1', to_link: 'p1', kind: 'wired', from_mode: 'tagged', to_mode: 'none', state: 'dead_end', from_tagged: [20], to_tagged: [] }],
           access_ports: [{ device_id: 'sw1', link: 'p3', oper_state: 'up', reachable: false }],
           ssids: [],
           clients: 0,

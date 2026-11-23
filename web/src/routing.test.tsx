@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createTheme, MantineProvider } from '@mantine/core';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router';
-import { afterEach, describe, expect, it } from 'vitest';
-import { apiUrl } from './api';
-import { apiBasePath, getRouterBasename } from './routing';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api, apiUrl } from './api';
+import { apiBasePath, devicePath, getRouterBasename } from './routing';
 import { Shell } from './Shell';
 
 const testTheme = createTheme({ primaryColor: 'teal', defaultRadius: 'sm' });
@@ -19,6 +19,7 @@ function setBaseHref(href: string | null) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   setBaseHref(null);
   window.history.replaceState({}, '', '/');
 });
@@ -100,5 +101,64 @@ describe('Ingress base href routing', () => {
 
     const diagLink = screen.getByRole('link', { name: 'Diagnostics & Events' });
     expect(diagLink).toHaveAttribute('href', `${prefix}/diagnostics`);
+  });
+
+  it('does not double-decode device IDs containing % in DeviceDetailScreen', async () => {
+    const rawId = 'sw%100-rack';
+    window.history.replaceState({}, '', devicePath(rawId));
+    const spy = vi.spyOn(api, 'getDevice').mockResolvedValue({
+      device: {
+        id: rawId,
+        driver: 'openwrt',
+        target_id: 't1',
+        name: 'Rack Switch',
+        role: 'switch',
+        macs: [],
+        firmware: {},
+        uptime_sec: 10,
+        online: true,
+        last_seen: '2026-01-01T00:00:00Z',
+        capabilities: [],
+        system_stats: {},
+        sensors: [],
+      },
+      links: [],
+      lag_groups: [],
+      segments: [],
+      zones: [],
+      gateways: [],
+      routes: [],
+      vpns: [],
+      radios: [],
+      wireless_uplinks: [],
+      clients: [],
+      recent_diagnostics: [],
+    });
+
+    render(
+      <MantineProvider theme={testTheme}>
+        <BrowserRouter>
+          <Shell
+            state={null}
+            topology={null}
+            flow={null}
+            targets={[]}
+            diagRuns={[]}
+            events={[]}
+            sseConnected={true}
+            errMsg={null}
+            pollBusy={false}
+            refreshNonce={0}
+            onPollAll={() => {}}
+            onDiagnosticCompleted={() => {}}
+          />
+        </BrowserRouter>
+      </MantineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Rack Switch' })).toBeInTheDocument();
+    });
+    expect(spy).toHaveBeenCalledWith(rawId);
   });
 });

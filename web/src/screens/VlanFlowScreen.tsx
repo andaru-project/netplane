@@ -29,7 +29,6 @@ import {
   findHopForFinding,
   findingKey,
   getVlanColor,
-  lookupReportedPortVlans,
   modeShort,
 } from '../vlanUtils';
 
@@ -249,11 +248,13 @@ export function VlanFlowScreen({ flow, state, topology, devicesById, vlanColors 
 
                 {/* Side-by-side port comparison */}
                 {(() => {
-                  const cfgA = lookupReportedPortVlans(state, activeFinding.device_id, activeFinding.link);
-                  const cfgB = lookupReportedPortVlans(state, activeFinding.peer_id, activeFinding.peer_link);
                   const nameA = deviceName(devicesById, activeFinding.device_id);
                   const nameB = deviceName(devicesById, activeFinding.peer_id);
-                  const hopMatchesOrder = activeFindingHop?.from_id === activeFinding.device_id;
+                  const hopMatchesOrder = activeFindingHop
+                    ? activeFindingHop.from_id === activeFinding.device_id &&
+                      (activeFindingHop.from_id !== activeFindingHop.to_id ||
+                        activeFindingHop.from_link === activeFinding.link)
+                    : true;
                   const modeA = activeFindingHop
                     ? hopMatchesOrder
                       ? activeFindingHop.from_mode
@@ -264,6 +265,28 @@ export function VlanFlowScreen({ flow, state, topology, devicesById, vlanColors 
                       ? activeFindingHop.to_mode
                       : activeFindingHop.from_mode
                     : null;
+                  const pvidA = activeFindingHop
+                    ? hopMatchesOrder
+                      ? activeFindingHop.from_pvid
+                      : activeFindingHop.to_pvid
+                    : undefined;
+                  const taggedA = activeFindingHop
+                    ? hopMatchesOrder
+                      ? activeFindingHop.from_tagged
+                      : activeFindingHop.to_tagged
+                    : [];
+                  const pvidB = activeFindingHop
+                    ? hopMatchesOrder
+                      ? activeFindingHop.to_pvid
+                      : activeFindingHop.from_pvid
+                    : undefined;
+                  const taggedB = activeFindingHop
+                    ? hopMatchesOrder
+                      ? activeFindingHop.to_tagged
+                      : activeFindingHop.from_tagged
+                    : [];
+                  const reportedA = pvidA != null || taggedA.length > 0;
+                  const reportedB = pvidB != null || taggedB.length > 0;
 
                   return (
                     <div className="np-port-compare">
@@ -276,13 +299,13 @@ export function VlanFlowScreen({ flow, state, topology, devicesById, vlanColors 
                             VLAN {activeFinding.vlans[0]} mode: <strong>{modeA} ({modeShort(modeA)})</strong>
                           </Text>
                         )}
-                        {cfgA.reported && (
+                        {reportedA && (
                           <>
                             <Text size="xs" ff="monospace" mt={2}>
-                              PVID: <strong>{cfgA.pvid ?? '—'}</strong>
+                              PVID: <strong>{pvidA ?? '—'}</strong>
                             </Text>
                             <Text size="xs" ff="monospace">
-                              Tagged: <strong>{cfgA.tagged.length > 0 ? cfgA.tagged.join(', ') : 'none'}</strong>
+                              Tagged: <strong>{taggedA.length > 0 ? taggedA.join(', ') : 'none'}</strong>
                             </Text>
                           </>
                         )}
@@ -296,13 +319,13 @@ export function VlanFlowScreen({ flow, state, topology, devicesById, vlanColors 
                             VLAN {activeFinding.vlans[0]} mode: <strong>{modeB} ({modeShort(modeB)})</strong>
                           </Text>
                         )}
-                        {cfgB.reported && (
+                        {reportedB && (
                           <>
                             <Text size="xs" ff="monospace" mt={2}>
-                              PVID: <strong>{cfgB.pvid ?? '—'}</strong>
+                              PVID: <strong>{pvidB ?? '—'}</strong>
                             </Text>
                             <Text size="xs" ff="monospace">
-                              Tagged: <strong>{cfgB.tagged.length > 0 ? cfgB.tagged.join(', ') : 'none'}</strong>
+                              Tagged: <strong>{taggedB.length > 0 ? taggedB.join(', ') : 'none'}</strong>
                             </Text>
                           </>
                         )}

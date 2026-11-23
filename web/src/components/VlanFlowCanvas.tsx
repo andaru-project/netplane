@@ -638,7 +638,7 @@ export function VlanFlowCanvas({
           </g>
         );
       }
-      if (r.state === 'dead_end') {
+      if (r.state === 'stranded') {
         return (
           <g key={`path-${r.id}`}>
             <path d={d} fill="none" stroke={C.amber} strokeWidth={2.2} strokeDasharray="5,4" opacity={0.8} />
@@ -763,13 +763,13 @@ export function VlanFlowCanvas({
     if (r.kind === 'endpoint_link') {
       const label = r.isForeignLeak
         ? `LEAK → ${r.foreignVlanId}`
-        : r.state === 'dead_end'
+        : r.state === 'stranded'
           ? 'STRANDED'
           : r.linkKind === 'wireless_uplink'
             ? 'Wi-Fi'
             : 'U';
       const pw = Math.max(26, label.length * 6.0 + 12);
-      const color = r.isForeignLeak ? C.red : r.state === 'dead_end' ? C.amber : vColor;
+      const color = r.isForeignLeak ? C.red : r.state === 'stranded' ? C.amber : vColor;
       return (
         <g key={`ov-${r.id}`} style={{ cursor: handleClick ? 'pointer' : undefined }} onClick={handleClick}>
           <rect x={mx - pw / 2} y={my - 9.5} width={pw} height={19} rx={4} fill={C.surface} stroke={color} strokeWidth={1.3} />

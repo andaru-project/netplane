@@ -328,6 +328,10 @@ export interface VLANFlowHop {
   from_mode: VLANMode;
   to_mode: VLANMode;
   state: HopState;
+  from_pvid?: number;
+  from_tagged: number[];
+  to_pvid?: number;
+  to_tagged: number[];
 }
 
 export interface VLANFlowGateway {
