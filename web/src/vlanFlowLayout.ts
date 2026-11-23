@@ -318,6 +318,12 @@ function railY(top: number, span: number, idx: number, count: number): number {
   return count === 1 ? Math.round(top + span / 2) : Math.round(top + (span * idx) / (count - 1));
 }
 
+// A same-column ribbon draws its pill 46 units right of the column (VlanFlowCanvas ribbonMidX),
+// up to about 56 units wide on either side, so the layout must reach that far.
+function widthWithSameColumnPills(width: number, ribbons: { sameColumn: boolean; x1: number; x2: number }[]): number {
+  return ribbons.reduce((w, r) => (r.sameColumn ? Math.max(w, Math.round(Math.max(r.x1, r.x2) + 46 + 56 + PAD_X)) : w), width);
+}
+
 function orientEdge<T extends Rect & { columnIndex: number }>(cFrom: T, cTo: T) {
   const sameCol = cFrom.columnIndex === cTo.columnIndex;
   const swap = sameCol ? cFrom.y > cTo.y : cFrom.columnIndex > cTo.columnIndex;
@@ -658,7 +664,8 @@ export function computeSingleVlanLayout(
     const lines: FlowEndpointLine[] = [
       ...spec.accessPorts.slice(0, 4).map((ap): FlowEndpointLine => ({
         text: `[U] ${ap.link}${ap.label ? ` · ${ap.label}` : ''}`,
-        tone: allUnreachable ? 'dim' : 'normal',
+        // A mixed card still flags each port the gateway cannot reach.
+        tone: allUnreachable ? 'dim' : hasGateway && !spec.isForeignLeak && !ap.reachable ? 'warn' : 'normal',
       })),
       ...(spec.accessPorts.length > 4 ? [{ text: `+${spec.accessPorts.length - 4} more access port(s)`, tone: 'dim' as const }] : []),
       ...spec.ssids.slice(0, 3).map((s): FlowEndpointLine => ({
@@ -812,7 +819,15 @@ export function computeSingleVlanLayout(
     }
   }
 
-  return { width: grid.width, height, columns: grid.columns, segmentCards, deviceCards, endpointCards, ribbons };
+  return {
+    width: widthWithSameColumnPills(grid.width, ribbons),
+    height,
+    columns: grid.columns,
+    segmentCards,
+    deviceCards,
+    endpointCards,
+    ribbons,
+  };
 }
 
 /**
@@ -1023,7 +1038,7 @@ export function computeAllVlansLayout(
   }
 
   return {
-    width: grid.width,
+    width: widthWithSameColumnPills(grid.width, edgeBundles),
     height,
     columns: grid.columns,
     vlanCards,

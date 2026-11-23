@@ -239,6 +239,31 @@ describe('computeSingleVlanLayout', () => {
   });
 });
 
+describe('computeSingleVlanLayout endpoint rows', () => {
+  it('flags each unreachable access port on a card that mixes reachable and unreachable ports', () => {
+    const vlan: VLANFlowVLAN = {
+      id: 10,
+      gateways: [{ device_id: 'fw', segment_id: 's10', segment_name: 'vlan10', addresses: [] }],
+      devices: ['fw', 'sw1'],
+      reached: ['fw', 'sw1'],
+      hops: [{ edge_id: 'e1', from_id: 'fw', to_id: 'sw1', kind: 'wired', from_mode: 'tagged', to_mode: 'tagged', state: 'carried', from_tagged: [10], to_tagged: [10] }],
+      access_ports: [
+        { device_id: 'sw1', link: 'p2', oper_state: 'up', reachable: true },
+        { device_id: 'sw1', link: 'p3', oper_state: 'up', reachable: false },
+      ],
+      ssids: [],
+      clients: 0,
+    };
+    const layout = computeSingleVlanLayout(vlan, { generated_at: '2026-01-01T00:00:00Z', vlans: [vlan], findings: [] }, new Map());
+    const card = layout.endpointCards.find((c) => c.deviceId === 'sw1')!;
+    expect(card.allUnreachable).toBe(false);
+    expect(card.lines.map((l) => [l.text, l.tone])).toEqual([
+      ['[U] p2', 'normal'],
+      ['[U] p3', 'warn'],
+    ]);
+  });
+});
+
 describe('computeAllVlansLayout', () => {
   it('aggregates multiple VLANs into parallel edge bundles across hop-ordered device columns', () => {
     const flow: VLANFlow = {
@@ -291,5 +316,37 @@ describe('computeAllVlansLayout', () => {
     expect(layout.edgeBundles[0].findings).toHaveLength(1);
     expect(layout.endpointCards).toHaveLength(1);
     expect(layout.endpointCards[0].hasUnreachable).toBe(true);
+  });
+
+  it('reserves room for a same-column hop pill when there is no endpoint column', () => {
+    const gw = { device_id: 'fw', segment_id: 's10', segment_name: 'vlan10', addresses: [] };
+    const hop = (id: string, from: string, to: string, state: 'carried' | 'unverified') => ({
+      edge_id: id, from_id: from, to_id: to, kind: 'wired', from_mode: 'tagged' as const, to_mode: 'tagged' as const,
+      state, from_tagged: [10], to_tagged: [10],
+    });
+    const flow: VLANFlow = {
+      generated_at: '2026-01-01T00:00:00Z',
+      vlans: [
+        {
+          id: 10,
+          gateways: [gw],
+          devices: ['fw', 'a', 'b'],
+          reached: ['fw', 'a', 'b'],
+          // a and b are both one hop from the gateway, so the a-b hop stays inside the last column.
+          hops: [hop('e1', 'fw', 'a', 'carried'), hop('e2', 'fw', 'b', 'carried'), hop('e3', 'a', 'b', 'unverified')],
+          access_ports: [],
+          ssids: [],
+          clients: 0,
+        },
+      ],
+      findings: [],
+    };
+
+    const layout = computeAllVlansLayout(flow);
+    expect(layout.columns.map((c) => c.kind)).not.toContain('endpoints');
+    const sameCol = layout.edgeBundles.find((b) => b.edgeId === 'e3')!;
+    expect(sameCol.sameColumn).toBe(true);
+    // The pill centre sits 46 units right of the column and is 88 wide.
+    expect(layout.width).toBeGreaterThanOrEqual(Math.max(sameCol.x1, sameCol.x2) + 46 + 44);
   });
 });
