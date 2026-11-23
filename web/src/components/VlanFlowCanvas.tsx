@@ -29,6 +29,9 @@ import {
   vlanHealth,
 } from '../vlanUtils';
 
+const MONO = 'ui-monospace, monospace';
+const SANS = 'system-ui, sans-serif';
+
 function bezierPath(x1: number, y1: number, x2: number, y2: number, sameColumn = false): string {
   if (sameColumn) {
     const loopX = Math.max(x1, x2) + 54;
@@ -39,8 +42,7 @@ function bezierPath(x1: number, y1: number, x2: number, y2: number, sameColumn =
 }
 
 function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return `${text.slice(0, max - 1)}…`;
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
 function ribbonMidX(r: { x1: number; x2: number; sameColumn: boolean }): number {
@@ -74,54 +76,20 @@ function SvgButton({
 }
 
 function Pill({
-  x,
-  y,
-  width,
-  height,
-  fill,
-  textFill,
-  stroke,
-  strokeWidth,
-  strokeDasharray,
-  fontSize = 9.5,
-  fontWeight = 700,
-  label,
+  x, y, width, height, fill, textFill, stroke, strokeWidth, strokeDasharray,
+  fontSize = 9.5, fontWeight = 700, label,
 }: {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  fill: string;
-  textFill: string;
-  stroke?: string;
-  strokeWidth?: number;
-  strokeDasharray?: string;
-  fontSize?: number;
-  fontWeight?: number;
-  label: string;
+  x: number; y: number; width: number; height: number;
+  fill: string; textFill: string; stroke?: string; strokeWidth?: number; strokeDasharray?: string;
+  fontSize?: number; fontWeight?: number; label: string;
 }) {
   return (
     <>
       <rect
-        x={x - width / 2}
-        y={y - height / 2}
-        width={width}
-        height={height}
-        rx={4}
-        fill={fill}
-        stroke={stroke}
-        strokeWidth={strokeWidth}
-        strokeDasharray={strokeDasharray}
+        x={x - width / 2} y={y - height / 2} width={width} height={height} rx={4}
+        fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeDasharray={strokeDasharray}
       />
-      <text
-        x={x}
-        y={y + 3.5}
-        textAnchor="middle"
-        fill={textFill}
-        fontSize={fontSize}
-        fontWeight={fontWeight}
-        fontFamily="ui-monospace, monospace"
-      >
+      <text x={x} y={y + 3.5} textAnchor="middle" fill={textFill} fontSize={fontSize} fontWeight={fontWeight} fontFamily={MONO}>
         {label}
       </text>
     </>
@@ -139,15 +107,7 @@ function ColumnHeaders({
     <>
       {columns.map((col) => (
         <g key={`col-${col.index}`}>
-          <text
-            x={col.x}
-            y={22}
-            fill={C.dim}
-            fontSize={10.5}
-            fontWeight={700}
-            letterSpacing="0.06em"
-            fontFamily="system-ui, sans-serif"
-          >
+          <text x={col.x} y={22} fill={C.dim} fontSize={10.5} fontWeight={700} letterSpacing="0.06em" fontFamily={SANS}>
             {col.label}
           </text>
           <line x1={col.x} y1={30} x2={col.x + col.width} y2={30} stroke={C.borderSoft} strokeWidth={1} />
@@ -157,24 +117,14 @@ function ColumnHeaders({
   );
 }
 
-function DeviceCardHead({
-  width,
-  deviceId,
-  dev,
-  C,
-}: {
-  width: number;
-  deviceId: string;
-  dev?: Device;
-  C: SvgPalette;
-}) {
+function DeviceCardHead({ width, deviceId, dev, C }: { width: number; deviceId: string; dev?: Device; C: SvgPalette }) {
   return (
     <>
       <rect width={width} height={34} rx={6} fill={C.subtle} />
-      <text x={12} y={16} fill={C.text} fontSize={12} fontWeight={700} fontFamily="system-ui, sans-serif">
+      <text x={12} y={16} fill={C.text} fontSize={12} fontWeight={700} fontFamily={SANS}>
         {truncate(dev?.name || deviceId, 22)}
       </text>
-      <text x={12} y={29} fill={C.dim} fontSize={9.5} fontFamily="ui-monospace, monospace">
+      <text x={12} y={29} fill={C.dim} fontSize={9.5} fontFamily={MONO}>
         {truncate([dev?.driver, dev?.mgmt_ip].filter(Boolean).join(' · ') || deviceId, 28)}
       </text>
     </>
@@ -182,21 +132,10 @@ function DeviceCardHead({
 }
 
 function RibbonGroup({
-  d,
-  selected,
-  onClick,
-  hitWidth = 18,
-  glowWidth = 8,
-  glowOpacity = 0.4,
-  children,
+  d, selected, onClick, hitWidth = 18, glowWidth = 8, glowOpacity = 0.4, children,
 }: {
-  d: string;
-  selected: boolean;
-  onClick?: () => void;
-  hitWidth?: number;
-  glowWidth?: number;
-  glowOpacity?: number;
-  children: ReactNode;
+  d: string; selected: boolean; onClick?: () => void;
+  hitWidth?: number; glowWidth?: number; glowOpacity?: number; children: ReactNode;
 }) {
   return (
     <g style={{ cursor: onClick ? 'pointer' : undefined }} onClick={onClick}>
@@ -208,19 +147,9 @@ function RibbonGroup({
 }
 
 function Rail({
-  d,
-  stroke,
-  width,
-  innerWidth,
-  innerDash,
-  canvas,
+  d, stroke, width, innerWidth, innerDash, canvas,
 }: {
-  d: string;
-  stroke: string;
-  width: number;
-  innerWidth: number;
-  innerDash?: string;
-  canvas: string;
+  d: string; stroke: string; width: number; innerWidth: number; innerDash?: string; canvas: string;
 }) {
   return (
     <>
@@ -230,15 +159,7 @@ function Rail({
   );
 }
 
-function PortChipSvg({
-  chip,
-  vColor,
-  C,
-}: {
-  chip: FlowPortChip;
-  vColor: string;
-  C: SvgPalette;
-}) {
+function PortChipSvg({ chip, vColor, C }: { chip: FlowPortChip; vColor: string; C: SvgPalette }) {
   const label = truncate(chip.label, 10);
   const badgeW = 19;
   const textW = Math.max(34, label.length * 6.0 + 6);
@@ -260,24 +181,17 @@ function PortChipSvg({
   let outerStroke = C.borderSoft;
 
   if (isLeak) {
-    bFill = C.red;
-    bStroke = C.red;
+    bFill = bStroke = outerStroke = C.red;
     bText = '#ffffff';
     glyph = '⇄';
-    outerStroke = C.red;
   } else if (isDeadEndMissing) {
     bFill = C.isDark ? 'rgba(250,176,5,0.2)' : 'rgba(230,119,0,0.14)';
-    bStroke = C.amber;
-    bText = C.amber;
+    bStroke = bText = outerStroke = C.amber;
     glyph = '✕';
-    outerStroke = C.amber;
   } else if (chip.mode === 'unknown') {
-    bFill = C.subtle;
-    bStroke = C.gray;
-    bText = C.gray;
+    bStroke = bText = outerStroke = C.gray;
     bDash = '2,2';
     glyph = '?';
-    outerStroke = C.gray;
   } else if (chip.mode === 'tagged') {
     bFill = vColor;
     bStroke = isMismatch ? C.amber : vColor;
@@ -287,8 +201,7 @@ function PortChipSvg({
     if (isMismatch) outerStroke = C.amber;
   } else if (chip.mode === 'untagged') {
     bFill = C.surface;
-    bStroke = isMismatch ? C.amber : vColor;
-    bText = isMismatch ? C.amber : vColor;
+    bStroke = bText = isMismatch ? C.amber : vColor;
     bDash = '3,1.5';
     bWidth = 1.6;
     glyph = 'U';
@@ -299,45 +212,12 @@ function PortChipSvg({
 
   return (
     <g transform={`translate(${startX}, ${chip.y - 11})`}>
-      <rect
-        width={totalW}
-        height={22}
-        rx={4}
-        fill={C.subtle}
-        stroke={outerStroke}
-        strokeWidth={1}
-        strokeDasharray={chip.mode === 'unknown' ? '3,2' : undefined}
-      />
-      <rect
-        x={bx}
-        y={2.5}
-        width={badgeW}
-        height={17}
-        rx={3}
-        fill={bFill}
-        stroke={bStroke}
-        strokeWidth={bWidth}
-        strokeDasharray={bDash}
-      />
-      <text
-        x={bx + badgeW / 2}
-        y={14.5}
-        textAnchor="middle"
-        fill={bText}
-        fontSize={10.5}
-        fontWeight={800}
-        fontFamily="ui-monospace, monospace"
-      >
+      <rect width={totalW} height={22} rx={4} fill={C.subtle} stroke={outerStroke} strokeWidth={1} strokeDasharray={chip.mode === 'unknown' ? '3,2' : undefined} />
+      <rect x={bx} y={2.5} width={badgeW} height={17} rx={3} fill={bFill} stroke={bStroke} strokeWidth={bWidth} strokeDasharray={bDash} />
+      <text x={bx + badgeW / 2} y={14.5} textAnchor="middle" fill={bText} fontSize={10.5} fontWeight={800} fontFamily={MONO}>
         {glyph}
       </text>
-      <text
-        x={tx}
-        y={14.5}
-        fill={C.text}
-        fontSize={10}
-        fontWeight={600}
-        fontFamily="ui-monospace, monospace"
-      >
+      <text x={tx} y={14.5} fill={C.text} fontSize={10} fontWeight={600} fontFamily={MONO}>
         {label}
       </text>
     </g>
@@ -353,16 +233,11 @@ function modePill(fromMode: VLANMode, toMode: VLANMode, linkKind: string): strin
 
 function vlanStatusMeta(health: VlanHealth, C: SvgPalette): { text: string; color: string } {
   switch (health) {
-    case 'leak':
-      return { text: '⚠ LEAK', color: C.red };
-    case 'dead_end':
-      return { text: '⊘ DEAD-END', color: C.amber };
-    case 'mismatch':
-      return { text: '⇄ MISMATCH', color: C.amber };
-    case 'unverified':
-      return { text: '? UNVERIFIED', color: C.gray };
-    case 'ok':
-      return { text: '✓ OK', color: C.green };
+    case 'leak': return { text: '⚠ LEAK', color: C.red };
+    case 'dead_end': return { text: '⊘ DEAD-END', color: C.amber };
+    case 'mismatch': return { text: '⇄ MISMATCH', color: C.amber };
+    case 'unverified': return { text: '? UNVERIFIED', color: C.gray };
+    case 'ok': return { text: '✓ OK', color: C.green };
   }
 }
 
@@ -399,15 +274,15 @@ export function VlanFlowCanvas({
     return flow.vlans.find((v) => v.id === selectedVlanId) ?? flow.vlans[0];
   }, [flow.vlans, selectedVlanId]);
 
-  const singleLayout = useMemo(() => {
-    if (mode !== 'single' || !activeVlan) return null;
-    return computeSingleVlanLayout(activeVlan, flow, devicesById, topology);
-  }, [mode, activeVlan, flow, devicesById, topology]);
+  const singleLayout = useMemo(
+    () => (mode === 'single' && activeVlan ? computeSingleVlanLayout(activeVlan, flow, devicesById, topology) : null),
+    [mode, activeVlan, flow, devicesById, topology],
+  );
 
-  const allLayout = useMemo(() => {
-    if (mode !== 'all' || flow.vlans.length === 0) return null;
-    return computeAllVlansLayout(flow, devicesById, topology);
-  }, [mode, flow, devicesById, topology]);
+  const allLayout = useMemo(
+    () => (mode === 'all' && flow.vlans.length > 0 ? computeAllVlansLayout(flow, devicesById, topology) : null),
+    [mode, flow, devicesById, topology],
+  );
 
   if (flow.vlans.length === 0) {
     return (
@@ -462,74 +337,41 @@ export function VlanFlowCanvas({
                 if (lane.state === 'dead_end') {
                   const stopY = (y1 + y2) / 2;
                   return (
-                    <g
-                      key={`${bundle.edgeId}-v${lane.vlanId}`}
-                      style={{ cursor: 'pointer' }}
-                      onClick={onLaneClick}
-                    >
+                    <g key={`${bundle.edgeId}-v${lane.vlanId}`} style={{ cursor: 'pointer' }} onClick={onLaneClick}>
                       <path d={bezierPath(bundle.x1, y1, midX - 4, stopY)} fill="none" stroke={col} strokeWidth={2.4} />
-                      <path
-                        d={bezierPath(midX + 4, stopY, bundle.x2, y2)}
-                        fill="none"
-                        stroke={C.amber}
-                        strokeWidth={1.8}
-                        strokeDasharray="4,3"
-                      />
+                      <path d={bezierPath(midX + 4, stopY, bundle.x2, y2)} fill="none" stroke={C.amber} strokeWidth={1.8} strokeDasharray="4,3" />
                       <line x1={midX} y1={stopY - 7} x2={midX} y2={stopY + 7} stroke={C.amber} strokeWidth={2.6} />
                     </g>
                   );
                 }
 
-                const strokeColor =
-                  lane.state === 'leak'
-                    ? C.red
-                    : lane.state === 'unverified'
-                      ? C.gray
-                      : col;
+                const strokeColor = lane.state === 'leak' ? C.red : lane.state === 'unverified' ? C.gray : col;
                 const dash =
-                  lane.state === 'unverified'
-                    ? '3,4'
-                    : bundle.linkKind === 'wireless_uplink'
-                      ? '5,4'
-                      : lane.state === 'mismatch'
-                        ? '6,3'
-                        : undefined;
+                  lane.state === 'unverified' ? '3,4' : bundle.linkKind === 'wireless_uplink' ? '5,4' : lane.state === 'mismatch' ? '6,3' : undefined;
                 return (
                   <path
                     key={`${bundle.edgeId}-v${lane.vlanId}`}
                     d={bezierPath(bundle.x1, y1, bundle.x2, y2, bundle.sameColumn)}
-                    fill="none"
-                    stroke={strokeColor}
-                    strokeWidth={lane.state === 'leak' ? 3.2 : 2.3}
-                    strokeDasharray={dash}
+                    fill="none" stroke={strokeColor} strokeWidth={lane.state === 'leak' ? 3.2 : 2.3} strokeDasharray={dash}
                     style={{ cursor: 'pointer' }}
                     onClick={onLaneClick}
                   />
                 );
               })}
 
-              {/* Overlay pill for bundle findings or unverified wireless uplink */}
               {topFinding ? (
                 <SvgButton label={topFinding.message} onClick={() => onSelectFinding(topFinding)}>
                   {(() => {
                     const label =
-                      topFinding.kind === 'leak'
-                        ? `⚠ LEAK ${topFinding.vlans[0]}⇄${topFinding.vlans[1]}`
-                        : topFinding.kind === 'tag_mismatch'
-                          ? `⇄ V${topFinding.vlans[0]} MISMATCH`
+                      topFinding.kind === 'leak' ? `⚠ LEAK ${topFinding.vlans[0]}⇄${topFinding.vlans[1]}`
+                        : topFinding.kind === 'tag_mismatch' ? `⇄ V${topFinding.vlans[0]} MISMATCH`
                           : `⊘ V${topFinding.vlans[0]} DROP`;
                     return (
                       <Pill
-                        x={midX}
-                        y={midY}
-                        width={Math.max(82, label.length * 6.0 + 14)}
-                        height={20}
+                        x={midX} y={midY} width={Math.max(82, label.length * 6.0 + 14)} height={20}
                         fill={topFinding.severity === 'crit' ? C.red : C.amber}
                         textFill={topFinding.severity === 'crit' ? '#ffffff' : C.amberInk}
-                        stroke={C.surface}
-                        strokeWidth={1.2}
-                        fontWeight={800}
-                        label={label}
+                        stroke={C.surface} strokeWidth={1.2} fontWeight={800} label={label}
                       />
                     );
                   })()}
@@ -537,17 +379,8 @@ export function VlanFlowCanvas({
               ) : allUnverified ? (
                 <g>
                   <Pill
-                    x={midX}
-                    y={midY}
-                    width={88}
-                    height={19}
-                    fill={C.surface}
-                    textFill={C.gray}
-                    stroke={C.gray}
-                    strokeWidth={1.2}
-                    strokeDasharray="3,2"
-                    fontSize={9}
-                    label="? UNVERIFIED"
+                    x={midX} y={midY} width={88} height={19} fill={C.surface} textFill={C.gray}
+                    stroke={C.gray} strokeWidth={1.2} strokeDasharray="3,2" fontSize={9} label="? UNVERIFIED"
                   />
                 </g>
               ) : null}
@@ -576,21 +409,14 @@ export function VlanFlowCanvas({
           const status = vlanStatusMeta(vlanHealth(vc.vlan, vc.findings), C);
 
           return (
-            <SvgButton
-              key={vc.id}
-              transform={`translate(${vc.x}, ${vc.y})`}
-              label={`Focus VLAN ${vc.vlan.id}`}
-              onClick={() => onSelectVlan(vc.vlan.id)}
-            >
+            <SvgButton key={vc.id} transform={`translate(${vc.x}, ${vc.y})`} label={`Focus VLAN ${vc.vlan.id}`} onClick={() => onSelectVlan(vc.vlan.id)}>
               <rect width={vc.width} height={vc.height} rx={6} fill={C.surface} stroke={C.border} strokeWidth={1.2} />
               <rect width={5} height={vc.height} rx={2} fill={col} />
-              <text x={14} y={23} fill={C.text} fontSize={12.5} fontWeight={700} fontFamily="system-ui, sans-serif">
+              <text x={14} y={23} fill={C.text} fontSize={12.5} fontWeight={700} fontFamily={SANS}>
                 {truncate(`VLAN ${vc.vlan.id}${vc.vlan.name ? ` · ${vc.vlan.name}` : ''}`, 24)}
               </text>
-              <text x={14} y={41} fill={C.dim} fontSize={10.5} fontFamily="ui-monospace, monospace">
-                {truncate(addr, 26)}
-              </text>
-              <text x={14} y={60} fill={status.color} fontSize={10} fontWeight={700} fontFamily="ui-monospace, monospace">
+              <text x={14} y={41} fill={C.dim} fontSize={10.5} fontFamily={MONO}>{truncate(addr, 26)}</text>
+              <text x={14} y={60} fill={status.color} fontSize={10} fontWeight={700} fontFamily={MONO}>
                 {truncate(`${status.text}${zone ? ` · ${zone}` : ''}`, 27)}
               </text>
             </SvgButton>
@@ -605,25 +431,13 @@ export function VlanFlowCanvas({
           const hasWarn = dc.findings.some((f) => f.kind !== 'leak');
           const stroke = hasLeak ? C.red : hasWarn ? C.amber : C.border;
           return (
-            <SvgButton
-              key={dc.id}
-              transform={`translate(${dc.x}, ${dc.y})`}
-              label={`Open device ${dName}`}
-              onClick={() => onOpenDevice(dc.deviceId)}
-            >
+            <SvgButton key={dc.id} transform={`translate(${dc.x}, ${dc.y})`} label={`Open device ${dName}`} onClick={() => onOpenDevice(dc.deviceId)}>
               <rect width={dc.width} height={dc.height} rx={6} fill={C.surface} stroke={stroke} strokeWidth={hasLeak || hasWarn ? 1.6 : 1.2} />
               <DeviceCardHead width={dc.width} deviceId={dc.deviceId} dev={dev} C={C} />
-              <text x={12} y={54} fill={C.dim} fontSize={10} fontFamily="ui-monospace, monospace">
+              <text x={12} y={54} fill={C.dim} fontSize={10} fontFamily={MONO}>
                 {truncate(`VLANs: ${dc.vlanIds.join(', ')}`, 28)}
               </text>
-              <text
-                x={12}
-                y={dc.height - 14}
-                fill={hasLeak ? C.red : hasWarn ? C.amber : C.green}
-                fontSize={10}
-                fontWeight={700}
-                fontFamily="ui-monospace, monospace"
-              >
+              <text x={12} y={dc.height - 14} fill={hasLeak ? C.red : hasWarn ? C.amber : C.green} fontSize={10} fontWeight={700} fontFamily={MONO}>
                 {hasLeak
                   ? `⚠ ${dc.findings.filter((f) => f.kind === 'leak').length} leak finding(s)`
                   : hasWarn
@@ -638,46 +452,35 @@ export function VlanFlowCanvas({
         {allLayout.endpointCards.map((ep) => {
           const dName = deviceName(devicesById, ep.deviceId);
           return (
-            <SvgButton
-              key={ep.id}
-              transform={`translate(${ep.x}, ${ep.y})`}
-              label={`Inspect endpoints on ${dName}`}
-              onClick={() => onOpenDevice(ep.deviceId)}
-            >
+            <SvgButton key={ep.id} transform={`translate(${ep.x}, ${ep.y})`} label={`Inspect endpoints on ${dName}`} onClick={() => onOpenDevice(ep.deviceId)}>
               <rect
-                width={ep.width}
-                height={ep.height}
-                rx={6}
-                fill={C.surface}
+                width={ep.width} height={ep.height} rx={6} fill={C.surface}
                 stroke={ep.hasLeak ? C.red : ep.hasUnreachable ? C.amber : C.border}
                 strokeWidth={ep.hasLeak || ep.hasUnreachable ? 1.5 : 1.2}
                 strokeDasharray={ep.hasUnreachable && !ep.hasLeak ? '5,3' : undefined}
               />
-              <text x={12} y={21} fill={C.text} fontSize={11.5} fontWeight={700} fontFamily="system-ui, sans-serif">
+              <text x={12} y={21} fill={C.text} fontSize={11.5} fontWeight={700} fontFamily={SANS}>
                 {truncate(`${dName} Endpoints`, 25)}
               </text>
               {ep.entries.slice(0, 5).map((ent, idx) => {
                 const unreach = ent.unreachableAccessCount > 0 || ent.ssids.some((s) => !s.reachable);
-                const parts: string[] = [];
-                if (ent.accessCount > 0) parts.push(`${ent.accessCount}p`);
-                if (ent.ssids.length > 0) parts.push(`${ent.ssids.length} SSID`);
+                const parts = [
+                  ent.accessCount > 0 ? `${ent.accessCount}p` : '',
+                  ent.ssids.length > 0 ? `${ent.ssids.length} SSID` : '',
+                ].filter(Boolean);
                 const prefix = ent.hasLeak ? '⚠ ' : unreach ? '⊘ ' : '';
                 return (
                   <text
-                    key={`${ep.id}-v${ent.vlanId}`}
-                    x={12}
-                    y={41 + idx * 18}
+                    key={`${ep.id}-v${ent.vlanId}`} x={12} y={41 + idx * 18}
                     fill={ent.hasLeak ? C.red : unreach ? C.amber : C.dim}
-                    fontSize={10}
-                    fontWeight={ent.hasLeak || unreach ? 700 : 500}
-                    fontFamily="ui-monospace, monospace"
+                    fontSize={10} fontWeight={ent.hasLeak || unreach ? 700 : 500} fontFamily={MONO}
                   >
                     {truncate(`${prefix}V${ent.vlanId}: ${parts.join(' · ')}`, 30)}
                   </text>
                 );
               })}
               {ep.entries.length > 5 && (
-                <text x={12} y={41 + 5 * 18} fill={C.dim} fontSize={9.5} fontFamily="ui-monospace, monospace">
+                <text x={12} y={41 + 5 * 18} fill={C.dim} fontSize={9.5} fontFamily={MONO}>
                   +{ep.entries.length - 5} more VLAN(s)
                 </text>
               )}
@@ -693,11 +496,7 @@ export function VlanFlowCanvas({
   const vColor = getVlanColor(activeVlan.id, vlanColors, isDark);
 
   const leakGradients = Array.from(
-    new Set(
-      singleLayout.ribbons
-        .filter((r) => r.state === 'leak' && r.foreignVlanId != null)
-        .map((r) => r.foreignVlanId!),
-    ),
+    new Set(singleLayout.ribbons.filter((r) => r.state === 'leak' && r.foreignVlanId != null).map((r) => r.foreignVlanId!)),
     (foreignVid) => ({
       id: `np-grad-leak-${activeVlan.id}-${foreignVid}`,
       foreignColor: getVlanColor(foreignVid, vlanColors, isDark),
@@ -710,11 +509,7 @@ export function VlanFlowCanvas({
     const handleClick = r.finding ? () => onSelectFinding(r.finding!) : undefined;
 
     if (r.kind === 'segment_link') {
-      return (
-        <g key={`path-${r.id}`}>
-          <path d={d} fill="none" stroke={vColor} strokeWidth={3.2} strokeLinecap="round" />
-        </g>
-      );
+      return <g key={`path-${r.id}`}><path d={d} fill="none" stroke={vColor} strokeWidth={3.2} strokeLinecap="round" /></g>;
     }
 
     if (r.kind === 'endpoint_link') {
@@ -726,39 +521,18 @@ export function VlanFlowCanvas({
         );
       }
       if (r.state === 'stranded') {
-        return (
-          <g key={`path-${r.id}`}>
-            <path d={d} fill="none" stroke={C.amber} strokeWidth={2.2} strokeDasharray="5,4" opacity={0.8} />
-          </g>
-        );
+        return <g key={`path-${r.id}`}><path d={d} fill="none" stroke={C.amber} strokeWidth={2.2} strokeDasharray="5,4" opacity={0.8} /></g>;
       }
       if (r.linkKind === 'wireless_uplink') {
-        return (
-          <g key={`path-${r.id}`}>
-            <path d={d} fill="none" stroke={vColor} strokeWidth={2.6} strokeDasharray="5,4" strokeLinecap="round" />
-          </g>
-        );
+        return <g key={`path-${r.id}`}><path d={d} fill="none" stroke={vColor} strokeWidth={2.6} strokeDasharray="5,4" strokeLinecap="round" /></g>;
       }
-      return (
-        <g key={`path-${r.id}`}>
-          <Rail d={d} stroke={vColor} width={4.6} innerWidth={1.8} canvas={C.canvas} />
-        </g>
-      );
+      return <g key={`path-${r.id}`}><Rail d={d} stroke={vColor} width={4.6} innerWidth={1.8} canvas={C.canvas} /></g>;
     }
 
-    // Infrastructure hop ribbon
     if (r.state === 'leak') {
       const gid = r.foreignVlanId != null ? `np-grad-leak-${activeVlan.id}-${r.foreignVlanId}` : undefined;
       return (
-        <RibbonGroup
-          key={`path-${r.id}`}
-          d={d}
-          selected={isSelFinding}
-          onClick={handleClick}
-          hitWidth={20}
-          glowWidth={10}
-          glowOpacity={0.45}
-        >
+        <RibbonGroup key={`path-${r.id}`} d={d} selected={isSelFinding} onClick={handleClick} hitWidth={20} glowWidth={10} glowOpacity={0.45}>
           <Rail d={d} stroke={gid ? `url(#${gid})` : C.red} width={6.4} innerWidth={2} innerDash="5,5" canvas={C.canvas} />
         </RibbonGroup>
       );
@@ -768,25 +542,17 @@ export function VlanFlowCanvas({
       const midX = ribbonMidX(r);
       const stopY = (r.y1 + r.y2) / 2;
       const fromCarries = r.fromMode !== 'none';
-      const dBefore = bezierPath(r.x1, r.y1, midX - 6, stopY);
-      const dAfter = bezierPath(midX + 6, stopY, r.x2, r.y2);
       return (
         <RibbonGroup key={`path-${r.id}`} d={d} selected={isSelFinding} onClick={handleClick}>
           <path
-            d={dBefore}
-            fill="none"
-            stroke={fromCarries ? vColor : C.amber}
-            strokeWidth={fromCarries ? 3.2 : 2}
-            strokeDasharray={fromCarries ? undefined : '4,4'}
-            opacity={fromCarries ? 1 : 0.72}
+            d={bezierPath(r.x1, r.y1, midX - 6, stopY)} fill="none"
+            stroke={fromCarries ? vColor : C.amber} strokeWidth={fromCarries ? 3.2 : 2}
+            strokeDasharray={fromCarries ? undefined : '4,4'} opacity={fromCarries ? 1 : 0.72}
           />
           <path
-            d={dAfter}
-            fill="none"
-            stroke={fromCarries ? C.amber : vColor}
-            strokeWidth={fromCarries ? 2 : 3.2}
-            strokeDasharray={fromCarries ? '4,4' : undefined}
-            opacity={fromCarries ? 0.72 : 1}
+            d={bezierPath(midX + 6, stopY, r.x2, r.y2)} fill="none"
+            stroke={fromCarries ? C.amber : vColor} strokeWidth={fromCarries ? 2 : 3.2}
+            strokeDasharray={fromCarries ? '4,4' : undefined} opacity={fromCarries ? 0.72 : 1}
           />
           <line x1={midX} y1={stopY - 12} x2={midX} y2={stopY + 12} stroke={C.amber} strokeWidth={3.2} strokeLinecap="round" />
         </RibbonGroup>
@@ -802,40 +568,18 @@ export function VlanFlowCanvas({
     }
 
     if (r.state === 'unverified') {
-      return (
-        <g key={`path-${r.id}`}>
-          <path d={d} fill="none" stroke={C.gray} strokeWidth={2.6} strokeDasharray="3,4" strokeLinecap="round" />
-        </g>
-      );
+      return <g key={`path-${r.id}`}><path d={d} fill="none" stroke={C.gray} strokeWidth={2.6} strokeDasharray="3,4" strokeLinecap="round" /></g>;
     }
-
-    // Carried hop
     if (r.linkKind === 'lag') {
-      return (
-        <g key={`path-${r.id}`}>
-          <Rail d={d} stroke={vColor} width={6.5} innerWidth={2} canvas={C.canvas} />
-        </g>
-      );
+      return <g key={`path-${r.id}`}><Rail d={d} stroke={vColor} width={6.5} innerWidth={2} canvas={C.canvas} /></g>;
     }
     if (r.fromMode === 'untagged' && r.toMode === 'untagged') {
-      return (
-        <g key={`path-${r.id}`}>
-          <Rail d={d} stroke={vColor} width={5.2} innerWidth={2.2} canvas={C.canvas} />
-        </g>
-      );
+      return <g key={`path-${r.id}`}><Rail d={d} stroke={vColor} width={5.2} innerWidth={2.2} canvas={C.canvas} /></g>;
     }
     if (r.linkKind === 'wireless_uplink') {
-      return (
-        <g key={`path-${r.id}`}>
-          <path d={d} fill="none" stroke={vColor} strokeWidth={2.8} strokeDasharray="6,4" strokeLinecap="round" />
-        </g>
-      );
+      return <g key={`path-${r.id}`}><path d={d} fill="none" stroke={vColor} strokeWidth={2.8} strokeDasharray="6,4" strokeLinecap="round" /></g>;
     }
-    return (
-      <g key={`path-${r.id}`}>
-        <path d={d} fill="none" stroke={vColor} strokeWidth={3.2} strokeLinecap="round" />
-      </g>
-    );
+    return <g key={`path-${r.id}`}><path d={d} fill="none" stroke={vColor} strokeWidth={3.2} strokeLinecap="round" /></g>;
   };
 
   const renderRibbonOverlay = (r: FlowRibbon) => {
@@ -846,27 +590,11 @@ export function VlanFlowCanvas({
     const handleClick = r.finding ? () => onSelectFinding(r.finding!) : undefined;
 
     if (r.kind === 'endpoint_link') {
-      const label = r.isForeignLeak
-        ? `LEAK → ${r.foreignVlanId}`
-        : r.state === 'stranded'
-          ? 'STRANDED'
-          : r.linkKind === 'wireless_uplink'
-            ? 'Wi-Fi'
-            : 'U';
+      const label = r.isForeignLeak ? `LEAK → ${r.foreignVlanId}` : r.state === 'stranded' ? 'STRANDED' : r.linkKind === 'wireless_uplink' ? 'Wi-Fi' : 'U';
       const color = r.isForeignLeak ? C.red : r.state === 'stranded' ? C.amber : vColor;
       return (
         <g key={`ov-${r.id}`} style={{ cursor: handleClick ? 'pointer' : undefined }} onClick={handleClick}>
-          <Pill
-            x={mx}
-            y={my}
-            width={Math.max(26, label.length * 6.0 + 12)}
-            height={19}
-            fill={C.surface}
-            textFill={color}
-            stroke={color}
-            strokeWidth={1.3}
-            label={label}
-          />
+          <Pill x={mx} y={my} width={Math.max(26, label.length * 6.0 + 12)} height={19} fill={C.surface} textFill={color} stroke={color} strokeWidth={1.3} label={label} />
         </g>
       );
     }
@@ -875,18 +603,7 @@ export function VlanFlowCanvas({
       const lbl = r.finding ? `⚠ LEAK ${r.finding.vlans[0]}→${r.finding.vlans[1]}` : '⚠ LEAK';
       return (
         <SvgButton key={`ov-${r.id}`} label={r.finding?.message || 'VLAN leak'} onClick={handleClick}>
-          <Pill
-            x={mx}
-            y={my}
-            width={Math.max(96, lbl.length * 6.2 + 16)}
-            height={22}
-            fill={C.red}
-            textFill="#ffffff"
-            stroke={C.surface}
-            strokeWidth={1.2}
-            fontWeight={800}
-            label={lbl}
-          />
+          <Pill x={mx} y={my} width={Math.max(96, lbl.length * 6.2 + 16)} height={22} fill={C.red} textFill="#ffffff" stroke={C.surface} strokeWidth={1.2} fontWeight={800} label={lbl} />
         </SvgButton>
       );
     }
@@ -894,16 +611,7 @@ export function VlanFlowCanvas({
     if (r.state === 'dead_end') {
       return (
         <SvgButton key={`ov-${r.id}`} label={r.finding?.message || 'VLAN dead-end'} onClick={handleClick}>
-          <Pill
-            x={mx}
-            y={my - 18.5}
-            width={88}
-            height={19}
-            fill={C.amber}
-            textFill={C.amberInk}
-            fontWeight={800}
-            label="⊘ DEAD-END"
-          />
+          <Pill x={mx} y={my - 18.5} width={88} height={19} fill={C.amber} textFill={C.amberInk} fontWeight={800} label="⊘ DEAD-END" />
         </SvgButton>
       );
     }
@@ -912,16 +620,7 @@ export function VlanFlowCanvas({
       const lbl = `⇄ ${modeShort(r.fromMode)}≠${modeShort(r.toMode)}`;
       return (
         <SvgButton key={`ov-${r.id}`} label={r.finding?.message || 'VLAN tag mismatch'} onClick={handleClick}>
-          <Pill
-            x={mx}
-            y={my}
-            width={Math.max(76, lbl.length * 6.4 + 14)}
-            height={20}
-            fill={C.amber}
-            textFill={C.amberInk}
-            fontWeight={800}
-            label={lbl}
-          />
+          <Pill x={mx} y={my} width={Math.max(76, lbl.length * 6.4 + 14)} height={20} fill={C.amber} textFill={C.amberInk} fontWeight={800} label={lbl} />
         </SvgButton>
       );
     }
@@ -930,18 +629,7 @@ export function VlanFlowCanvas({
       const lbl = r.linkKind === 'wireless_uplink' ? '? Wi-Fi' : '? UNVERIFIED';
       return (
         <g key={`ov-${r.id}`}>
-          <Pill
-            x={mx}
-            y={my}
-            width={Math.max(66, lbl.length * 6.0 + 14)}
-            height={19}
-            fill={C.surface}
-            textFill={C.gray}
-            stroke={C.gray}
-            strokeWidth={1.3}
-            strokeDasharray="3,2"
-            label={lbl}
-          />
+          <Pill x={mx} y={my} width={Math.max(66, lbl.length * 6.0 + 14)} height={19} fill={C.surface} textFill={C.gray} stroke={C.gray} strokeWidth={1.3} strokeDasharray="3,2" label={lbl} />
         </g>
       );
     }
@@ -949,17 +637,7 @@ export function VlanFlowCanvas({
     const lbl = modePill(r.fromMode, r.toMode, r.linkKind);
     return (
       <g key={`ov-${r.id}`}>
-        <Pill
-          x={mx}
-          y={my}
-          width={Math.max(28, lbl.length * 6.0 + 12)}
-          height={19}
-          fill={C.surface}
-          textFill={vColor}
-          stroke={vColor}
-          strokeWidth={1.3}
-          label={lbl}
-        />
+        <Pill x={mx} y={my} width={Math.max(28, lbl.length * 6.0 + 12)} height={19} fill={C.surface} textFill={vColor} stroke={vColor} strokeWidth={1.3} label={lbl} />
       </g>
     );
   };
@@ -972,13 +650,7 @@ export function VlanFlowCanvas({
       aria-label={`VLAN ${activeVlan.id}${activeVlan.name ? ` ${activeVlan.name}` : ''} flow diagram`}
     >
       <defs>
-        <pattern
-          id="np-hatch-unreach"
-          width="8"
-          height="8"
-          patternUnits="userSpaceOnUse"
-          patternTransform="rotate(45)"
-        >
+        <pattern id="np-hatch-unreach" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
           <line x1="0" y1="0" x2="0" y2="8" stroke={C.amber} strokeWidth="1.5" strokeOpacity="0.24" />
         </pattern>
         {leakGradients.map((g) => (
@@ -992,8 +664,6 @@ export function VlanFlowCanvas({
       </defs>
 
       <ColumnHeaders columns={singleLayout.columns} C={C} />
-
-      {/* Ribbons (under cards) */}
       {singleLayout.ribbons.map(renderRibbonPaths)}
 
       {/* Segment / Zone cards */}
@@ -1001,41 +671,26 @@ export function VlanFlowCanvas({
         if (sc.kind === 'foreign_leak' && sc.finding) {
           const fColor = getVlanColor(sc.vlanId, vlanColors, isDark);
           const fZone = sc.gateway?.zone_name || sc.gateway?.zone_id;
-          const fAddr = sc.gateway?.addresses[0]
-            ? `${sc.gateway.addresses[0].address}/${sc.gateway.addresses[0].prefix_length}`
-            : null;
+          const fAddr = sc.gateway?.addresses[0] ? `${sc.gateway.addresses[0].address}/${sc.gateway.addresses[0].prefix_length}` : null;
           return (
-            <SvgButton
-              key={sc.id}
-              transform={`translate(${sc.x}, ${sc.y})`}
-              label={`Inspect foreign VLAN ${sc.vlanId} leak`}
-              onClick={() => onSelectFinding(sc.finding!)}
-            >
+            <SvgButton key={sc.id} transform={`translate(${sc.x}, ${sc.y})`} label={`Inspect foreign VLAN ${sc.vlanId} leak`} onClick={() => onSelectFinding(sc.finding!)}>
               <rect
-                width={sc.width}
-                height={sc.height}
-                rx={6}
+                width={sc.width} height={sc.height} rx={6}
                 fill={C.isDark ? 'rgba(255,107,107,0.10)' : 'rgba(201,42,42,0.06)'}
-                stroke={C.red}
-                strokeWidth={1.6}
-                strokeDasharray="5,3"
+                stroke={C.red} strokeWidth={1.6} strokeDasharray="5,3"
               />
               <rect width={5} height={sc.height} rx={2} fill={fColor} />
-              <text x={14} y={21} fill={C.red} fontSize={9.5} fontWeight={800} fontFamily="ui-monospace, monospace">
-                ⚠ FOREIGN VLAN LEAKED
-              </text>
-              <text x={14} y={40} fill={C.text} fontSize={13} fontWeight={700} fontFamily="system-ui, sans-serif">
+              <text x={14} y={21} fill={C.red} fontSize={9.5} fontWeight={800} fontFamily={MONO}>⚠ FOREIGN VLAN LEAKED</text>
+              <text x={14} y={40} fill={C.text} fontSize={13} fontWeight={700} fontFamily={SANS}>
                 {truncate(`VLAN ${sc.vlanId}${sc.vlanName ? ` · ${sc.vlanName}` : ''}`, 24)}
               </text>
               {(fZone || fAddr) && (
-                <text x={14} y={58} fill={C.dim} fontSize={10} fontFamily="ui-monospace, monospace">
+                <text x={14} y={58} fill={C.dim} fontSize={10} fontFamily={MONO}>
                   {truncate([fZone ? `zone:${fZone}` : '', fAddr || ''].filter(Boolean).join(' · '), 28)}
                 </text>
               )}
-              <text x={14} y={78} fill={C.red} fontSize={10} fontWeight={600} fontFamily="system-ui, sans-serif">
-                Cross-VLAN untagged bridge
-              </text>
-              <text x={14} y={96} fill={C.dim} fontSize={9.5} fontFamily="ui-monospace, monospace">
+              <text x={14} y={78} fill={C.red} fontSize={10} fontWeight={600} fontFamily={SANS}>Cross-VLAN untagged bridge</text>
+              <text x={14} y={96} fill={C.dim} fontSize={9.5} fontFamily={MONO}>
                 {truncate(portLabel(devicesById, sc.finding.device_id, sc.finding.link), 28)}
               </text>
             </SvgButton>
@@ -1046,40 +701,31 @@ export function VlanFlowCanvas({
         const gwDev = devicesById.get(gw.device_id);
         const zoneLabel = gw.zone_name || gw.zone_id;
         return (
-          <SvgButton
-            key={sc.id}
-            transform={`translate(${sc.x}, ${sc.y})`}
-            label={`Open gateway ${gwDev?.name || gw.device_id}`}
-            onClick={() => onOpenDevice(gw.device_id)}
-          >
+          <SvgButton key={sc.id} transform={`translate(${sc.x}, ${sc.y})`} label={`Open gateway ${gwDev?.name || gw.device_id}`} onClick={() => onOpenDevice(gw.device_id)}>
             <rect width={sc.width} height={sc.height} rx={6} fill={C.surface} stroke={vColor} strokeWidth={1.6} />
             <rect width={5} height={sc.height} rx={2} fill={vColor} />
-            <text x={14} y={22} fill={vColor} fontSize={10} fontWeight={800} fontFamily="ui-monospace, monospace">
+            <text x={14} y={22} fill={vColor} fontSize={10} fontWeight={800} fontFamily={MONO}>
               {truncate(zoneLabel ? `ZONE: ${zoneLabel.toUpperCase()}` : 'L3 SEGMENT', 26)}
             </text>
-            <text x={14} y={41} fill={C.text} fontSize={13.5} fontWeight={700} fontFamily="system-ui, sans-serif">
+            <text x={14} y={41} fill={C.text} fontSize={13.5} fontWeight={700} fontFamily={SANS}>
               {truncate(`VLAN ${sc.vlanId}${sc.vlanName ? ` · ${sc.vlanName}` : ''}`, 23)}
             </text>
-            <text x={14} y={58} fill={C.dim} fontSize={10.5} fontFamily="ui-monospace, monospace">
+            <text x={14} y={58} fill={C.dim} fontSize={10.5} fontFamily={MONO}>
               {truncate(`${gw.segment_name} (${gwDev?.name || gw.device_id})`, 27)}
             </text>
             <line x1={14} y1={68} x2={sc.width - 14} y2={68} stroke={C.borderSoft} />
             {gw.addresses.slice(0, 2).map((a, idx) => (
-              <text key={`${a.address}/${a.prefix_length}`} x={14} y={85 + idx * 16} fill={C.text} fontSize={10.5} fontFamily="ui-monospace, monospace">
+              <text key={`${a.address}/${a.prefix_length}`} x={14} y={85 + idx * 16} fill={C.text} fontSize={10.5} fontFamily={MONO}>
                 {truncate(`${a.address}/${a.prefix_length}`, 26)}
               </text>
             ))}
             {gw.addresses.length === 0 && (
-              <text x={14} y={85} fill={C.dim} fontSize={10.5} fontFamily="ui-monospace, monospace">
-                No L3 IP configured
-              </text>
+              <text x={14} y={85} fill={C.dim} fontSize={10.5} fontFamily={MONO}>No L3 IP configured</text>
             )}
             {gw.is_management && (
               <g transform={`translate(14, ${sc.height - 25})`}>
                 <rect width={84} height={17} rx={3} fill={C.subtle} stroke={vColor} />
-                <text x={42} y={12} textAnchor="middle" fill={vColor} fontSize={9.5} fontWeight={700} fontFamily="ui-monospace, monospace">
-                  MANAGEMENT
-                </text>
+                <text x={42} y={12} textAnchor="middle" fill={vColor} fontSize={9.5} fontWeight={700} fontFamily={MONO}>MANAGEMENT</text>
               </g>
             )}
           </SvgButton>
@@ -1090,60 +736,38 @@ export function VlanFlowCanvas({
       {singleLayout.deviceCards.map((dc) => {
         const dev = devicesById.get(dc.deviceId);
         const dName = dev?.name || dc.deviceId;
-        const devFindings = flow.findings.filter(
-          (f) => f.vlans.includes(activeVlan.id) && (f.device_id === dc.deviceId || f.peer_id === dc.deviceId),
+        const hasLeak = flow.findings.some(
+          (f) => f.kind === 'leak' && f.vlans.includes(activeVlan.id) && (f.device_id === dc.deviceId || f.peer_id === dc.deviceId),
         );
-        const hasLeak = devFindings.some((f) => f.kind === 'leak');
         const unreached = dc.hasGateway && !dc.reached;
         const stroke = hasLeak ? C.red : unreached ? C.amber : C.border;
-
-        const footerParts: string[] = [];
-        if (dc.localAccessCount > 0) footerParts.push(`${dc.localAccessCount} access`);
-        if (dc.localSsidCount > 0) footerParts.push(`${dc.localSsidCount} SSID`);
+        const footerParts = [
+          dc.localAccessCount > 0 ? `${dc.localAccessCount} access` : '',
+          dc.localSsidCount > 0 ? `${dc.localSsidCount} SSID` : '',
+        ].filter(Boolean);
 
         return (
           <g key={dc.id}>
-            <SvgButton
-              transform={`translate(${dc.x}, ${dc.y})`}
-              label={`Open device ${dName}`}
-              onClick={() => onOpenDevice(dc.deviceId)}
-            >
+            <SvgButton transform={`translate(${dc.x}, ${dc.y})`} label={`Open device ${dName}`} onClick={() => onOpenDevice(dc.deviceId)}>
               <rect
-                width={dc.width}
-                height={dc.height}
-                rx={6}
+                width={dc.width} height={dc.height} rx={6}
                 fill={unreached ? 'url(#np-hatch-unreach)' : C.surface}
-                stroke={stroke}
-                strokeWidth={hasLeak || unreached ? 1.7 : 1.3}
+                stroke={stroke} strokeWidth={hasLeak || unreached ? 1.7 : 1.3}
                 strokeDasharray={unreached && !hasLeak ? '5,3' : undefined}
               />
               <DeviceCardHead width={dc.width} deviceId={dc.deviceId} dev={dev} C={C} />
-              <text
-                x={12}
-                y={dc.height - 10}
-                fill={hasLeak ? C.red : unreached ? C.amber : C.dim}
-                fontSize={9.5}
-                fontWeight={hasLeak || unreached ? 700 : 500}
-                fontFamily="ui-monospace, monospace"
-              >
+              <text x={12} y={dc.height - 10} fill={hasLeak ? C.red : unreached ? C.amber : C.dim} fontSize={9.5} fontWeight={hasLeak || unreached ? 700 : 500} fontFamily={MONO}>
                 {hasLeak
                   ? '⚠ CROSS-VLAN LEAK'
                   : unreached
                     ? `⊘ UNREACHABLE ON V${activeVlan.id}`
                     : footerParts.length > 0
                       ? footerParts.join(' · ')
-                      : dc.hasGateway
-                        ? '✓ Reaches gateway'
-                        : 'L2 transit'}
+                      : dc.hasGateway ? '✓ Reaches gateway' : 'L2 transit'}
               </text>
             </SvgButton>
-
-            {dc.leftPorts.map((chip) => (
-              <PortChipSvg key={chip.id} chip={chip} vColor={vColor} C={C} />
-            ))}
-            {dc.rightPorts.map((chip) => (
-              <PortChipSvg key={chip.id} chip={chip} vColor={vColor} C={C} />
-            ))}
+            {dc.leftPorts.map((chip) => <PortChipSvg key={chip.id} chip={chip} vColor={vColor} C={C} />)}
+            {dc.rightPorts.map((chip) => <PortChipSvg key={chip.id} chip={chip} vColor={vColor} C={C} />)}
           </g>
         );
       })}
@@ -1151,58 +775,25 @@ export function VlanFlowCanvas({
       {/* Endpoint cards */}
       {singleLayout.endpointCards.map((ep) => {
         const dName = deviceName(devicesById, ep.deviceId);
-        const handleClick = ep.finding
-          ? () => onSelectFinding(ep.finding!)
-          : () => onOpenDevice(ep.deviceId);
+        const handleClick = ep.finding ? () => onSelectFinding(ep.finding!) : () => onOpenDevice(ep.deviceId);
         const fill = ep.isForeignLeak
-          ? C.isDark
-            ? 'rgba(255,107,107,0.10)'
-            : 'rgba(201,42,42,0.06)'
-          : ep.allUnreachable
-            ? 'url(#np-hatch-unreach)'
-            : C.surface;
+          ? C.isDark ? 'rgba(255,107,107,0.10)' : 'rgba(201,42,42,0.06)'
+          : ep.allUnreachable ? 'url(#np-hatch-unreach)' : C.surface;
         const stroke = ep.isForeignLeak ? C.red : ep.allUnreachable ? C.amber : vColor;
-        const title = ep.isForeignLeak
-          ? `⚠ LEAKED V${ep.vlanId} ON ${dName}`
-          : ep.allUnreachable
-            ? `⊘ Stranded · ${dName}`
-            : `${dName} Endpoints`;
+        const title = ep.isForeignLeak ? `⚠ LEAKED V${ep.vlanId} ON ${dName}` : ep.allUnreachable ? `⊘ Stranded · ${dName}` : `${dName} Endpoints`;
 
         return (
-          <SvgButton
-            key={ep.id}
-            transform={`translate(${ep.x}, ${ep.y})`}
-            label={title}
-            onClick={handleClick}
-          >
+          <SvgButton key={ep.id} transform={`translate(${ep.x}, ${ep.y})`} label={title} onClick={handleClick}>
             <rect
-              width={ep.width}
-              height={ep.height}
-              rx={6}
-              fill={fill}
-              stroke={stroke}
+              width={ep.width} height={ep.height} rx={6} fill={fill} stroke={stroke}
               strokeWidth={ep.isForeignLeak || ep.allUnreachable ? 1.5 : 1.3}
               strokeDasharray={ep.allUnreachable && !ep.isForeignLeak ? '5,3' : undefined}
             />
-            <text
-              x={12}
-              y={21}
-              fill={ep.isForeignLeak ? C.red : ep.allUnreachable ? C.amber : C.text}
-              fontSize={11}
-              fontWeight={700}
-              fontFamily="system-ui, sans-serif"
-            >
+            <text x={12} y={21} fill={ep.isForeignLeak ? C.red : ep.allUnreachable ? C.amber : C.text} fontSize={11} fontWeight={700} fontFamily={SANS}>
               {truncate(title, 28)}
             </text>
             {ep.lines.map((ln, idx) => (
-              <text
-                key={`${ep.id}-ln-${idx}`}
-                x={12}
-                y={41 + idx * 18}
-                fill={ln.tone === 'warn' ? C.amber : ln.tone === 'dim' ? C.dim : C.text}
-                fontSize={10}
-                fontFamily="ui-monospace, monospace"
-              >
+              <text key={`${ep.id}-ln-${idx}`} x={12} y={41 + idx * 18} fill={ln.tone === 'warn' ? C.amber : ln.tone === 'dim' ? C.dim : C.text} fontSize={10} fontFamily={MONO}>
                 {truncate(ln.text, 31)}
               </text>
             ))}
@@ -1210,7 +801,6 @@ export function VlanFlowCanvas({
         );
       })}
 
-      {/* Midpoint pill overlays (topmost layer) */}
       {singleLayout.ribbons.map(renderRibbonOverlay)}
     </svg>
   );

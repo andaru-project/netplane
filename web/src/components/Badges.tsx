@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Badge, useComputedColorScheme } from '@mantine/core';
 import type { VLANFlowFinding, VLANFlowVLAN } from '../api';
-import { type ColorPair, getVlanColor } from '../vlanUtils';
+import { type ColorPair, getVlanColor, vlanHealth, vlanLabel } from '../vlanUtils';
 
 export function DriverBadge({ driver }: { driver: string }) {
   if (driver === 'andaru') {
@@ -40,7 +40,6 @@ export function VlanChip({
 }) {
   const isDark = useComputedColorScheme('light') === 'dark';
   if (vid == null) return <span style={{ color: 'var(--np-text-dim)' }}>—</span>;
-  const v = vlansById.get(vid);
   const color = getVlanColor(vid, colorMap, isDark);
   return (
     <Badge
@@ -51,7 +50,7 @@ export function VlanChip({
       styles={{ root: { textTransform: 'none', fontWeight: 600, color: 'var(--np-text)' } }}
       leftSection={<span className="np-vlan-swatch" style={{ background: color }} />}
     >
-      {v?.name ? `${vid} · ${v.name}` : `VLAN ${vid}`}
+      {vlanLabel(vlansById, vid)}
     </Badge>
   );
 }
@@ -69,22 +68,22 @@ export function FindingBadge({ finding }: { finding: Pick<VLANFlowFinding, 'kind
 export function VlanHealthBadge({
   vlan,
   findings,
+  compact = false,
 }: {
   vlan: VLANFlowVLAN;
   findings: VLANFlowFinding[];
+  compact?: boolean;
 }) {
-  const vFindings = findings.filter((f) => f.vlans.includes(vlan.id));
-  if (vFindings.some((f) => f.kind === 'leak')) {
-    return <Badge size="xs" variant="light" color="red">⚠ Leak</Badge>;
+  switch (vlanHealth(vlan, findings)) {
+    case 'leak':
+      return <Badge size="xs" variant="light" color="red">⚠ Leak</Badge>;
+    case 'dead_end':
+      return <Badge size="xs" variant="light" color="yellow">{compact ? '⊘ Dead-end' : '⊘ Dead-End'}</Badge>;
+    case 'mismatch':
+      return <Badge size="xs" variant="light" color="orange">⇄ Mismatch</Badge>;
+    case 'unverified':
+      return <Badge size="xs" variant="outline" color="gray">{compact ? '?' : '? Unverified'}</Badge>;
+    case 'ok':
+      return <Badge size="xs" variant="light" color="green">{compact ? '✓' : '✓ Clean'}</Badge>;
   }
-  if (vFindings.some((f) => f.kind === 'dead_end')) {
-    return <Badge size="xs" variant="light" color="yellow">⊘ Dead-End</Badge>;
-  }
-  if (vFindings.some((f) => f.kind === 'tag_mismatch')) {
-    return <Badge size="xs" variant="light" color="orange">⇄ Mismatch</Badge>;
-  }
-  if (vlan.hops.some((h) => h.state === 'unverified')) {
-    return <Badge size="xs" variant="outline" color="gray">? Unverified</Badge>;
-  }
-  return <Badge size="xs" variant="light" color="green">✓ Clean</Badge>;
 }

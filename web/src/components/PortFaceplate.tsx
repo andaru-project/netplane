@@ -12,7 +12,7 @@ import {
   Tooltip,
   useComputedColorScheme,
 } from '@mantine/core';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   type Device,
   formatBps,
@@ -35,61 +35,44 @@ import {
   isStpBlocked,
 } from '../vlanUtils';
 import { VlanChip } from './Badges';
+import { CardHeader, FindingCallout, PortButton, Stat } from './ui';
 
 interface Props {
   device: Device;
   links: Link[];
-  lagGroups?: LagGroup[];
-  flow?: VLANFlow | null;
-  state?: NetworkState | null;
-  topology?: TopologyGraph | null;
-  devicesById?: Map<string, Device>;
-  vlanColors?: Map<number, ColorPair>;
-  selectedPort?: string | null;
-  onSelectPort?: (ifName: string) => void;
-  onOpenDevice?: (deviceId: string, portName?: string | null) => void;
-  onOpenVlanFlow?: (vlanId: number, findingId?: string | null) => void;
+  lagGroups: LagGroup[];
+  flow: VLANFlow | null;
+  state: NetworkState | null;
+  topology: TopologyGraph | null;
+  devicesById: Map<string, Device>;
+  vlansById: Map<number, VLANFlowVLAN>;
+  vlanColors: Map<number, ColorPair>;
+  selectedPort: string | null;
+  onSelectPort: (ifName: string) => void;
+  onOpenDevice: (deviceId: string, portName?: string | null) => void;
+  onOpenVlanFlow: (vlanId: number, findingId?: string | null) => void;
 }
 
 export function PortFaceplate({
   device,
   links,
-  lagGroups = [],
-  flow = null,
-  state = null,
-  topology = null,
-  devicesById = new Map(),
-  vlanColors = new Map(),
-  selectedPort = null,
+  lagGroups,
+  flow,
+  state,
+  topology,
+  devicesById,
+  vlansById,
+  vlanColors,
+  selectedPort,
   onSelectPort,
   onOpenDevice,
   onOpenVlanFlow,
 }: Props) {
   const isDark = useComputedColorScheme('light') === 'dark';
   const sortedLinks = useMemo(() => [...links].sort((a, b) => a.index - b.index), [links]);
-  const [internalPort, setInternalPort] = useState<string | null>(selectedPort ?? sortedLinks[0]?.if_name ?? null);
   const [hlVlan, setHlVlan] = useState<number | null>(null);
 
-  useEffect(() => {
-    if (selectedPort) {
-      setInternalPort(selectedPort);
-    } else if (sortedLinks.length > 0 && !sortedLinks.some((l) => l.if_name === internalPort)) {
-      setInternalPort(sortedLinks[0].if_name);
-    }
-  }, [selectedPort, sortedLinks, internalPort]);
-
-  const activePortName = selectedPort ?? internalPort;
-  const selected = sortedLinks.find((l) => l.if_name === activePortName) ?? sortedLinks[0] ?? null;
-
-  const selectPort = (ifName: string) => {
-    setInternalPort(ifName);
-    onSelectPort?.(ifName);
-  };
-
-  const vlansById = useMemo(
-    () => new Map<number, VLANFlowVLAN>((flow?.vlans ?? []).map((v) => [v.id, v])),
-    [flow],
-  );
+  const selected = sortedLinks.find((l) => l.if_name === selectedPort) ?? sortedLinks[0] ?? null;
 
   const deviceVlans = useMemo(() => {
     const ids = new Set<number>();
@@ -150,7 +133,7 @@ export function PortFaceplate({
         <button
           type="button"
           className={classes.join(' ')}
-          onClick={() => selectPort(l.if_name)}
+          onClick={() => onSelectPort(l.if_name)}
           aria-pressed={isSel}
         >
           <span className="np-port-name">{l.if_name}</span>
@@ -192,14 +175,7 @@ export function PortFaceplate({
 
   return (
     <Card withBorder radius="md" p={0}>
-      <Group
-        justify="space-between"
-        px="md"
-        py="sm"
-        wrap="wrap"
-        gap="xs"
-        style={{ borderBottom: '1px solid var(--np-border-subtle)' }}
-      >
+      <CardHeader>
         <Group gap="xs" wrap="wrap">
           <Text fw={700} size="sm">Port Faceplate</Text>
           <Text size="xs" c="dimmed">Click any port to inspect VLANs, peer link, counters, and DOM</Text>
@@ -233,7 +209,7 @@ export function PortFaceplate({
             ))}
           </Group>
         )}
-      </Group>
+      </CardHeader>
 
       <Stack gap="md" p="md">
         <div className="np-faceplate-bezel">
@@ -269,15 +245,10 @@ export function PortFaceplate({
 
         {selected && (
           <Paper withBorder radius="md" p={0} style={{ background: 'var(--np-bg-subtle)' }}>
-            <Group
-              justify="space-between"
-              px="md"
+            <CardHeader
               py="xs"
-              wrap="wrap"
-              gap="xs"
               style={{
                 background: 'var(--np-bg-surface)',
-                borderBottom: '1px solid var(--np-border-subtle)',
                 borderTopLeftRadius: 'var(--mantine-radius-md)',
                 borderTopRightRadius: 'var(--mantine-radius-md)',
               }}
@@ -305,48 +276,43 @@ export function PortFaceplate({
                 {formatSpeed(selected.speed_mbps)} {selected.duplex ?? ''}
                 {selected.mtu ? ` · MTU ${selected.mtu}` : ''}
               </Text>
-            </Group>
+            </CardHeader>
 
             <Stack gap="sm" p="md">
               <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
-                <div>
-                  <Text size="10px" fw={700} tt="uppercase" c="dimmed">Throughput (RX / TX)</Text>
+                <Stat label="Throughput (RX / TX)">
                   <Text size="xs" ff="monospace" mt={2}>
                     {selected.rates
                       ? `${formatBps(selected.rates.rx_bps)} / ${formatBps(selected.rates.tx_bps)}`
                       : '—'}
                   </Text>
-                </div>
-                <div>
-                  <Text size="10px" fw={700} tt="uppercase" c="dimmed">Connected Peer</Text>
+                </Stat>
+                <Stat label="Connected Peer">
                   <div style={{ marginTop: 2 }}>
                     {selPeer ? (
-                      <Button
-                        size="compact-xs"
-                        variant="default"
-                        onClick={() => onOpenDevice?.(selPeer.peerId, selPeer.peerLink || null)}
-                      >
-                        {(selPeer.peerDevice?.name ?? selPeer.peerId)}
-                        {selPeer.peerLink ? `:${selPeer.peerLink}` : ''} ({selPeer.edge.evidence.toUpperCase()}) →
-                      </Button>
+                      <PortButton
+                        devicesById={devicesById}
+                        deviceId={selPeer.peerId}
+                        link={selPeer.peerLink}
+                        suffix={` (${selPeer.edge.evidence.toUpperCase()})`}
+                        onClick={() => onOpenDevice(selPeer.peerId, selPeer.peerLink || null)}
+                      />
                     ) : (
                       <Text size="xs" c="dimmed" ff="monospace">
                         {selected.label || 'Access / Endpoint'}
                       </Text>
                     )}
                   </div>
-                </div>
-                <div>
-                  <Text size="10px" fw={700} tt="uppercase" c="dimmed">EEE / Flow Control</Text>
+                </Stat>
+                <Stat label="EEE / Flow Control">
                   <Text size="xs" ff="monospace" mt={2}>
                     EEE: {selected.eee === undefined ? '—' : selected.eee ? 'ON' : 'OFF'} · FC:{' '}
                     {selected.flow_control
                       ? `${selected.flow_control.rx ? 'RX ' : ''}${selected.flow_control.tx ? 'TX' : ''}`.trim() || 'OFF'
                       : '—'}
                   </Text>
-                </div>
-                <div>
-                  <Text size="10px" fw={700} tt="uppercase" c="dimmed">Counters / PoE</Text>
+                </Stat>
+                <Stat label="Counters / PoE">
                   <Text size="xs" ff="monospace" mt={2}>
                     {selected.counters
                       ? `Err: ${selected.counters.rx_errors + selected.counters.tx_errors} · Drop: ${selected.counters.rx_dropped + selected.counters.tx_dropped}`
@@ -355,7 +321,7 @@ export function PortFaceplate({
                       ? ` · PoE ${selected.poe.enabled ? `${(selected.poe.watts ?? 0).toFixed(1)}W` : 'OFF'}${selected.poe.class ? ` (${selected.poe.class})` : ''}`
                       : ''}
                   </Text>
-                </div>
+                </Stat>
               </SimpleGrid>
 
               <Group
@@ -391,24 +357,14 @@ export function PortFaceplate({
                   ? describeFinding(f, flow, state, devicesById)
                   : { title: f.message, consequence: f.message };
                 return (
-                  <div key={findingKey(f)} className={`np-callout ${f.severity}`}>
-                    <Group justify="space-between" align="flex-start" wrap="wrap" gap="xs">
-                      <div style={{ flex: 1, minWidth: 200 }}>
-                        <Text size="xs" fw={700}>
-                          {f.kind === 'leak' ? '⚠' : f.kind === 'tag_mismatch' ? '⇄' : '⊘'} {desc.title}
-                        </Text>
-                        <Text size="xs" mt={3}>{desc.consequence}</Text>
-                      </div>
-                      {onOpenVlanFlow && f.vlans[0] != null && (
-                        <Button
-                          size="compact-xs"
-                          onClick={() => onOpenVlanFlow(f.vlans[0], findingKey(f))}
-                        >
-                          View in VLAN Flow →
-                        </Button>
-                      )}
-                    </Group>
-                  </div>
+                  <FindingCallout
+                    key={findingKey(f)}
+                    finding={f}
+                    title={desc.title}
+                    body={desc.consequence}
+                    actionLabel={f.vlans[0] != null ? 'View in VLAN Flow →' : undefined}
+                    onAction={f.vlans[0] != null ? () => onOpenVlanFlow(f.vlans[0], findingKey(f)) : undefined}
+                  />
                 );
               })}
 
@@ -448,8 +404,7 @@ export function PortFaceplate({
                     </Badge>
                   </Group>
                   <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="xs">
-                    <div>
-                      <Text size="10px" fw={700} tt="uppercase" c="dimmed">RX Optical Power</Text>
+                    <Stat label="RX Optical Power">
                       <Text
                         size="xs"
                         ff="monospace"
@@ -458,26 +413,23 @@ export function PortFaceplate({
                       >
                         {selected.sfp.rx_power_dbm != null ? `${selected.sfp.rx_power_dbm.toFixed(2)} dBm` : '—'}
                       </Text>
-                    </div>
-                    <div>
-                      <Text size="10px" fw={700} tt="uppercase" c="dimmed">TX Optical Power</Text>
+                    </Stat>
+                    <Stat label="TX Optical Power">
                       <Text size="xs" ff="monospace">
                         {selected.sfp.tx_power_dbm != null ? `${selected.sfp.tx_power_dbm.toFixed(2)} dBm` : '—'}
                       </Text>
-                    </div>
-                    <div>
-                      <Text size="10px" fw={700} tt="uppercase" c="dimmed">Module Temp</Text>
+                    </Stat>
+                    <Stat label="Module Temp">
                       <Text size="xs" ff="monospace">
                         {selected.sfp.temp_c != null ? `${selected.sfp.temp_c.toFixed(1)} °C` : '—'}
                       </Text>
-                    </div>
-                    <div>
-                      <Text size="10px" fw={700} tt="uppercase" c="dimmed">Vcc / Bias</Text>
+                    </Stat>
+                    <Stat label="Vcc / Bias">
                       <Text size="xs" ff="monospace">
                         {selected.sfp.voltage_v != null ? `${selected.sfp.voltage_v.toFixed(2)} V` : '—'}
                         {selected.sfp.bias_ma != null ? ` · ${selected.sfp.bias_ma.toFixed(1)} mA` : ''}
                       </Text>
-                    </div>
+                    </Stat>
                   </SimpleGrid>
                   {selected.sfp.rx_power_dbm != null && (
                     <Stack gap={4} mt="xs">

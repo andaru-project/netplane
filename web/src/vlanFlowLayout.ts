@@ -14,6 +14,14 @@ import type {
 import { findingKey } from './vlanUtils';
 
 type FlowColumnKind = 'segments' | 'vlans' | 'devices' | 'endpoints';
+type RibbonState = HopState | 'stranded';
+
+interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 interface FlowColumn {
   index: number;
@@ -24,17 +32,13 @@ interface FlowColumn {
   width: number;
 }
 
-interface FlowSegmentCard {
+interface FlowSegmentCard extends Rect {
   id: string;
   kind: 'gateway' | 'foreign_leak';
   vlanId: number;
   vlanName?: string;
   gateway?: VLANFlowGateway;
   finding?: VLANFlowFinding;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
 
 export interface FlowPortChip {
@@ -48,17 +52,13 @@ export interface FlowPortChip {
   y: number;
 }
 
-interface FlowDeviceCard {
+interface FlowDeviceCard extends Rect {
   id: string;
   deviceId: string;
   hopDistance: number;
   columnIndex: number;
   reached: boolean;
   hasGateway: boolean;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
   leftPorts: FlowPortChip[];
   rightPorts: FlowPortChip[];
   localAccessCount: number;
@@ -70,7 +70,7 @@ interface FlowEndpointLine {
   tone: 'normal' | 'dim' | 'warn';
 }
 
-interface FlowEndpointCard {
+interface FlowEndpointCard extends Rect {
   id: string;
   deviceId: string;
   vlanId: number;
@@ -79,13 +79,7 @@ interface FlowEndpointCard {
   lines: FlowEndpointLine[];
   allUnreachable: boolean;
   finding?: VLANFlowFinding;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
-
-type RibbonState = HopState | 'stranded';
 
 export interface FlowRibbon {
   id: string;
@@ -115,27 +109,19 @@ interface SingleVlanFlowLayout {
   ribbons: FlowRibbon[];
 }
 
-interface AllVlansVlanCard {
+interface AllVlansVlanCard extends Rect {
   id: string;
   vlan: VLANFlowVLAN;
   findings: VLANFlowFinding[];
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
 
-interface AllVlansDeviceCard {
+interface AllVlansDeviceCard extends Rect {
   id: string;
   deviceId: string;
   hopDistance: number;
   columnIndex: number;
   vlanIds: number[];
   findings: VLANFlowFinding[];
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
 
 interface AllVlansEndpointEntry {
@@ -146,16 +132,12 @@ interface AllVlansEndpointEntry {
   hasLeak: boolean;
 }
 
-interface AllVlansEndpointCard {
+interface AllVlansEndpointCard extends Rect {
   id: string;
   deviceId: string;
   entries: AllVlansEndpointEntry[];
   hasUnreachable: boolean;
   hasLeak: boolean;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
 
 interface AllVlansEdgeBundle {
@@ -167,13 +149,7 @@ interface AllVlansEdgeBundle {
   y1: number;
   x2: number;
   y2: number;
-  lanes: {
-    vlanId: number;
-    state: HopState;
-    fromMode: VLANMode;
-    toMode: VLANMode;
-    finding?: VLANFlowFinding;
-  }[];
+  lanes: { vlanId: number; state: HopState; fromMode: VLANMode; toMode: VLANMode; finding?: VLANFlowFinding }[];
   findings: VLANFlowFinding[];
 }
 
@@ -213,37 +189,32 @@ const TOP_HEADER_Y = 48;
 const PAD_BOTTOM = 28;
 const COL_GAP = 148;
 const CARD_GAP_Y = 22;
-
 const SEGMENT_COL_W = 204;
 const DEVICE_COL_W = 228;
 const ENDPOINT_COL_W = 228;
 
+function pushMap<K, V>(map: Map<K, V[]>, key: K, val: V) {
+  const arr = map.get(key);
+  if (arr) arr.push(val);
+  else map.set(key, [val]);
+}
+
+function addSet<K, V>(map: Map<K, Set<V>>, key: K, val: V) {
+  let s = map.get(key);
+  if (!s) map.set(key, (s = new Set()));
+  s.add(val);
+}
+
 function addAdj(adj: Map<string, Set<string>>, a: string, b: string) {
   if (a === b) return;
-  let sa = adj.get(a);
-  if (!sa) {
-    sa = new Set();
-    adj.set(a, sa);
-  }
-  sa.add(b);
-  let sb = adj.get(b);
-  if (!sb) {
-    sb = new Set();
-    adj.set(b, sb);
-  }
-  sb.add(a);
+  addSet(adj, a, b);
+  addSet(adj, b, a);
 }
 
 function displayName(devicesById: Map<string, Device> | undefined, id: string): string {
   return devicesById?.get(id)?.name || id;
 }
 
-/**
- * Computes deterministic BFS hop distances for `participating` devices starting from `seeds`.
- * Traverses `primaryAdj` (VLAN hops) first, then `fallbackAdj` (physical topology edges)
- * for any participating device stranded behind a missing hop, and places truly isolated
- * devices one column past the furthest connected tier.
- */
 function computeHopDistances(
   participating: string[],
   seeds: string[],
@@ -255,16 +226,13 @@ function computeHopDistances(
   const dist = new Map<string, number>();
   if (participating.length === 0) return dist;
 
-  const validSeeds = seeds.filter((s) => partSet.has(s));
-  let startNodes = Array.from(new Set(validSeeds));
-
+  let startNodes = Array.from(new Set(seeds.filter((s) => partSet.has(s))));
   if (startNodes.length === 0) {
-    // Pick highest-degree device in primaryAdj, tie-broken by display name.
-    const sorted = [...partSet].sort((a, b) => {
-      const degDiff = (primaryAdj.get(b)?.size ?? 0) - (primaryAdj.get(a)?.size ?? 0);
-      if (degDiff !== 0) return degDiff;
-      return displayName(devicesById, a).localeCompare(displayName(devicesById, b));
-    });
+    const sorted = [...partSet].sort(
+      (a, b) =>
+        (primaryAdj.get(b)?.size ?? 0) - (primaryAdj.get(a)?.size ?? 0) ||
+        displayName(devicesById, a).localeCompare(displayName(devicesById, b)),
+    );
     startNodes = [sorted[0]];
   }
 
@@ -284,29 +252,19 @@ function computeHopDistances(
     }
   };
 
-  for (const s of startNodes) {
-    dist.set(s, 0);
-  }
+  for (const s of startNodes) dist.set(s, 0);
   runBfs(primaryAdj, startNodes);
 
-  // Secondary BFS over full topology edges for participating devices not reached via VLAN hops.
   if (dist.size < partSet.size && fallbackAdj.size > 0) {
-    const assigned = Array.from(dist.keys()).sort((a, b) => dist.get(a)! - dist.get(b)!);
-    runBfs(fallbackAdj, assigned);
+    runBfs(fallbackAdj, Array.from(dist.keys()).sort((a, b) => dist.get(a)! - dist.get(b)!));
   }
-
-  // Remaining disconnected devices go into maxDist + 1 (or 0 if none).
   if (dist.size < partSet.size) {
-    let maxD = -1;
-    for (const d of dist.values()) {
-      if (d > maxD) maxD = d;
-    }
+    const maxD = Math.max(-1, ...dist.values());
     const orphanDist = maxD >= 0 ? maxD + 1 : 0;
     for (const id of [...partSet].sort((a, b) => displayName(devicesById, a).localeCompare(displayName(devicesById, b)))) {
       if (!dist.has(id)) dist.set(id, orphanDist);
     }
   }
-
   return dist;
 }
 
@@ -315,17 +273,14 @@ function buildTopoAdj(topology?: TopologyGraph | null): Map<string, Set<string>>
   if (!topology) return adj;
   const deviceIds = new Set(topology.nodes.filter((n) => n.kind === 'device').map((n) => n.id));
   for (const e of topology.edges) {
-    if (deviceIds.has(e.from_id) && deviceIds.has(e.to_id)) {
-      addAdj(adj, e.from_id, e.to_id);
-    }
+    if (deviceIds.has(e.from_id) && deviceIds.has(e.to_id)) addAdj(adj, e.from_id, e.to_id);
   }
   return adj;
 }
 
 function deviceColumnLabel(colNum: number, dist: number, hasGateways: boolean, maxDist: number): string {
   if (hasGateways && dist === 0) return `${colNum}. GATEWAYS`;
-  if (dist === 0) return `${colNum}. CORE FABRIC`;
-  if (dist === 1 && maxDist >= 2) return `${colNum}. CORE FABRIC`;
+  if (dist === 0 || (dist === 1 && maxDist >= 2)) return `${colNum}. CORE FABRIC`;
   if (dist === 1) return `${colNum}. SWITCHES & APs`;
   if (dist === 2) return `${colNum}. DISTRIBUTION`;
   return `${colNum}. HOP ${dist}`;
@@ -337,27 +292,22 @@ function orderByBarycenter(
   adj: Map<string, Set<string>>,
   devicesById?: Map<string, Device>,
 ): string[] {
-  return [...deviceIds].sort((a, b) => {
-    const score = (id: string) => {
-      const parents = Array.from(adj.get(id) ?? []).filter((p) => prevOrder.has(p));
-      if (parents.length === 0) return Number.MAX_SAFE_INTEGER;
-      return parents.reduce((sum, p) => sum + prevOrder.get(p)!, 0) / parents.length;
-    };
-    const diff = score(a) - score(b);
-    if (diff !== 0) return diff;
-    return displayName(devicesById, a).localeCompare(displayName(devicesById, b));
-  });
+  const score = (id: string) => {
+    const parents = Array.from(adj.get(id) ?? []).filter((p) => prevOrder.has(p));
+    return parents.length === 0 ? Number.MAX_SAFE_INTEGER : parents.reduce((s, p) => s + prevOrder.get(p)!, 0) / parents.length;
+  };
+  return [...deviceIds].sort(
+    (a, b) => score(a) - score(b) || displayName(devicesById, a).localeCompare(displayName(devicesById, b)),
+  );
 }
 
 function colHeight(items: { height: number }[]): number {
-  if (items.length === 0) return 0;
-  return items.reduce((s, it) => s + it.height, 0) + CARD_GAP_Y * (items.length - 1);
+  return items.length === 0 ? 0 : items.reduce((s, it) => s + it.height, 0) + CARD_GAP_Y * (items.length - 1);
 }
 
 function stackColumn<T extends { height: number; y: number }>(items: T[], totalHeight: number) {
   if (items.length === 0) return;
-  const contentH = colHeight(items);
-  let y = TOP_HEADER_Y + Math.max(0, (totalHeight - TOP_HEADER_Y - PAD_BOTTOM - contentH) / 2);
+  let y = TOP_HEADER_Y + Math.max(0, (totalHeight - TOP_HEADER_Y - PAD_BOTTOM - colHeight(items)) / 2);
   for (const it of items) {
     it.y = Math.round(y);
     y += it.height + CARD_GAP_Y;
@@ -368,7 +318,7 @@ function railY(top: number, span: number, idx: number, count: number): number {
   return count === 1 ? Math.round(top + span / 2) : Math.round(top + (span * idx) / (count - 1));
 }
 
-function orientEdge<T extends { columnIndex: number; x: number; y: number; width: number }>(cFrom: T, cTo: T) {
+function orientEdge<T extends Rect & { columnIndex: number }>(cFrom: T, cTo: T) {
   const sameCol = cFrom.columnIndex === cTo.columnIndex;
   const swap = sameCol ? cFrom.y > cTo.y : cFrom.columnIndex > cTo.columnIndex;
   const leftCard = swap ? cTo : cFrom;
@@ -394,8 +344,7 @@ interface LayeredGrid {
 }
 
 /**
- * Shared layering & column-grid core for both Single-VLAN and All-VLANs layouts:
- * seeds & hop distances, barycenter tier ordering, and left-to-right column placement.
+ * Shared layering & column-grid core for Single-VLAN and All-VLANs layouts.
  */
 function buildFlowGrid(opts: {
   participating: string[];
@@ -418,20 +367,16 @@ function buildFlowGrid(opts: {
   const hopDistances = computeHopDistances(opts.participating, seeds, opts.hopAdj, topoAdj, opts.devicesById);
 
   const byDist = new Map<number, string[]>();
-  for (const devId of opts.participating) {
-    const d = hopDistances.get(devId) ?? 0;
-    byDist.set(d, [...(byDist.get(d) ?? []), devId]);
-  }
+  for (const devId of opts.participating) pushMap(byDist, hopDistances.get(devId) ?? 0, devId);
   const distLevels = Array.from(byDist.keys()).sort((a, b) => a - b);
-  const maxDist = distLevels.length > 0 ? distLevels[distLevels.length - 1] : 0;
+  const maxDist = distLevels[distLevels.length - 1] ?? 0;
 
   const prevOrder = new Map<string, number>();
   const orderAdj = opts.hopAdj.size > 0 ? opts.hopAdj : topoAdj;
   for (const d of distLevels) {
-    const ids = byDist.get(d)!;
     const ordered = d === distLevels[0]
-      ? [...ids].sort(opts.firstTierCompare)
-      : orderByBarycenter(ids, prevOrder, orderAdj, opts.devicesById);
+      ? [...byDist.get(d)!].sort(opts.firstTierCompare)
+      : orderByBarycenter(byDist.get(d)!, prevOrder, orderAdj, opts.devicesById);
     byDist.set(d, ordered);
     ordered.forEach((id, idx) => prevOrder.set(id, idx));
   }
@@ -441,13 +386,7 @@ function buildFlowGrid(opts: {
   const distToColIdx = new Map<number, number>();
 
   if (opts.leadColumn) {
-    columns.push({
-      index: columns.length,
-      kind: opts.leadColumn.kind,
-      label: opts.leadColumn.label,
-      x: cursorX,
-      width: SEGMENT_COL_W,
-    });
+    columns.push({ index: 0, kind: opts.leadColumn.kind, label: opts.leadColumn.label, x: cursorX, width: SEGMENT_COL_W });
     cursorX += SEGMENT_COL_W + COL_GAP;
   }
 
@@ -467,13 +406,7 @@ function buildFlowGrid(opts: {
 
   const endpointColIdx = opts.hasEndpointCol ? columns.length : -1;
   if (opts.hasEndpointCol) {
-    columns.push({
-      index: endpointColIdx,
-      kind: 'endpoints',
-      label: `${endpointColIdx + 1}. ENDPOINTS`,
-      x: cursorX,
-      width: ENDPOINT_COL_W,
-    });
+    columns.push({ index: endpointColIdx, kind: 'endpoints', label: `${endpointColIdx + 1}. ENDPOINTS`, x: cursorX, width: ENDPOINT_COL_W });
     cursorX += ENDPOINT_COL_W + PAD_X;
   } else {
     cursorX = Math.max(cursorX - COL_GAP + PAD_X, PAD_X * 2 + opts.minEmptyColW);
@@ -482,20 +415,10 @@ function buildFlowGrid(opts: {
   const devColMap = new Map<string, number>();
   for (const d of distLevels) {
     const cIdx = distToColIdx.get(d)!;
-    for (const devId of byDist.get(d) ?? []) {
-      devColMap.set(devId, cIdx);
-    }
+    for (const devId of byDist.get(d) ?? []) devColMap.set(devId, cIdx);
   }
 
-  return {
-    byDist,
-    distLevels,
-    columns,
-    distToColIdx,
-    devColMap,
-    endpointColIdx,
-    width: Math.max(720, Math.round(cursorX)),
-  };
+  return { byDist, distLevels, columns, distToColIdx, devColMap, endpointColIdx, width: Math.max(720, Math.round(cursorX)) };
 }
 
 function buildDeviceColumnCards<T>(
@@ -507,22 +430,17 @@ function buildDeviceColumnCards<T>(
   for (const d of grid.distLevels) {
     const colIdx = grid.distToColIdx.get(d)!;
     const col = grid.columns[colIdx];
-    const cards: T[] = [];
-    for (const devId of grid.byDist.get(d) ?? []) {
+    const cards = (grid.byDist.get(d) ?? []).map((devId) => {
       const card = makeCard(devId, d, colIdx, col);
       byId.set(devId, card);
-      cards.push(card);
-    }
+      return card;
+    });
     byCol.set(colIdx, cards);
   }
   return { byId, byCol };
 }
 
-function stackFlowColumns<
-  TLead extends { height: number; y: number },
-  TDev extends { height: number; y: number },
-  TEp extends { height: number; y: number },
->(
+function stackFlowColumns<TLead extends Rect, TDev extends Rect, TEp extends Rect>(
   leadCards: TLead[],
   deviceCardsByCol: Map<number, TDev[]>,
   endpointCards: TEp[],
@@ -532,23 +450,19 @@ function stackFlowColumns<
 ): number {
   const heights = [
     colHeight(leadCards),
-    ...Array.from(deviceCardsByCol.values()).map((cards) => colHeight(cards)),
+    ...Array.from(deviceCardsByCol.values(), (cards) => colHeight(cards)),
     colHeight(endpointCards),
   ];
   const totalHeight = Math.max(minTotalH, TOP_HEADER_Y + Math.max(...heights, minContentH) + PAD_BOTTOM);
-
   stackColumn(leadCards, totalHeight);
-  for (const cards of deviceCardsByCol.values()) {
-    stackColumn(cards, totalHeight);
-  }
+  for (const cards of deviceCardsByCol.values()) stackColumn(cards, totalHeight);
   endpointCards.sort(sortEndpoints);
   stackColumn(endpointCards, totalHeight);
   return Math.round(totalHeight);
 }
 
 /**
- * Computes a complete left-to-right layered column layout for a single VLAN from `/api/v1/vlans/flow`.
- * Columns: [0: L3 Zones & Segments] -> [1..K: Devices by hop distance from gateway devices] -> [K+1: Endpoints].
+ * Computes a left-to-right layered column layout for a single VLAN from `/api/v1/vlans/flow`.
  */
 export function computeSingleVlanLayout(
   vlan: VLANFlowVLAN,
@@ -561,47 +475,31 @@ export function computeSingleVlanLayout(
   const findingByEdge = new Map<string, VLANFlowFinding>();
   for (const f of vlanFindings) {
     const existing = findingByEdge.get(f.edge_id);
-    if (!existing || (f.severity === 'crit' && existing.severity !== 'crit')) {
-      findingByEdge.set(f.edge_id, f);
-    }
+    if (!existing || (f.severity === 'crit' && existing.severity !== 'crit')) findingByEdge.set(f.edge_id, f);
   }
 
-  // Collect participating devices and hop adjacency.
   const participatingSet = new Set<string>(vlan.devices);
-  for (const g of vlan.gateways) participatingSet.add(g.device_id);
   const hopAdj = new Map<string, Set<string>>();
+  for (const g of vlan.gateways) participatingSet.add(g.device_id);
   for (const h of vlan.hops) {
     participatingSet.add(h.from_id);
     participatingSet.add(h.to_id);
     addAdj(hopAdj, h.from_id, h.to_id);
   }
-  for (const ap of vlan.access_ports) participatingSet.add(ap.device_id);
-  for (const s of vlan.ssids) participatingSet.add(s.device_id);
-
-  const gatewayDeviceIds = Array.from(new Set(vlan.gateways.map((g) => g.device_id)));
-
-  // Identify leak findings involving foreign VLANs.
-  const leakFindings = vlanFindings.filter((f) => f.kind === 'leak');
-  const foreignLeaks: { foreignVid: number; finding: VLANFlowFinding }[] = [];
-  const seenForeign = new Set<number>();
-  for (const lf of leakFindings) {
-    const other = lf.vlans.find((v) => v !== vlan.id);
-    if (other != null && !seenForeign.has(other)) {
-      seenForeign.add(other);
-      foreignLeaks.push({ foreignVid: other, finding: lf });
-    }
-  }
-
-  // Build endpoint groups per device (access ports + SSIDs, plus foreign leaked endpoints).
   const accessByDev = new Map<string, VLANFlowAccessPort[]>();
   for (const ap of vlan.access_ports) {
-    accessByDev.set(ap.device_id, [...(accessByDev.get(ap.device_id) ?? []), ap]);
+    participatingSet.add(ap.device_id);
+    pushMap(accessByDev, ap.device_id, ap);
   }
   const ssidsByDev = new Map<string, VLANFlowSSID[]>();
   for (const s of vlan.ssids) {
-    ssidsByDev.set(s.device_id, [...(ssidsByDev.get(s.device_id) ?? []), s]);
+    participatingSet.add(s.device_id);
+    pushMap(ssidsByDev, s.device_id, s);
   }
 
+  const gatewayDeviceIds = Array.from(new Set(vlan.gateways.map((g) => g.device_id)));
+
+  // Identify foreign VLANs and foreign leaked endpoints from leak findings.
   type EndpointSpec = {
     id: string;
     deviceId: string;
@@ -611,10 +509,17 @@ export function computeSingleVlanLayout(
     ssids: VLANFlowSSID[];
     finding?: VLANFlowFinding;
   };
+  const foreignLeaks: { foreignVid: number; finding: VLANFlowFinding }[] = [];
   const foreignEndpointSpecs: EndpointSpec[] = [];
-  for (const lf of leakFindings) {
+  const seenForeign = new Set<number>();
+  for (const lf of vlanFindings) {
+    if (lf.kind !== 'leak') continue;
     const otherVid = lf.vlans.find((v) => v !== vlan.id);
     if (otherVid == null) continue;
+    if (!seenForeign.has(otherVid)) {
+      seenForeign.add(otherVid);
+      foreignLeaks.push({ foreignVid: otherVid, finding: lf });
+    }
     const foreignVlan = vlansById.get(otherVid);
     if (!foreignVlan) continue;
     const targetDev = lf.vlans[0] === vlan.id ? lf.peer_id : lf.device_id;
@@ -634,8 +539,7 @@ export function computeSingleVlanLayout(
   }
 
   const hasSegmentCol = vlan.gateways.length > 0 || foreignLeaks.length > 0;
-  const hasEndpointCol =
-    vlan.access_ports.length > 0 || vlan.ssids.length > 0 || foreignEndpointSpecs.length > 0;
+  const hasEndpointCol = vlan.access_ports.length > 0 || vlan.ssids.length > 0 || foreignEndpointSpecs.length > 0;
 
   const grid = buildFlowGrid({
     participating: Array.from(participatingSet),
@@ -649,9 +553,7 @@ export function computeSingleVlanLayout(
     firstTierCompare: (a, b) => {
       const ga = gatewayDeviceIds.indexOf(a);
       const gb = gatewayDeviceIds.indexOf(b);
-      if (ga !== -1 || gb !== -1) {
-        return (ga === -1 ? 999 : ga) - (gb === -1 ? 999 : gb);
-      }
+      if (ga !== -1 || gb !== -1) return (ga === -1 ? 999 : ga) - (gb === -1 ? 999 : gb);
       return displayName(devicesById, a).localeCompare(displayName(devicesById, b));
     },
     minEmptyColW: DEVICE_COL_W,
@@ -663,20 +565,12 @@ export function computeSingleVlanLayout(
       const aps = accessByDev.get(devId) ?? [];
       const ssids = ssidsByDev.get(devId) ?? [];
       if (aps.length > 0 || ssids.length > 0) {
-        endpointSpecs.push({
-          id: `ep:${devId}:v${vlan.id}`,
-          deviceId: devId,
-          vlanId: vlan.id,
-          isForeignLeak: false,
-          accessPorts: aps,
-          ssids,
-        });
+        endpointSpecs.push({ id: `ep:${devId}:v${vlan.id}`, deviceId: devId, vlanId: vlan.id, isForeignLeak: false, accessPorts: aps, ssids });
       }
     }
   }
   endpointSpecs.push(...foreignEndpointSpecs);
 
-  // Pre-count ports per device side to size device cards accurately.
   const deviceColOffset = hasSegmentCol ? 1 : 0;
   const leftPortCount = new Map<string, number>();
   const rightPortCount = new Map<string, number>();
@@ -689,23 +583,18 @@ export function computeSingleVlanLayout(
     if (cFrom === cTo) {
       inc(rightPortCount, h.from_id);
       inc(rightPortCount, h.to_id);
-    } else if (cFrom < cTo) {
-      inc(rightPortCount, h.from_id);
-      inc(leftPortCount, h.to_id);
     } else {
-      inc(rightPortCount, h.to_id);
-      inc(leftPortCount, h.from_id);
+      inc(rightPortCount, cFrom < cTo ? h.from_id : h.to_id);
+      inc(leftPortCount, cFrom < cTo ? h.to_id : h.from_id);
     }
   }
   for (const ep of endpointSpecs) inc(rightPortCount, ep.deviceId);
 
-  // Create segment cards.
   const segmentCards: FlowSegmentCard[] = [];
   if (hasSegmentCol) {
     const segCol = grid.columns[0];
     vlan.gateways.forEach((gw, idx) => {
       const addrLines = Math.min(2, Math.max(1, gw.addresses.length));
-      const h = 92 + addrLines * 16 + (gw.is_management ? 24 : 0);
       segmentCards.push({
         id: `gw:${gw.device_id}:${gw.segment_id}:${idx}`,
         kind: 'gateway',
@@ -715,7 +604,7 @@ export function computeSingleVlanLayout(
         x: segCol.x,
         y: 0,
         width: segCol.width,
-        height: h,
+        height: 92 + addrLines * 16 + (gw.is_management ? 24 : 0),
       });
     });
     for (const fl of foreignLeaks) {
@@ -735,59 +624,43 @@ export function computeSingleVlanLayout(
     }
   }
 
-  // Create device cards.
   const reachedSet = new Set(vlan.reached);
   const hasGateway = vlan.gateways.length > 0;
   const { byId: deviceCardsById, byCol: deviceCardsByCol } = buildDeviceColumnCards<FlowDeviceCard>(
     grid,
-    (devId, d, colIdx, col) => {
-      const maxPorts = Math.max(leftPortCount.get(devId) ?? 0, rightPortCount.get(devId) ?? 0, 1);
-      return {
-        id: `dev:${devId}`,
-        deviceId: devId,
-        hopDistance: d,
-        columnIndex: colIdx,
-        reached: hasGateway ? reachedSet.has(devId) : true,
-        hasGateway,
-        x: col.x,
-        y: 0,
-        width: col.width,
-        height: Math.max(114, 52 + maxPorts * 29 + 30),
-        leftPorts: [],
-        rightPorts: [],
-        localAccessCount: (accessByDev.get(devId) ?? []).length,
-        localSsidCount: (ssidsByDev.get(devId) ?? []).length,
-      };
-    },
+    (devId, d, colIdx, col) => ({
+      id: `dev:${devId}`,
+      deviceId: devId,
+      hopDistance: d,
+      columnIndex: colIdx,
+      reached: hasGateway ? reachedSet.has(devId) : true,
+      hasGateway,
+      x: col.x,
+      y: 0,
+      width: col.width,
+      height: Math.max(114, 52 + Math.max(leftPortCount.get(devId) ?? 0, rightPortCount.get(devId) ?? 0, 1) * 29 + 30),
+      leftPorts: [],
+      rightPorts: [],
+      localAccessCount: (accessByDev.get(devId) ?? []).length,
+      localSsidCount: (ssidsByDev.get(devId) ?? []).length,
+    }),
   );
 
-  // Create endpoint cards with pre-formatted text lines (first 4 ports / 3 SSIDs + overflow).
   const endpointCards: FlowEndpointCard[] = endpointSpecs.map((spec) => {
     const allUnreachable =
-      !spec.isForeignLeak &&
-      hasGateway &&
-      spec.accessPorts.every((ap) => !ap.reachable) &&
-      spec.ssids.every((s) => !s.reachable);
-    const lines: FlowEndpointLine[] = [];
-    for (const ap of spec.accessPorts.slice(0, 4)) {
-      lines.push({
+      !spec.isForeignLeak && hasGateway && spec.accessPorts.every((ap) => !ap.reachable) && spec.ssids.every((s) => !s.reachable);
+    const lines: FlowEndpointLine[] = [
+      ...spec.accessPorts.slice(0, 4).map((ap): FlowEndpointLine => ({
         text: `[U] ${ap.link}${ap.label ? ` · ${ap.label}` : ''}`,
         tone: allUnreachable ? 'dim' : 'normal',
-      });
-    }
-    if (spec.accessPorts.length > 4) {
-      lines.push({ text: `+${spec.accessPorts.length - 4} more access port(s)`, tone: 'dim' });
-    }
-    for (const s of spec.ssids.slice(0, 3)) {
-      lines.push({
+      })),
+      ...(spec.accessPorts.length > 4 ? [{ text: `+${spec.accessPorts.length - 4} more access port(s)`, tone: 'dim' as const }] : []),
+      ...spec.ssids.slice(0, 3).map((s): FlowEndpointLine => ({
         text: `SSID ${s.name} (${s.client_count} cl)`,
         tone: !s.reachable && hasGateway ? 'warn' : 'normal',
-      });
-    }
-    if (spec.ssids.length > 3) {
-      lines.push({ text: `+${spec.ssids.length - 3} more SSID(s)`, tone: 'dim' });
-    }
-    const h = Math.max(76, 46 + lines.length * 18 + (spec.isForeignLeak ? 18 : 0));
+      })),
+      ...(spec.ssids.length > 3 ? [{ text: `+${spec.ssids.length - 3} more SSID(s)`, tone: 'dim' as const }] : []),
+    ];
     const col = grid.columns[grid.endpointColIdx];
     return {
       id: spec.id,
@@ -801,7 +674,7 @@ export function computeSingleVlanLayout(
       x: col.x,
       y: 0,
       width: col.width,
-      height: h,
+      height: Math.max(76, 46 + lines.length * 18 + (spec.isForeignLeak ? 18 : 0)),
     };
   });
 
@@ -810,31 +683,18 @@ export function computeSingleVlanLayout(
     const db = deviceCardsById.get(b.deviceId);
     const ya = da ? da.y + da.height / 2 : 0;
     const yb = db ? db.y + db.height / 2 : 0;
-    if (ya !== yb) return ya - yb;
-    return Number(a.isForeignLeak) - Number(b.isForeignLeak);
+    return ya !== yb ? ya - yb : Number(a.isForeignLeak) - Number(b.isForeignLeak);
   });
 
-  // Attach sorted port slots and build ribbons.
   type PortSlot = {
     side: 'left' | 'right';
     peerY: number;
     assignY: (y: number) => void;
-    chip?: {
-      label: string;
-      mode: VLANMode;
-      state: HopState;
-      hopEdgeId: string;
-    };
+    chip?: { label: string; mode: VLANMode; state: HopState; hopEdgeId: string };
   };
-
   const slotsByDevice = new Map<string, PortSlot[]>();
-  const addSlot = (devId: string, slot: PortSlot) => {
-    slotsByDevice.set(devId, [...(slotsByDevice.get(devId) ?? []), slot]);
-  };
-
   const ribbons: FlowRibbon[] = [];
 
-  // 1) Gateway segment -> gateway device links.
   for (const sc of segmentCards) {
     if (sc.kind !== 'gateway' || !sc.gateway) continue;
     const devCard = deviceCardsById.get(sc.gateway.device_id);
@@ -853,16 +713,9 @@ export function computeSingleVlanLayout(
       state: 'carried',
     };
     ribbons.push(ribbon);
-    addSlot(devCard.deviceId, {
-      side: 'left',
-      peerY: ribbon.y1,
-      assignY: (y) => {
-        ribbon.y2 = y;
-      },
-    });
+    pushMap(slotsByDevice, devCard.deviceId, { side: 'left', peerY: ribbon.y1, assignY: (y) => (ribbon.y2 = y) });
   }
 
-  // 2) Infrastructure hop ribbons between devices.
   for (const h of vlan.hops) {
     const cFrom = deviceCardsById.get(h.from_id);
     const cTo = deviceCardsById.get(h.to_id);
@@ -874,7 +727,6 @@ export function computeSingleVlanLayout(
     const rightLink = (swap ? h.from_link : h.to_link) || (h.kind === 'wireless_uplink' ? 'mesh' : 'link');
     const leftMode: VLANMode = swap ? h.to_mode : h.from_mode;
     const rightMode: VLANMode = swap ? h.from_mode : h.to_mode;
-    const foreignVid = finding?.kind === 'leak' ? finding.vlans.find((v) => v !== vlan.id) : undefined;
 
     const ribbon: FlowRibbon = {
       id: `hop:${h.edge_id}`,
@@ -890,29 +742,24 @@ export function computeSingleVlanLayout(
       fromMode: leftMode,
       toMode: rightMode,
       state: h.state,
-      foreignVlanId: foreignVid,
+      foreignVlanId: finding?.kind === 'leak' ? finding.vlans.find((v) => v !== vlan.id) : undefined,
     };
     ribbons.push(ribbon);
 
-    addSlot(leftCard.deviceId, {
+    pushMap(slotsByDevice, leftCard.deviceId, {
       side: 'right',
       peerY: rightCard.y + rightCard.height / 2,
-      assignY: (y) => {
-        ribbon.y1 = y;
-      },
+      assignY: (y) => (ribbon.y1 = y),
       chip: { label: leftLink, mode: leftMode, state: h.state, hopEdgeId: h.edge_id },
     });
-    addSlot(rightCard.deviceId, {
+    pushMap(slotsByDevice, rightCard.deviceId, {
       side: sameCol ? 'right' : 'left',
       peerY: leftCard.y + leftCard.height / 2,
-      assignY: (y) => {
-        ribbon.y2 = y;
-      },
+      assignY: (y) => (ribbon.y2 = y),
       chip: { label: rightLink, mode: rightMode, state: h.state, hopEdgeId: h.edge_id },
     });
   }
 
-  // 3) Device -> Endpoint ribbons.
   for (const ep of endpointCards) {
     const devCard = deviceCardsById.get(ep.deviceId);
     if (!devCard) continue;
@@ -933,57 +780,37 @@ export function computeSingleVlanLayout(
       foreignVlanId: ep.isForeignLeak ? ep.vlanId : undefined,
     };
     ribbons.push(ribbon);
-    addSlot(devCard.deviceId, {
-      side: 'right',
-      peerY: ep.y + ep.height / 2,
-      assignY: (y) => {
-        ribbon.y1 = y;
-      },
-    });
+    pushMap(slotsByDevice, devCard.deviceId, { side: 'right', peerY: ep.y + ep.height / 2, assignY: (y) => (ribbon.y1 = y) });
   }
 
-  // Place port chips neatly along each device card's left and right rails.
   const deviceCards = Array.from(deviceCardsById.values());
   for (const card of deviceCards) {
     const slots = slotsByDevice.get(card.deviceId) ?? [];
     for (const side of ['left', 'right'] as const) {
       const sideSlots = slots.filter((s) => s.side === side).sort((a, b) => a.peerY - b.peerY);
-      const railTop = card.y + 46;
       const span = Math.max(0, card.height - 72);
       sideSlots.forEach((slot, idx) => {
-        const y = railY(railTop, span, idx, sideSlots.length);
+        const y = railY(card.y + 46, span, idx, sideSlots.length);
         slot.assignY(y);
         if (slot.chip) {
-          const chip: FlowPortChip = {
+          const target = side === 'left' ? card.leftPorts : card.rightPorts;
+          target.push({
             id: `${card.deviceId}:${side}:${slot.chip.hopEdgeId}:${idx}`,
             side,
-            label: slot.chip.label,
-            mode: slot.chip.mode,
-            state: slot.chip.state,
-            hopEdgeId: slot.chip.hopEdgeId,
+            ...slot.chip,
             x: side === 'left' ? card.x + 6 : card.x + card.width - 6,
             y,
-          };
-          if (side === 'left') card.leftPorts.push(chip);
-          else card.rightPorts.push(chip);
+          });
         }
       });
     }
   }
 
-  return {
-    width: grid.width,
-    height,
-    columns: grid.columns,
-    segmentCards,
-    deviceCards,
-    endpointCards,
-    ribbons,
-  };
+  return { width: grid.width, height, columns: grid.columns, segmentCards, deviceCards, endpointCards, ribbons };
 }
 
 /**
- * Computes a complete left-to-right column layout for the "All VLANs" overview mode.
+ * Computes a left-to-right column layout for the "All VLANs" overview mode.
  */
 export function computeAllVlansLayout(
   flow: VLANFlow,
@@ -998,12 +825,7 @@ export function computeAllVlansLayout(
 
   const trackDevVlan = (devId: string, vid: number) => {
     participatingSet.add(devId);
-    let s = devVlans.get(devId);
-    if (!s) {
-      s = new Set();
-      devVlans.set(devId, s);
-    }
-    s.add(vid);
+    addSet(devVlans, devId, vid);
   };
 
   for (const v of vlans) {
@@ -1021,33 +843,21 @@ export function computeAllVlansLayout(
     for (const s of v.ssids) trackDevVlan(s.device_id, v.id);
   }
 
-  // Endpoint summaries per device.
   const endpointEntriesByDev = new Map<string, AllVlansEndpointEntry[]>();
   for (const v of vlans) {
-    const vHasLeak = flow.findings.some((f) => f.kind === 'leak' && f.vlans.includes(v.id));
     const hasGateway = v.gateways.length > 0;
-    const devsHere = new Set<string>([
-      ...v.access_ports.map((ap) => ap.device_id),
-      ...v.ssids.map((s) => s.device_id),
-    ]);
+    const vLeaks = flow.findings.filter((f) => f.kind === 'leak' && f.vlans.includes(v.id));
+    const devsHere = new Set<string>([...v.access_ports.map((ap) => ap.device_id), ...v.ssids.map((s) => s.device_id)]);
     for (const devId of devsHere) {
       const aps = v.access_ports.filter((ap) => ap.device_id === devId);
       const ssids = v.ssids.filter((s) => s.device_id === devId);
-      const devLeak =
-        vHasLeak &&
-        flow.findings.some(
-          (f) => f.kind === 'leak' && f.vlans.includes(v.id) && (f.device_id === devId || f.peer_id === devId),
-        );
-      endpointEntriesByDev.set(devId, [
-        ...(endpointEntriesByDev.get(devId) ?? []),
-        {
-          vlanId: v.id,
-          accessCount: aps.length,
-          unreachableAccessCount: hasGateway ? aps.filter((ap) => !ap.reachable).length : 0,
-          ssids: ssids.map((s) => ({ name: s.name, reachable: !hasGateway || s.reachable })),
-          hasLeak: devLeak,
-        },
-      ]);
+      pushMap(endpointEntriesByDev, devId, {
+        vlanId: v.id,
+        accessCount: aps.length,
+        unreachableAccessCount: hasGateway ? aps.filter((ap) => !ap.reachable).length : 0,
+        ssids: ssids.map((s) => ({ name: s.name, reachable: !hasGateway || s.reachable })),
+        hasLeak: vLeaks.some((f) => f.device_id === devId || f.peer_id === devId),
+      });
     }
   }
 
@@ -1065,7 +875,6 @@ export function computeAllVlansLayout(
     minEmptyColW: SEGMENT_COL_W,
   });
 
-  // Create VLAN cards in Col 0.
   const vlanCards: AllVlansVlanCard[] = vlans.map((v) => ({
     id: `vlan:${v.id}`,
     vlan: v,
@@ -1077,7 +886,6 @@ export function computeAllVlansLayout(
   }));
   const vlanCardById = new Map(vlanCards.map((c) => [c.vlan.id, c]));
 
-  // Create device cards.
   const { byId: deviceCardsById, byCol: deviceCardsByCol } = buildDeviceColumnCards<AllVlansDeviceCard>(
     grid,
     (devId, d, colIdx, col) => {
@@ -1097,25 +905,19 @@ export function computeAllVlansLayout(
     },
   );
 
-  // Create endpoint summary cards.
-  const endpointCards: AllVlansEndpointCard[] = [];
-  if (hasEndpointCol) {
-    const col = grid.columns[grid.endpointColIdx];
-    for (const [devId, entries] of endpointEntriesByDev.entries()) {
-      const visible = Math.min(entries.length, 5);
-      endpointCards.push({
+  const endpointCards: AllVlansEndpointCard[] = hasEndpointCol
+    ? Array.from(endpointEntriesByDev.entries(), ([devId, entries]) => ({
         id: `all-ep:${devId}`,
         deviceId: devId,
         entries,
         hasUnreachable: entries.some((e) => e.unreachableAccessCount > 0 || e.ssids.some((s) => !s.reachable)),
         hasLeak: entries.some((e) => e.hasLeak),
-        x: col.x,
+        x: grid.columns[grid.endpointColIdx].x,
         y: 0,
-        width: col.width,
-        height: Math.max(82, 46 + visible * 18 + (entries.length > 5 ? 16 : 0)),
-      });
-    }
-  }
+        width: grid.columns[grid.endpointColIdx].width,
+        height: Math.max(82, 46 + Math.min(entries.length, 5) * 18 + (entries.length > 5 ? 16 : 0)),
+      }))
+    : [];
 
   const height = stackFlowColumns(
     vlanCards,
@@ -1126,8 +928,8 @@ export function computeAllVlansLayout(
     (a, b) => (deviceCardsById.get(a.deviceId)?.y ?? 0) - (deviceCardsById.get(b.deviceId)?.y ?? 0),
   );
 
-  // Segment -> gateway device links (or first device for L2-only VLAN).
   const segmentLinks: AllVlansSegmentLink[] = [];
+  const segLinksByDev = new Map<string, AllVlansSegmentLink[]>();
   for (const vc of vlanCards) {
     const targets = vc.vlan.gateways.length > 0
       ? Array.from(new Set(vc.vlan.gateways.map((g) => g.device_id)))
@@ -1135,41 +937,32 @@ export function computeAllVlansLayout(
     for (const devId of targets) {
       const dc = deviceCardsById.get(devId);
       if (!dc) continue;
-      segmentLinks.push({
+      const link: AllVlansSegmentLink = {
         vlanId: vc.vlan.id,
         deviceId: devId,
         x1: vc.x + vc.width,
         y1: vc.y + vc.height / 2,
         x2: dc.x,
         y2: dc.y + dc.height / 2,
-      });
+      };
+      segmentLinks.push(link);
+      pushMap(segLinksByDev, devId, link);
     }
-  }
-
-  // Spread segment links neatly along the receiving gateway device's left edge.
-  const segLinksByDev = new Map<string, AllVlansSegmentLink[]>();
-  for (const sl of segmentLinks) {
-    segLinksByDev.set(sl.deviceId, [...(segLinksByDev.get(sl.deviceId) ?? []), sl]);
   }
   for (const [devId, links] of segLinksByDev.entries()) {
     const dc = deviceCardsById.get(devId);
     if (!dc) continue;
     links.sort((a, b) => (vlanCardById.get(a.vlanId)?.y ?? 0) - (vlanCardById.get(b.vlanId)?.y ?? 0));
-    const top = dc.y + 42;
     const span = Math.max(0, dc.height - 58);
-    links.forEach((l, i) => {
-      l.y2 = railY(top, span, i, links.length);
-    });
+    links.forEach((l, i) => (l.y2 = railY(dc.y + 42, span, i, links.length)));
   }
 
-  // Group hops by edge_id into multi-lane bundles.
   const bundleMap = new Map<string, AllVlansEdgeBundle>();
   for (const v of vlans) {
     for (const h of v.hops) {
       const cFrom = deviceCardsById.get(h.from_id);
       const cTo = deviceCardsById.get(h.to_id);
       if (!cFrom || !cTo) continue;
-
       const { sameCol, swap, leftCard, rightCard, x1, x2 } = orientEdge(cFrom, cTo);
       let bundle = bundleMap.get(h.edge_id);
       if (!bundle) {
@@ -1198,23 +991,16 @@ export function computeAllVlansLayout(
   }
 
   const edgeBundles = Array.from(bundleMap.values());
-  // Spread outgoing edge bundles along each source device's right edge.
   const outByDev = new Map<string, AllVlansEdgeBundle[]>();
-  for (const b of edgeBundles) {
-    outByDev.set(b.fromDeviceId, [...(outByDev.get(b.fromDeviceId) ?? []), b]);
-  }
+  for (const b of edgeBundles) pushMap(outByDev, b.fromDeviceId, b);
   for (const [devId, bundles] of outByDev.entries()) {
     const dc = deviceCardsById.get(devId);
     if (!dc || bundles.length <= 1) continue;
     bundles.sort((a, b) => a.y2 - b.y2);
-    const top = dc.y + 44;
     const span = Math.max(0, dc.height - 62);
-    bundles.forEach((b, i) => {
-      b.y1 = railY(top, span, i, bundles.length);
-    });
+    bundles.forEach((b, i) => (b.y1 = railY(dc.y + 44, span, i, bundles.length)));
   }
 
-  // Device -> endpoint links.
   const endpointLinks: AllVlansEndpointLink[] = [];
   for (const ep of endpointCards) {
     const dc = deviceCardsById.get(ep.deviceId);

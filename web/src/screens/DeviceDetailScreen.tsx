@@ -27,9 +27,11 @@ import {
   type NetworkState,
   type TopologyGraph,
   type VLANFlow,
+  type VLANFlowVLAN,
 } from '../api';
 import { DriverBadge, VlanChip } from '../components/Badges';
 import { PortFaceplate } from '../components/PortFaceplate';
+import { CardHeader, Stat } from '../components/ui';
 import { devicePath, vlanFlowPath } from '../routing';
 import {
   type ColorPair,
@@ -43,6 +45,7 @@ interface Props {
   topology: TopologyGraph | null;
   flow: VLANFlow | null;
   devicesById: Map<string, Device>;
+  vlansById: Map<number, VLANFlowVLAN>;
   vlanColors: Map<number, ColorPair>;
   refreshNonce: number;
 }
@@ -53,6 +56,7 @@ export function DeviceDetailScreen({
   topology,
   flow,
   devicesById,
+  vlansById,
   vlanColors,
   refreshNonce,
 }: Props) {
@@ -90,11 +94,6 @@ export function DeviceDetailScreen({
       active = false;
     };
   }, [deviceId, refreshNonce]);
-
-  const vlansById = useMemo(
-    () => new Map((flow?.vlans ?? []).map((v) => [v.id, v])),
-    [flow],
-  );
 
   const zonesById = useMemo(
     () => new Map((detail?.zones ?? []).map((z) => [z.id, z.name])),
@@ -246,10 +245,9 @@ export function DeviceDetailScreen({
         <Card withBorder radius="md" p="md">
           <SimpleGrid cols={{ base: 1, xs: 2, md: Math.min(4, telemetryItems.length) }} spacing="md">
             {telemetryItems.map((item) => (
-              <div key={item.label}>
-                <Text size="10px" fw={700} tt="uppercase" c="dimmed" mb={3}>{item.label}</Text>
+              <Stat key={item.label} label={item.label} mb={3}>
                 {item.content}
-              </div>
+              </Stat>
             ))}
           </SimpleGrid>
         </Card>
@@ -264,6 +262,7 @@ export function DeviceDetailScreen({
         state={state}
         topology={topology}
         devicesById={devicesById}
+        vlansById={vlansById}
         vlanColors={vlanColors}
         selectedPort={selectedPortParam}
         onSelectPort={(ifName) => {
@@ -280,10 +279,10 @@ export function DeviceDetailScreen({
       {/* L3 Segments & Zones */}
       {detail.segments.length > 0 && (
         <Card withBorder radius="md" p={0}>
-          <Group px="md" py="sm" style={{ borderBottom: '1px solid var(--np-border-subtle)' }}>
+          <CardHeader>
             <Title order={4} size="h5">L3 Segments & Zones ({detail.segments.length})</Title>
-          </Group>
-          <div className="np-table-wrap">
+          </CardHeader>
+          <Table.ScrollContainer minWidth={0} type="native">
             <Table highlightOnHover className="data-table">
               <Table.Thead>
                 <Table.Tr>
@@ -333,17 +332,17 @@ export function DeviceDetailScreen({
                 ))}
               </Table.Tbody>
             </Table>
-          </div>
+          </Table.ScrollContainer>
         </Card>
       )}
 
       {/* Wireless Radios & SSIDs */}
       {detail.radios.length > 0 && (
         <Card withBorder radius="md" p={0}>
-          <Group px="md" py="sm" style={{ borderBottom: '1px solid var(--np-border-subtle)' }}>
+          <CardHeader>
             <Title order={4} size="h5">Wireless Radios & SSIDs</Title>
-          </Group>
-          <div className="np-table-wrap">
+          </CardHeader>
+          <Table.ScrollContainer minWidth={0} type="native">
             <Table highlightOnHover className="data-table">
               <Table.Thead>
                 <Table.Tr>
@@ -357,47 +356,47 @@ export function DeviceDetailScreen({
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {detail.radios.flatMap((r) =>
-                  r.ssids.length > 0
-                    ? r.ssids.map((s) => {
-                        const stranded = s.vlan_id != null && unreachableSsids.has(`${r.name}|${s.name}|${s.vlan_id}`);
-                        return (
-                          <Table.Tr key={`${r.name}-${s.name}`}>
-                            <Table.Td ff="monospace" fz="xs">{r.name}</Table.Td>
-                            <Table.Td ff="monospace" fz="xs">
-                              {r.band} · ch {r.channel}{r.width_mhz ? ` (${r.width_mhz} MHz)` : ''}
-                            </Table.Td>
-                            <Table.Td ff="monospace" fz="xs">
-                              {r.utilization_pct != null ? `${r.utilization_pct.toFixed(0)}%` : '—'}
-                            </Table.Td>
-                            <Table.Td fw={600} fz="sm">{s.name}</Table.Td>
-                            <Table.Td>
-                              <Group gap={6} wrap="wrap">
-                                <VlanChip vid={s.vlan_id} vlansById={vlansById} colorMap={vlanColors} />
-                                {stranded && <Badge size="xs" variant="light" color="yellow">⊘ Unreachable</Badge>}
-                              </Group>
-                            </Table.Td>
-                            <Table.Td ff="monospace" fz="xs">{s.security || '—'}</Table.Td>
-                            <Table.Td ff="monospace" fz="xs">{s.client_count}</Table.Td>
-                          </Table.Tr>
-                        );
-                      })
-                    : [
-                        <Table.Tr key={r.name}>
-                          <Table.Td ff="monospace" fz="xs">{r.name}</Table.Td>
-                          <Table.Td ff="monospace" fz="xs">
-                            {r.band} · ch {r.channel}{r.width_mhz ? ` (${r.width_mhz} MHz)` : ''}
-                          </Table.Td>
-                          <Table.Td ff="monospace" fz="xs">
-                            {r.utilization_pct != null ? `${r.utilization_pct.toFixed(0)}%` : '—'}
-                          </Table.Td>
-                          <Table.Td colSpan={4}><Text size="xs" c="dimmed">No active SSIDs</Text></Table.Td>
-                        </Table.Tr>,
-                      ],
-                )}
+                {detail.radios.flatMap((r) => {
+                  const radioCells = (
+                    <>
+                      <Table.Td ff="monospace" fz="xs">{r.name}</Table.Td>
+                      <Table.Td ff="monospace" fz="xs">
+                        {r.band} · ch {r.channel}{r.width_mhz ? ` (${r.width_mhz} MHz)` : ''}
+                      </Table.Td>
+                      <Table.Td ff="monospace" fz="xs">
+                        {r.utilization_pct != null ? `${r.utilization_pct.toFixed(0)}%` : '—'}
+                      </Table.Td>
+                    </>
+                  );
+                  if (r.ssids.length === 0) {
+                    return (
+                      <Table.Tr key={r.name}>
+                        {radioCells}
+                        <Table.Td colSpan={4}><Text size="xs" c="dimmed">No active SSIDs</Text></Table.Td>
+                      </Table.Tr>
+                    );
+                  }
+                  return r.ssids.map((s) => {
+                    const stranded = s.vlan_id != null && unreachableSsids.has(`${r.name}|${s.name}|${s.vlan_id}`);
+                    return (
+                      <Table.Tr key={`${r.name}-${s.name}`}>
+                        {radioCells}
+                        <Table.Td fw={600} fz="sm">{s.name}</Table.Td>
+                        <Table.Td>
+                          <Group gap={6} wrap="wrap">
+                            <VlanChip vid={s.vlan_id} vlansById={vlansById} colorMap={vlanColors} />
+                            {stranded && <Badge size="xs" variant="light" color="yellow">⊘ Unreachable</Badge>}
+                          </Group>
+                        </Table.Td>
+                        <Table.Td ff="monospace" fz="xs">{s.security || '—'}</Table.Td>
+                        <Table.Td ff="monospace" fz="xs">{s.client_count}</Table.Td>
+                      </Table.Tr>
+                    );
+                  });
+                })}
               </Table.Tbody>
             </Table>
-          </div>
+          </Table.ScrollContainer>
         </Card>
       )}
 
@@ -497,10 +496,10 @@ export function DeviceDetailScreen({
       {/* Full Ports Table (complement to faceplate) */}
       {detail.links.length > 0 && (
         <Card withBorder radius="md" p={0}>
-          <Group px="md" py="sm" style={{ borderBottom: '1px solid var(--np-border-subtle)' }}>
+          <CardHeader>
             <Title order={4} size="h5">All Ports ({detail.links.length})</Title>
-          </Group>
-          <div className="np-table-wrap">
+          </CardHeader>
+          <Table.ScrollContainer minWidth={0} type="native">
             <Table highlightOnHover className="data-table">
               <Table.Thead>
                 <Table.Tr>
@@ -558,17 +557,17 @@ export function DeviceDetailScreen({
                   ))}
               </Table.Tbody>
             </Table>
-          </div>
+          </Table.ScrollContainer>
         </Card>
       )}
 
       {/* Attached Clients */}
       {detail.clients.length > 0 && (
         <Card withBorder radius="md" p={0}>
-          <Group px="md" py="sm" style={{ borderBottom: '1px solid var(--np-border-subtle)' }}>
+          <CardHeader>
             <Title order={4} size="h5">Attached Clients ({detail.clients.length})</Title>
-          </Group>
-          <div className="np-table-wrap">
+          </CardHeader>
+          <Table.ScrollContainer minWidth={0} type="native">
             <Table highlightOnHover className="data-table">
               <Table.Thead>
                 <Table.Tr>
@@ -614,7 +613,7 @@ export function DeviceDetailScreen({
                 })}
               </Table.Tbody>
             </Table>
-          </div>
+          </Table.ScrollContainer>
         </Card>
       )}
     </Stack>

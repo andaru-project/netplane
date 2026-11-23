@@ -21,6 +21,7 @@ import {
   type VLANFlow,
 } from '../api';
 import { VlanHealthBadge } from '../components/Badges';
+import { CardHeader } from '../components/ui';
 import { devicePath, vlanFlowPath } from '../routing';
 import {
   type ColorPair,
@@ -97,18 +98,11 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
 
       {/* Configured VLANs Table */}
       <Card withBorder radius="md" p={0}>
-        <Group
-          justify="space-between"
-          px="md"
-          py="sm"
-          wrap="wrap"
-          gap="xs"
-          style={{ borderBottom: '1px solid var(--np-border-subtle)' }}
-        >
+        <CardHeader>
           <Title order={4} size="h5">Configured VLANs ({vlans.length})</Title>
           <Text size="xs" c="dimmed">Click any row to trace its propagation in VLAN Flow</Text>
-        </Group>
-        <div className="np-table-wrap">
+        </CardHeader>
+        <Table.ScrollContainer minWidth={0} type="native">
           <Table highlightOnHover className="data-table">
             <Table.Thead>
               <Table.Tr>
@@ -222,19 +216,12 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
               )}
             </Table.Tbody>
           </Table>
-        </div>
+        </Table.ScrollContainer>
       </Card>
 
       {/* Cross-Device Port Tagging Matrix */}
       <Card withBorder radius="md" p={0}>
-        <Group
-          justify="space-between"
-          px="md"
-          py="sm"
-          wrap="wrap"
-          gap="sm"
-          style={{ borderBottom: '1px solid var(--np-border-subtle)' }}
-        >
+        <CardHeader gap="sm">
           <div>
             <Title order={4} size="h5">Cross-Device Port Tagging Matrix</Title>
             <Text size="xs" c="dimmed">
@@ -260,9 +247,9 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
               onChange={(e) => setAnomaliesOnly(e.currentTarget.checked)}
             />
           </Group>
-        </Group>
+        </CardHeader>
 
-        <div className="np-table-wrap">
+        <Table.ScrollContainer minWidth={0} type="native">
           <Table highlightOnHover className="data-table">
             <Table.Thead>
               <Table.Tr>
@@ -320,85 +307,57 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
                       const misHere = portAnoms.find((f) => f.kind === 'tag_mismatch' && f.vlans.includes(v.id));
                       const isStrandedAccess = isU && unreachableAccess.has(`${l.device_id}|${l.if_name}|${v.id}`);
 
+                      let cell: { cls: string; label: string; title?: string; to?: string } | null = null;
                       if (leakHere) {
-                        return (
-                          <Table.Td key={v.id} ta="center">
-                            <button
-                              type="button"
-                              className="np-tag-chip anom-leak"
-                              title={leakHere.message}
-                              onClick={() =>
-                                void navigate(vlanFlowPath({ mode: 'single', vlanId: v.id, findingKey: findingKey(leakHere) }))
-                              }
-                            >
-                              ⚠ {isU ? 'U' : isT ? 'T' : '?'}
-                            </button>
-                          </Table.Td>
-                        );
+                        cell = {
+                          cls: 'anom-leak',
+                          label: `⚠ ${isU ? 'U' : isT ? 'T' : '?'}`,
+                          title: leakHere.message,
+                          to: vlanFlowPath({ mode: 'single', vlanId: v.id, findingKey: findingKey(leakHere) }),
+                        };
+                      } else if (deadHere) {
+                        cell = {
+                          cls: 'anom-dead',
+                          label: isT ? 'T ⊘' : isU ? 'U ⊘' : '✕ ⊘',
+                          title: deadHere.message,
+                          to: vlanFlowPath({ mode: 'single', vlanId: v.id, findingKey: findingKey(deadHere) }),
+                        };
+                      } else if (misHere) {
+                        cell = {
+                          cls: 'anom-dead',
+                          label: `⇄ ${isT ? 'T' : 'U'}`,
+                          title: misHere.message,
+                          to: vlanFlowPath({ mode: 'single', vlanId: v.id, findingKey: findingKey(misHere) }),
+                        };
+                      } else if (isStrandedAccess) {
+                        cell = {
+                          cls: 'anom-dead',
+                          label: 'U ⊘',
+                          title: `Access port cannot reach VLAN ${v.id} gateway`,
+                          to: vlanFlowPath({ mode: 'single', vlanId: v.id }),
+                        };
+                      } else if (isT) {
+                        cell = { cls: 't', label: 'T' };
+                      } else if (isU) {
+                        cell = { cls: 'u', label: 'U' };
                       }
-                      if (deadHere) {
-                        return (
-                          <Table.Td key={v.id} ta="center">
-                            <button
-                              type="button"
-                              className="np-tag-chip anom-dead"
-                              title={deadHere.message}
-                              onClick={() =>
-                                void navigate(vlanFlowPath({ mode: 'single', vlanId: v.id, findingKey: findingKey(deadHere) }))
-                              }
-                            >
-                              {isT ? 'T ⊘' : isU ? 'U ⊘' : '✕ ⊘'}
-                            </button>
-                          </Table.Td>
-                        );
-                      }
-                      if (misHere) {
-                        return (
-                          <Table.Td key={v.id} ta="center">
-                            <button
-                              type="button"
-                              className="np-tag-chip anom-dead"
-                              title={misHere.message}
-                              onClick={() =>
-                                void navigate(vlanFlowPath({ mode: 'single', vlanId: v.id, findingKey: findingKey(misHere) }))
-                              }
-                            >
-                              ⇄ {isU ? 'U' : 'T'}
-                            </button>
-                          </Table.Td>
-                        );
-                      }
-                      if (isStrandedAccess) {
-                        return (
-                          <Table.Td key={v.id} ta="center">
-                            <button
-                              type="button"
-                              className="np-tag-chip anom-dead"
-                              title={`Access port cannot reach VLAN ${v.id} gateway`}
-                              onClick={() => void navigate(vlanFlowPath({ mode: 'single', vlanId: v.id }))}
-                            >
-                              U ⊘
-                            </button>
-                          </Table.Td>
-                        );
-                      }
-                      if (isU) {
-                        return (
-                          <Table.Td key={v.id} ta="center">
-                            <span className="np-tag-chip u">U</span>
-                          </Table.Td>
-                        );
-                      }
-                      if (isT) {
-                        return (
-                          <Table.Td key={v.id} ta="center">
-                            <span className="np-tag-chip t">T</span>
-                          </Table.Td>
-                        );
-                      }
+
                       return (
                         <Table.Td key={v.id} ta="center">
-                          <Text span c="dimmed" size="xs">·</Text>
+                          {!cell ? (
+                            <Text span c="dimmed" size="xs">·</Text>
+                          ) : cell.to ? (
+                            <button
+                              type="button"
+                              className={`np-tag-chip ${cell.cls}`}
+                              title={cell.title}
+                              onClick={() => void navigate(cell.to!)}
+                            >
+                              {cell.label}
+                            </button>
+                          ) : (
+                            <span className={`np-tag-chip ${cell.cls}`}>{cell.label}</span>
+                          )}
                         </Table.Td>
                       );
                     })}
@@ -416,21 +375,16 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
               )}
             </Table.Tbody>
           </Table>
-        </div>
+        </Table.ScrollContainer>
       </Card>
 
       {/* Non-VLAN L3 Segments (e.g. WAN, PPPoE, WireGuard, untagged routed links) */}
       {nonVlanSegments.length > 0 && (
         <Card withBorder radius="md" p={0}>
-          <Group
-            justify="space-between"
-            px="md"
-            py="sm"
-            style={{ borderBottom: '1px solid var(--np-border-subtle)' }}
-          >
+          <CardHeader>
             <Title order={4} size="h5">Other L3 Segments ({nonVlanSegments.length})</Title>
-          </Group>
-          <div className="np-table-wrap">
+          </CardHeader>
+          <Table.ScrollContainer minWidth={0} type="native">
             <Table highlightOnHover className="data-table">
               <Table.Thead>
                 <Table.Tr>
@@ -465,7 +419,7 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
                 ))}
               </Table.Tbody>
             </Table>
-          </div>
+          </Table.ScrollContainer>
         </Card>
       )}
     </Stack>

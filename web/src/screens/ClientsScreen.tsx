@@ -19,6 +19,7 @@ import {
   type Client,
   type Device,
   type VLANFlow,
+  type VLANFlowVLAN,
 } from '../api';
 import { VlanChip } from '../components/Badges';
 import { devicePath, vlanFlowPath } from '../routing';
@@ -26,26 +27,23 @@ import {
   type ColorPair,
   deviceName,
   getClientVlanIssue,
+  vlanLabel,
 } from '../vlanUtils';
 
 interface Props {
   clients: Client[];
   flow: VLANFlow | null;
   devicesById: Map<string, Device>;
+  vlansById: Map<number, VLANFlowVLAN>;
   vlanColors: Map<number, ColorPair>;
 }
 
-export function ClientsScreen({ clients, flow, devicesById, vlanColors }: Props) {
+export function ClientsScreen({ clients, flow, devicesById, vlansById, vlanColors }: Props) {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [connType, setConnType] = useState<string>('all');
   const [vlanFilter, setVlanFilter] = useState<string>('all');
   const [onlineOnly, setOnlineOnly] = useState(false);
-
-  const vlansById = useMemo(
-    () => new Map((flow?.vlans ?? []).map((v) => [v.id, v])),
-    [flow],
-  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -90,7 +88,7 @@ export function ClientsScreen({ clients, flow, devicesById, vlanColors }: Props)
               { value: 'all', label: 'All VLANs' },
               ...(flow?.vlans ?? []).map((v) => ({
                 value: String(v.id),
-                label: `VLAN ${v.id}${v.name ? ` · ${v.name}` : ''}`,
+                label: vlanLabel(vlansById, v.id),
               })),
             ]}
           />
@@ -115,7 +113,7 @@ export function ClientsScreen({ clients, flow, devicesById, vlanColors }: Props)
       </Group>
 
       <Card withBorder radius="md" p={0}>
-        <div className="np-table-wrap">
+        <Table.ScrollContainer minWidth={0} type="native">
           <Table striped highlightOnHover className="data-table">
             <Table.Thead>
               <Table.Tr>
@@ -213,7 +211,7 @@ export function ClientsScreen({ clients, flow, devicesById, vlanColors }: Props)
               )}
             </Table.Tbody>
           </Table>
-        </div>
+        </Table.ScrollContainer>
       </Card>
     </Stack>
   );

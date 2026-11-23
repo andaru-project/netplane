@@ -14,7 +14,7 @@ import {
   useMantineColorScheme,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { useMemo } from 'react';
+import { Fragment, type ReactNode, useMemo } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router';
 import {
   type Device,
@@ -24,6 +24,7 @@ import {
   type TargetConfig,
   type TopologyGraph,
   type VLANFlow,
+  type VLANFlowVLAN,
 } from './api';
 import {
   AndaruMark,
@@ -45,7 +46,39 @@ import { VlanFlowScreen } from './screens/VlanFlowScreen';
 import { VlansScreen } from './screens/VlansScreen';
 import { buildVlanColorMap } from './vlanUtils';
 
-export interface ShellProps {
+interface NavItem {
+  to: string;
+  label: string;
+  icon: () => ReactNode;
+  badge?: 'findings' | 'devices' | 'vlans' | 'clients' | 'events';
+}
+
+const NAV: { group: string; items: NavItem[] }[] = [
+  {
+    group: 'Monitor',
+    items: [
+      { to: '/', label: 'Overview', icon: IconOverview },
+      { to: '/topology', label: 'Topology', icon: IconTopology },
+      { to: '/vlans/flow', label: 'VLAN Flow', icon: IconVlanFlow, badge: 'findings' },
+    ],
+  },
+  {
+    group: 'Inventory',
+    items: [
+      { to: '/devices', label: 'Devices', icon: IconDevices, badge: 'devices' },
+      { to: '/vlans', label: 'VLANs & Segments', icon: IconVlans, badge: 'vlans' },
+      { to: '/clients', label: 'Clients', icon: IconClients, badge: 'clients' },
+    ],
+  },
+  {
+    group: 'Operations',
+    items: [
+      { to: '/diagnostics', label: 'Diagnostics & Events', icon: IconDiagnostics, badge: 'events' },
+    ],
+  },
+];
+
+interface ShellProps {
   state: NetworkState | null;
   topology: TopologyGraph | null;
   flow: VLANFlow | null;
@@ -88,6 +121,10 @@ export function Shell({
     () => new Map<string, Device>(devices.map((d) => [d.id, d])),
     [devices],
   );
+  const vlansById = useMemo(
+    () => new Map<number, VLANFlowVLAN>(vlans.map((v) => [v.id, v])),
+    [vlans],
+  );
   const vlanColors = useMemo(() => buildVlanColorMap(vlans), [vlans]);
 
   const hasCrit = findings.some((f) => f.severity === 'crit');
@@ -102,6 +139,13 @@ export function Shell({
 
   const toggleScheme = () => {
     setColorScheme(computedColorScheme === 'dark' ? 'light' : 'dark');
+  };
+
+  const navCounts = {
+    devices: devices.length,
+    vlans: vlans.length,
+    clients: onlineClients,
+    events: events.length,
   };
 
   return (
@@ -177,108 +221,38 @@ export function Shell({
 
       <AppShell.Navbar className="app-navbar" p="xs" component="nav" aria-label="Main navigation">
         <Stack gap={2}>
-          <div className="np-nav-group-label">Monitor</div>
-          <NavLink
-            className="nav-item"
-            component={Link}
-            to="/"
-            label="Overview"
-            leftSection={<IconOverview />}
-            active={isActive('/')}
-            aria-current={isActive('/') ? 'page' : undefined}
-            onClick={close}
-          />
-          <NavLink
-            className="nav-item"
-            component={Link}
-            to="/topology"
-            label="Topology"
-            leftSection={<IconTopology />}
-            active={isActive('/topology')}
-            aria-current={isActive('/topology') ? 'page' : undefined}
-            onClick={close}
-          />
-          <NavLink
-            className="nav-item"
-            component={Link}
-            to="/vlans/flow"
-            label="VLAN Flow"
-            leftSection={<IconVlanFlow />}
-            rightSection={
-              findings.length > 0 ? (
-                <Badge size="xs" variant="filled" color={hasCrit ? 'red' : 'yellow'}>
-                  {findings.length}
-                </Badge>
-              ) : undefined
-            }
-            active={isActive('/vlans/flow')}
-            aria-current={isActive('/vlans/flow') ? 'page' : undefined}
-            onClick={close}
-          />
-
-          <div className="np-nav-group-label">Inventory</div>
-          <NavLink
-            className="nav-item"
-            component={Link}
-            to="/devices"
-            label="Devices"
-            leftSection={<IconDevices />}
-            rightSection={
-              devices.length > 0 ? (
-                <Text size="xs" c="dimmed" ff="monospace">{devices.length}</Text>
-              ) : undefined
-            }
-            active={isActive('/devices')}
-            aria-current={isActive('/devices') ? 'page' : undefined}
-            onClick={close}
-          />
-          <NavLink
-            className="nav-item"
-            component={Link}
-            to="/vlans"
-            label="VLANs & Segments"
-            leftSection={<IconVlans />}
-            rightSection={
-              vlans.length > 0 ? (
-                <Text size="xs" c="dimmed" ff="monospace">{vlans.length}</Text>
-              ) : undefined
-            }
-            active={isActive('/vlans')}
-            aria-current={isActive('/vlans') ? 'page' : undefined}
-            onClick={close}
-          />
-          <NavLink
-            className="nav-item"
-            component={Link}
-            to="/clients"
-            label="Clients"
-            leftSection={<IconClients />}
-            rightSection={
-              onlineClients > 0 ? (
-                <Text size="xs" c="dimmed" ff="monospace">{onlineClients}</Text>
-              ) : undefined
-            }
-            active={isActive('/clients')}
-            aria-current={isActive('/clients') ? 'page' : undefined}
-            onClick={close}
-          />
-
-          <div className="np-nav-group-label">Operations</div>
-          <NavLink
-            className="nav-item"
-            component={Link}
-            to="/diagnostics"
-            label="Diagnostics & Events"
-            leftSection={<IconDiagnostics />}
-            rightSection={
-              events.length > 0 ? (
-                <Text size="xs" c="dimmed" ff="monospace">{events.length}</Text>
-              ) : undefined
-            }
-            active={isActive('/diagnostics')}
-            aria-current={isActive('/diagnostics') ? 'page' : undefined}
-            onClick={close}
-          />
+          {NAV.map((section) => (
+            <Fragment key={section.group}>
+              <div className="np-nav-group-label">{section.group}</div>
+              {section.items.map((item) => {
+                const active = isActive(item.to);
+                const rightSection =
+                  item.badge === 'findings'
+                    ? findings.length > 0 ? (
+                        <Badge size="xs" variant="filled" color={hasCrit ? 'red' : 'yellow'}>
+                          {findings.length}
+                        </Badge>
+                      ) : undefined
+                    : item.badge && navCounts[item.badge] > 0
+                      ? <Text size="xs" c="dimmed" ff="monospace">{navCounts[item.badge]}</Text>
+                      : undefined;
+                return (
+                  <NavLink
+                    key={item.to}
+                    className="nav-item"
+                    component={Link}
+                    to={item.to}
+                    label={item.label}
+                    leftSection={item.icon()}
+                    rightSection={rightSection}
+                    active={active}
+                    aria-current={active ? 'page' : undefined}
+                    onClick={close}
+                  />
+                );
+              })}
+            </Fragment>
+          ))}
         </Stack>
       </AppShell.Navbar>
 
@@ -312,6 +286,7 @@ export function Shell({
                   state={state}
                   flow={flow}
                   devicesById={devicesById}
+                  vlansById={vlansById}
                   vlanColors={vlanColors}
                 />
               }
@@ -324,6 +299,7 @@ export function Shell({
                   state={state}
                   topology={topology}
                   devicesById={devicesById}
+                  vlansById={vlansById}
                   vlanColors={vlanColors}
                 />
               }
@@ -349,6 +325,7 @@ export function Shell({
                   topology={topology}
                   flow={flow}
                   devicesById={devicesById}
+                  vlansById={vlansById}
                   vlanColors={vlanColors}
                   refreshNonce={refreshNonce}
                 />
@@ -361,6 +338,7 @@ export function Shell({
                   clients={clients}
                   flow={flow}
                   devicesById={devicesById}
+                  vlansById={vlansById}
                   vlanColors={vlanColors}
                 />
               }

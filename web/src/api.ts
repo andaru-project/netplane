@@ -239,19 +239,6 @@ export interface DiagnosticResult {
   error?: string;
 }
 
-export interface LinkSample {
-  device_id: string;
-  if_name: string;
-  time: string;
-  rx_bps: number;
-  tx_bps: number;
-  rx_errors: number;
-  tx_errors: number;
-  sfp_rx_dbm?: number;
-  sfp_temp_c?: number;
-  poe_watts?: number;
-}
-
 export interface DeviceDetail {
   device: Device;
   links: Link[];
@@ -401,12 +388,6 @@ export interface TargetConfig {
   poll_interval: number;
 }
 
-export interface HealthResponse {
-  status: string;
-  version: string;
-  targets?: Record<string, { last_poll?: string; last_error?: string; ok?: boolean }>;
-}
-
 export interface NetplaneEvent {
   id: string;
   type: string;
@@ -467,14 +448,8 @@ async function fetchJSON<T>(path: string, init?: RequestInit, retried = false): 
 }
 
 export const api = {
-  getHealth: () => fetchJSON<HealthResponse>('/health'),
   getState: () => fetchJSON<NetworkState>('/state'),
-  listDevices: () => fetchJSON<{ items: Device[] }>('/devices').then((r) => r.items),
   getDevice: (id: string) => fetchJSON<DeviceDetail>(`/devices/${encodeURIComponent(id)}`),
-  getLinkSamples: (id: string, ifName: string, since = '1h') =>
-    fetchJSON<{ items: LinkSample[] }>(
-      `/devices/${encodeURIComponent(id)}/links/${encodeURIComponent(ifName)}/samples?since=${encodeURIComponent(since)}`,
-    ).then((r) => r.items),
   getTopology: () => fetchJSON<TopologyGraph>('/topology'),
   // Unused hops (a trunk carrying a VLAN toward a device that never uses it) are not drawn.
   getVLANFlow: () =>
@@ -484,13 +459,6 @@ export const api = {
     })),
   listTargets: () => fetchJSON<{ items: TargetConfig[] }>('/targets').then((r) => r.items),
   pollTarget: (id: string) => fetchJSON<unknown>(`/targets/${encodeURIComponent(id)}/poll`, { method: 'POST' }),
-  listClients: (q = '', onlineOnly = false) => {
-    const params = new URLSearchParams();
-    if (onlineOnly) params.set('online', 'true');
-    if (q) params.set('q', q);
-    const qs = params.toString();
-    return fetchJSON<{ items: Client[] }>(`/clients${qs ? '?' + qs : ''}`).then((r) => r.items);
-  },
   listDiagnostics: (limit = 30) =>
     fetchJSON<{ items: DiagnosticResult[] }>(`/diagnostics?limit=${limit}`).then((r) => r.items),
   runDiagnostic: (req: { kind: string; device_id?: string; target: string; params?: Record<string, string> }) =>

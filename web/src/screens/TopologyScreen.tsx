@@ -19,18 +19,21 @@ import {
   type NetworkState,
   type TopologyGraph,
   type VLANFlow,
+  type VLANFlowVLAN,
 } from '../api';
-import { DriverBadge, FindingBadge, VlanChip } from '../components/Badges';
+import { DriverBadge, VlanChip } from '../components/Badges';
 import { type TopologySelection, TopologyView } from '../components/TopologyView';
+import { FindingCallout, PortButton } from '../components/ui';
 import { devicePath, vlanFlowPath } from '../routing';
 import {
   type ColorPair,
-  deviceName,
   findingKey,
   findingsForDevice,
   findWirelessSignal,
   isEdgeStpBlocked,
   modeShort,
+  portLabel,
+  vlanLabel,
 } from '../vlanUtils';
 
 interface Props {
@@ -38,19 +41,15 @@ interface Props {
   state: NetworkState | null;
   flow: VLANFlow | null;
   devicesById: Map<string, Device>;
+  vlansById: Map<number, VLANFlowVLAN>;
   vlanColors: Map<number, ColorPair>;
 }
 
-export function TopologyScreen({ graph, state, flow, devicesById, vlanColors }: Props) {
+export function TopologyScreen({ graph, state, flow, devicesById, vlansById, vlanColors }: Props) {
   const [vlanOverlay, setVlanOverlay] = useState<string>('');
   const [showClients, setShowClients] = useState(false);
   const [showEvidence, setShowEvidence] = useState(true);
   const [selection, setSelection] = useState<TopologySelection | null>(null);
-
-  const vlansById = useMemo(
-    () => new Map((flow?.vlans ?? []).map((v) => [v.id, v])),
-    [flow],
-  );
 
   const overlayVid = vlanOverlay ? Number(vlanOverlay) : null;
 
@@ -91,7 +90,7 @@ export function TopologyScreen({ graph, state, flow, devicesById, vlanColors }: 
             onChange={(v) => setVlanOverlay(v ?? '')}
             data={(flow?.vlans ?? []).map((v) => ({
               value: String(v.id),
-              label: `VLAN ${v.id}${v.name ? ` · ${v.name}` : ''}`,
+              label: vlanLabel(vlansById, v.id),
             }))}
           />
           <Switch
@@ -229,20 +228,7 @@ export function TopologyScreen({ graph, state, flow, devicesById, vlanColors }: 
                 <Stack gap={6}>
                   <Text size="xs" fw={700} tt="uppercase" c="dimmed">VLAN Findings</Text>
                   {findingsForDevice(flow.findings, selectedDevice.id).map((f) => (
-                    <div key={findingKey(f)} className={`np-callout ${f.severity}`}>
-                      <Group justify="space-between" mb={4}>
-                        <FindingBadge finding={f} />
-                        <Button
-                          size="compact-xs"
-                          variant="subtle"
-                          component={Link}
-                          to={vlanFlowPath({ mode: 'single', vlanId: f.vlans[0], findingKey: findingKey(f) })}
-                        >
-                          Trace →
-                        </Button>
-                      </Group>
-                      <Text size="xs">{f.message}</Text>
-                    </div>
+                    <FindingCallout key={findingKey(f)} finding={f} actionLabel="Trace →" />
                   ))}
                 </Stack>
               )}
@@ -261,10 +247,8 @@ export function TopologyScreen({ graph, state, flow, devicesById, vlanColors }: 
               </Group>
 
               <Text size="sm" fw={600} ff="monospace">
-                {deviceName(devicesById, selectedEdge.from_id)}
-                {selectedEdge.from_link ? `:${selectedEdge.from_link}` : ''} ↔{' '}
-                {deviceName(devicesById, selectedEdge.to_id)}
-                {selectedEdge.to_link ? `:${selectedEdge.to_link}` : ''}
+                {portLabel(devicesById, selectedEdge.from_id, selectedEdge.from_link)} ↔{' '}
+                {portLabel(devicesById, selectedEdge.to_id, selectedEdge.to_link)}
               </Text>
 
               <Stack gap={4}>
@@ -301,20 +285,7 @@ export function TopologyScreen({ graph, state, flow, devicesById, vlanColors }: 
                 <Stack gap={6}>
                   <Text size="xs" fw={700} tt="uppercase" c="dimmed">Findings on this Link</Text>
                   {edgeFindings.map((f) => (
-                    <div key={findingKey(f)} className={`np-callout ${f.severity}`}>
-                      <Group justify="space-between" mb={4}>
-                        <FindingBadge finding={f} />
-                        <Button
-                          size="compact-xs"
-                          variant="subtle"
-                          component={Link}
-                          to={vlanFlowPath({ mode: 'single', vlanId: f.vlans[0], findingKey: findingKey(f) })}
-                        >
-                          VLAN Flow →
-                        </Button>
-                      </Group>
-                      <Text size="xs">{f.message}</Text>
-                    </div>
+                    <FindingCallout key={findingKey(f)} finding={f} actionLabel="VLAN Flow →" />
                   ))}
                 </Stack>
               )}
@@ -347,22 +318,8 @@ export function TopologyScreen({ graph, state, flow, devicesById, vlanColors }: 
               )}
 
               <Group gap="xs" wrap="wrap">
-                <Button
-                  size="compact-xs"
-                  variant="default"
-                  component={Link}
-                  to={devicePath(selectedEdge.from_id, selectedEdge.from_link)}
-                >
-                  {deviceName(devicesById, selectedEdge.from_id)}{selectedEdge.from_link ? `:${selectedEdge.from_link}` : ''} →
-                </Button>
-                <Button
-                  size="compact-xs"
-                  variant="default"
-                  component={Link}
-                  to={devicePath(selectedEdge.to_id, selectedEdge.to_link)}
-                >
-                  {deviceName(devicesById, selectedEdge.to_id)}{selectedEdge.to_link ? `:${selectedEdge.to_link}` : ''} →
-                </Button>
+                <PortButton devicesById={devicesById} deviceId={selectedEdge.from_id} link={selectedEdge.from_link} />
+                <PortButton devicesById={devicesById} deviceId={selectedEdge.to_id} link={selectedEdge.to_link} />
               </Group>
             </Stack>
           )}

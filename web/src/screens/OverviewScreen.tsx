@@ -20,13 +20,14 @@ import {
   type VLANFlow,
 } from '../api';
 import { DriverBadge, FindingBadge } from '../components/Badges';
+import { AlertRow, CardHeader, FindingCounts } from '../components/ui';
 import { devicePath, vlanFlowPath } from '../routing';
 import {
   describeFinding,
-  deviceName,
   findingKey,
   findingsForDevice,
   getSfpAlerts,
+  portLabel,
 } from '../vlanUtils';
 
 interface Props {
@@ -64,8 +65,6 @@ export function OverviewScreen({
   const wifiClients = onlineClients.filter((c) => c.connection_type === 'wireless').length;
 
   const leakCount = findings.filter((f) => f.kind === 'leak').length;
-  const deadCount = findings.filter((f) => f.kind === 'dead_end').length;
-  const mismatchCount = findings.filter((f) => f.kind === 'tag_mismatch').length;
 
   const sfpAlerts = getSfpAlerts(links);
   const totalAttention = offlineDevices.length + findings.length + sfpAlerts.length;
@@ -127,14 +126,11 @@ export function OverviewScreen({
           >
             {findings.length === 0 ? 'Clean' : `${findings.length} Issue${findings.length === 1 ? '' : 's'}`}
           </Text>
-          <Group gap={4} wrap="wrap">
-            {leakCount > 0 && <Badge size="xs" variant="light" color="red">{leakCount} Leak</Badge>}
-            {deadCount > 0 && <Badge size="xs" variant="light" color="yellow">{deadCount} Dead-end</Badge>}
-            {mismatchCount > 0 && <Badge size="xs" variant="light" color="orange">{mismatchCount} Mismatch</Badge>}
-            {findings.length === 0 && (
-              <Text size="xs" c="dimmed">{flow?.vlans.length ?? 0} VLANs traced</Text>
-            )}
-          </Group>
+          <FindingCounts
+            findings={findings}
+            gap={4}
+            empty={<Text size="xs" c="dimmed">{flow?.vlans.length ?? 0} VLANs traced</Text>}
+          />
         </button>
 
         <button type="button" className="np-kpi-btn" onClick={() => void navigate('/clients')}>
@@ -199,14 +195,7 @@ export function OverviewScreen({
 
       {/* Attention Required */}
       <Card withBorder radius="md" p={0}>
-        <Group
-          justify="space-between"
-          px="md"
-          py="sm"
-          wrap="wrap"
-          gap="xs"
-          style={{ borderBottom: '1px solid var(--np-border-subtle)' }}
-        >
+        <CardHeader>
           <Group gap="xs">
             <Title order={4} size="h5">Attention Required</Title>
             <Badge size="sm" variant="light" color={totalAttention > 0 ? (leakCount > 0 || offlineDevices.length > 0 ? 'red' : 'yellow') : 'green'}>
@@ -214,87 +203,90 @@ export function OverviewScreen({
             </Badge>
           </Group>
           <Text size="xs" c="dimmed">Reported by VLAN flow analysis, device polling, and SFP DOM</Text>
-        </Group>
+        </CardHeader>
 
         <div>
           {offlineDevices.map((d) => (
-            <div key={`offline-${d.id}`} className="np-alert-row crit">
-              <div>
-                <Group gap="xs" mb={2}>
-                  <Badge size="xs" variant="light" color="red">CRIT · OFFLINE</Badge>
-                  <Text size="sm" fw={600}>{d.name} is unreachable</Text>
-                </Group>
-                <Text size="xs" c="dimmed" ff="monospace">
-                  {d.driver}{d.mgmt_ip ? ` · ${d.mgmt_ip}` : ''} · last seen {new Date(d.last_seen).toLocaleString()}
-                </Text>
-              </div>
-              <Button size="compact-xs" variant="default" component={Link} to={devicePath(d.id)}>
-                Inspect Device →
-              </Button>
-            </div>
+            <AlertRow
+              key={`offline-${d.id}`}
+              severity="crit"
+              badge={<Badge size="xs" variant="light" color="red">CRIT · OFFLINE</Badge>}
+              title={<Text size="sm" fw={600}>{d.name} is unreachable</Text>}
+              subtitle={`${d.driver}${d.mgmt_ip ? ` · ${d.mgmt_ip}` : ''} · last seen ${new Date(d.last_seen).toLocaleString()}`}
+              subtitleMono
+              action={
+                <Button size="compact-xs" variant="default" component={Link} to={devicePath(d.id)}>
+                  Inspect Device →
+                </Button>
+              }
+            />
           ))}
 
           {findings.map((f) => {
             const desc = flow ? describeFinding(f, flow, state, devicesById) : null;
             return (
-              <div key={findingKey(f)} className={`np-alert-row ${f.severity}`}>
-                <div>
-                  <Group gap="xs" mb={2} wrap="wrap">
-                    <FindingBadge finding={f} />
-                    <Text size="sm" fw={600}>{desc?.title ?? f.message}</Text>
-                  </Group>
-                  <Text size="xs" c="dimmed">{f.message}</Text>
-                </div>
-                <Button
-                  size="compact-xs"
-                  variant="default"
-                  component={Link}
-                  to={vlanFlowPath({ mode: 'single', vlanId: f.vlans[0], findingKey: findingKey(f) })}
-                >
-                  Inspect in VLAN Flow →
-                </Button>
-              </div>
+              <AlertRow
+                key={findingKey(f)}
+                severity={f.severity}
+                badge={<FindingBadge finding={f} />}
+                title={<Text size="sm" fw={600}>{desc?.title ?? f.message}</Text>}
+                subtitle={f.message}
+                action={
+                  <Button
+                    size="compact-xs"
+                    variant="default"
+                    component={Link}
+                    to={vlanFlowPath({ mode: 'single', vlanId: f.vlans[0], findingKey: findingKey(f) })}
+                  >
+                    Inspect in VLAN Flow →
+                  </Button>
+                }
+              />
             );
           })}
 
           {sfpAlerts.map((l) => {
-            const devName = deviceName(devicesById, l.device_id);
             const sev = l.sfp?.alert_state === 'crit' ? 'crit' : 'warn';
             return (
-              <div key={`sfp-${l.device_id}-${l.if_name}`} className={`np-alert-row ${sev}`}>
-                <div>
-                  <Group gap="xs" mb={2} wrap="wrap">
-                    <Badge size="xs" variant="light" color={sev === 'crit' ? 'red' : 'yellow'}>
-                      {sev.toUpperCase()} · SFP DOM
-                    </Badge>
-                    <Text size="sm" fw={600}>
-                      Optical DOM {l.sfp?.alert_state} on {devName}:{l.if_name}
-                    </Text>
-                  </Group>
-                  <Text size="xs" c="dimmed" ff="monospace">
-                    {l.sfp?.rx_power_dbm != null ? `RX ${l.sfp.rx_power_dbm.toFixed(2)} dBm` : ''}
-                    {l.sfp?.vendor ? ` · ${l.sfp.vendor} ${l.sfp.part_number ?? ''}` : ''}
-                    {l.counters ? ` · ${l.counters.rx_errors} RX err` : ''}
+              <AlertRow
+                key={`sfp-${l.device_id}-${l.if_name}`}
+                severity={sev}
+                badge={
+                  <Badge size="xs" variant="light" color={sev === 'crit' ? 'red' : 'yellow'}>
+                    {sev.toUpperCase()} · SFP DOM
+                  </Badge>
+                }
+                title={
+                  <Text size="sm" fw={600}>
+                    Optical DOM {l.sfp?.alert_state} on {portLabel(devicesById, l.device_id, l.if_name)}
                   </Text>
-                </div>
-                <Button
-                  size="compact-xs"
-                  variant="default"
-                  component={Link}
-                  to={devicePath(l.device_id, l.if_name)}
-                >
-                  Inspect Port →
-                </Button>
-              </div>
+                }
+                subtitle={[
+                  l.sfp?.rx_power_dbm != null ? `RX ${l.sfp.rx_power_dbm.toFixed(2)} dBm` : '',
+                  l.sfp?.vendor ? `${l.sfp.vendor} ${l.sfp.part_number ?? ''}`.trim() : '',
+                  l.counters ? `${l.counters.rx_errors} RX err` : '',
+                ].filter(Boolean).join(' · ')}
+                subtitleMono
+                action={
+                  <Button
+                    size="compact-xs"
+                    variant="default"
+                    component={Link}
+                    to={devicePath(l.device_id, l.if_name)}
+                  >
+                    Inspect Port →
+                  </Button>
+                }
+              />
             );
           })}
 
           {totalAttention === 0 && (
-            <div className="np-alert-row">
+            <AlertRow>
               <Text size="sm" c="dimmed">
                 No VLAN leaks, dead-ends, offline devices, or optical alarms detected.
               </Text>
-            </div>
+            </AlertRow>
           )}
         </div>
       </Card>
@@ -302,18 +294,13 @@ export function OverviewScreen({
       {/* Two-Column Operational Summary */}
       <div className="np-grid-2-asym">
         <Card withBorder radius="md" p={0}>
-          <Group
-            justify="space-between"
-            px="md"
-            py="sm"
-            style={{ borderBottom: '1px solid var(--np-border-subtle)' }}
-          >
+          <CardHeader>
             <Title order={4} size="h5">Infrastructure Devices</Title>
             <Button size="compact-xs" variant="subtle" component={Link} to="/devices">
               View all →
             </Button>
-          </Group>
-          <div className="np-table-wrap">
+          </CardHeader>
+          <Table.ScrollContainer minWidth={0} type="native">
             <Table highlightOnHover className="data-table">
               <Table.Thead>
                 <Table.Tr>
@@ -369,25 +356,20 @@ export function OverviewScreen({
                 )}
               </Table.Tbody>
             </Table>
-          </div>
+          </Table.ScrollContainer>
         </Card>
 
         <Stack gap="md">
           {(gateways.length > 0 || firewalls.length > 0) && (
             <Card withBorder radius="md" p={0}>
-              <Group
-                justify="space-between"
-                px="md"
-                py="sm"
-                style={{ borderBottom: '1px solid var(--np-border-subtle)' }}
-              >
+              <CardHeader>
                 <Title order={4} size="h5">Gateways & Firewall</Title>
                 {firewalls[0] && (
                   <Badge size="xs" variant="light" color="teal">
                     {firewalls[0].engine}{firewalls[0].saved_version ? ` · v${firewalls[0].saved_version}` : ''}
                   </Badge>
                 )}
-              </Group>
+              </CardHeader>
               <Stack gap="sm" p="md">
                 {gateways.map((g) => (
                   <Group key={`${g.device_id}-${g.name}`} justify="space-between" wrap="wrap" gap="xs">
@@ -453,12 +435,7 @@ export function OverviewScreen({
           )}
 
           <Card withBorder radius="md" p={0}>
-            <Group
-              justify="space-between"
-              px="md"
-              py="sm"
-              style={{ borderBottom: '1px solid var(--np-border-subtle)' }}
-            >
+            <CardHeader>
               <Title order={4} size="h5">Recent Live Events (SSE)</Title>
               <Group gap="xs">
                 <Badge size="xs" variant="dot" color={sseConnected ? 'teal' : 'gray'}>
@@ -468,12 +445,12 @@ export function OverviewScreen({
                   All →
                 </Button>
               </Group>
-            </Group>
+            </CardHeader>
             <div>
               {events.slice(0, 6).map((ev) => (
-                <div
+                <AlertRow
                   key={ev.id}
-                  className={`np-alert-row ${ev.severity === 'crit' ? 'crit' : ev.severity === 'warn' ? 'warn' : ''}`}
+                  severity={ev.severity === 'crit' ? 'crit' : ev.severity === 'warn' ? 'warn' : undefined}
                   style={{ padding: '9px 14px' }}
                 >
                   <div>
@@ -492,12 +469,12 @@ export function OverviewScreen({
                     </Group>
                     <Text size="xs">{ev.summary}</Text>
                   </div>
-                </div>
+                </AlertRow>
               ))}
               {events.length === 0 && (
-                <div className="np-alert-row">
+                <AlertRow>
                   <Text size="xs" c="dimmed">Waiting for live network transitions…</Text>
-                </div>
+                </AlertRow>
               )}
             </div>
           </Card>

@@ -64,7 +64,7 @@ export function DevicesScreen({ state, flow }: Props) {
       </Group>
 
       <Card withBorder radius="md" p={0}>
-        <div className="np-table-wrap">
+        <Table.ScrollContainer minWidth={0} type="native">
           <Table striped highlightOnHover className="data-table">
             <Table.Thead>
               <Table.Tr>
@@ -147,7 +147,7 @@ export function DevicesScreen({ state, flow }: Props) {
               )}
             </Table.Tbody>
           </Table>
-        </div>
+        </Table.ScrollContainer>
       </Card>
     </Stack>
   );
