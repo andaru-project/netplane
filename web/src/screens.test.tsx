@@ -376,6 +376,17 @@ describe('VlanFlowCanvas', () => {
     expect(onSelectFinding).toHaveBeenCalledWith(expect.objectContaining({ message: lanes[1].getAttribute('aria-label') }));
   });
 
+  it('gives a leak spanning two lanes a single keyboard stop', () => {
+    const leak: VLANFlowFinding = { kind: 'leak', severity: 'crit', vlans: [10, 20], edge_id: 'e1', device_id: 'fw', link: 'eth0', peer_id: 'sw1', peer_link: 'p1', message: 'VLAN 10 leaks into 20', stranded: [] };
+    const flow: VLANFlow = {
+      generated_at: '2026-01-01T00:00:00Z',
+      vlans: [vlan(10, [hop({ to_mode: 'none', state: 'leak' })]), vlan(20, [hop({ from_mode: 'none', state: 'leak' })])],
+      findings: [leak],
+    };
+    draw('all', flow);
+    expect(screen.getAllByRole('button', { name: 'VLAN 10 leaks into 20' })).toHaveLength(1);
+  });
+
   it('dashes the half of an All-VLANs dead-end lane that lacks the VLAN', () => {
     // The gateway side does not carry VLAN 10; the switch side tags it.
     const flow: VLANFlow = {

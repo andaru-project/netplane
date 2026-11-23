@@ -137,15 +137,16 @@ function DeviceCardHead({ width, deviceId, dev, C }: { width: number; deviceId: 
 }
 
 /**
- * One All-VLANs lane. A lane with a finding is its own keyboard stop that selects the finding; a
- * healthy lane only focuses its VLAN, which the VLAN cards already offer, so it stays pointer-only.
+ * One All-VLANs lane. The first lane carrying a finding is the keyboard stop that selects it (a leak
+ * spans two lanes); a healthy lane only focuses its VLAN, which the VLAN cards already offer, so it
+ * and any repeat of a finding stay pointer-only.
  */
 function Lane({
-  d, finding, onClick, children,
+  d, finding, focusable, onClick, children,
 }: {
-  d: string; finding?: VLANFlowFinding; onClick: () => void; children: ReactNode;
+  d: string; finding?: VLANFlowFinding; focusable: boolean; onClick: () => void; children: ReactNode;
 }) {
-  if (!finding) {
+  if (!finding || !focusable) {
     return <g style={{ cursor: 'pointer' }} onClick={onClick}>{children}</g>;
   }
   return (
@@ -332,7 +333,7 @@ export function VlanFlowCanvas({
       <svg
         style={{ width: '100%', minWidth: Math.min(allLayout.width, 860), height: 'auto' }}
         viewBox={`0 0 ${allLayout.width} ${allLayout.height}`}
-        role="img"
+        role="group"
         aria-label="All VLANs propagation overview"
       >
         <ColumnHeaders columns={allLayout.columns} C={C} />
@@ -357,6 +358,7 @@ export function VlanFlowCanvas({
           const midY = (bundle.y1 + bundle.y2) / 2;
           const topFinding = bundle.findings[0];
           // The pill repeats its lane's action: when a lane is already that keyboard stop, the pill is pointer-only.
+          const stops = new Set<string>(); // findings that already have a lane keyboard stop in this bundle
           const topOnLane = topFinding != null && bundle.lanes.some((l) => l.finding != null && findingKey(l.finding) === findingKey(topFinding));
           const allUnverified = bundle.lanes.every((l) => l.state === 'unverified');
 
@@ -368,6 +370,8 @@ export function VlanFlowCanvas({
                 const y2 = bundle.y2 + offset;
                 const col = getVlanColor(lane.vlanId, vlanColors, isDark);
                 const onLaneClick = () => (lane.finding ? onSelectFinding(lane.finding) : onSelectVlan(lane.vlanId));
+                const laneStop = lane.finding != null && !stops.has(findingKey(lane.finding));
+                if (lane.finding) stops.add(findingKey(lane.finding));
 
                 if (lane.state === 'dead_end') {
                   const stopY = (y1 + y2) / 2;
@@ -376,7 +380,10 @@ export function VlanFlowCanvas({
                   const carried = { stroke: col, strokeWidth: 2.4 };
                   const missing = { stroke: C.amber, strokeWidth: 1.8, strokeDasharray: '4,3' };
                   return (
-                    <Lane key={`${bundle.edgeId}-v${lane.vlanId}`} d={bezierPath(bundle.x1, y1, bundle.x2, y2)} finding={lane.finding} onClick={onLaneClick}>
+                    <Lane
+                      key={`${bundle.edgeId}-v${lane.vlanId}`}
+                      d={`${bezierPath(bundle.x1, y1, midX - 4, stopY)} ${bezierPath(midX + 4, stopY, bundle.x2, y2)}`}
+                      finding={lane.finding} focusable={laneStop} onClick={onLaneClick}>
                       <path d={bezierPath(bundle.x1, y1, midX - 4, stopY)} fill="none" {...(fromCarries ? carried : missing)} />
                       <path d={bezierPath(midX + 4, stopY, bundle.x2, y2)} fill="none" {...(fromCarries ? missing : carried)} />
                       <line x1={midX} y1={stopY - 7} x2={midX} y2={stopY + 7} stroke={C.amber} strokeWidth={2.6} />
@@ -391,7 +398,7 @@ export function VlanFlowCanvas({
                   (bundle.linkKind === 'lag' || (lane.fromMode === 'untagged' && lane.toMode === 'untagged'))
                 ) {
                   return (
-                    <Lane key={`${bundle.edgeId}-v${lane.vlanId}`} d={laneD} finding={lane.finding} onClick={onLaneClick}>
+                    <Lane key={`${bundle.edgeId}-v${lane.vlanId}`} d={laneD} finding={lane.finding} focusable={laneStop} onClick={onLaneClick}>
                       <Rail d={laneD} stroke={col} width={bundle.linkKind === 'lag' ? 4.4 : 3.8} innerWidth={1.4} canvas={C.canvas} />
                     </Lane>
                   );
@@ -400,7 +407,7 @@ export function VlanFlowCanvas({
                 const dash =
                   lane.state === 'unverified' ? '3,4' : bundle.linkKind === 'wireless_uplink' ? '5,4' : lane.state === 'mismatch' ? '6,3' : undefined;
                 return (
-                  <Lane key={`${bundle.edgeId}-v${lane.vlanId}`} d={laneD} finding={lane.finding} onClick={onLaneClick}>
+                  <Lane key={`${bundle.edgeId}-v${lane.vlanId}`} d={laneD} finding={lane.finding} focusable={laneStop} onClick={onLaneClick}>
                     <path
                       d={laneD}
                       fill="none" stroke={strokeColor} strokeWidth={lane.state === 'leak' ? 3.2 : 2.3} strokeDasharray={dash}
@@ -697,7 +704,7 @@ export function VlanFlowCanvas({
     <svg
       style={{ width: '100%', minWidth: Math.min(singleLayout.width, 860), height: 'auto' }}
       viewBox={`0 0 ${singleLayout.width} ${singleLayout.height}`}
-      role="img"
+      role="group"
       aria-label={`VLAN ${activeVlan.id}${activeVlan.name ? ` ${activeVlan.name}` : ''} flow diagram`}
     >
       <defs>

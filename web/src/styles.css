@@ -651,6 +651,7 @@ body {
 
 /* VLAN Flow: a focused lane shows a halo along its own path; other SVG controls get an outline. */
 .np-lane-focus {
+  pointer-events: none; /* the halo must not take clicks meant for a neighbouring lane */
   stroke: transparent;
   stroke-width: 10px;
   stroke-linecap: round;
