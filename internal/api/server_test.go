@@ -270,6 +270,7 @@ func TestAPIEndpointsAndIngressAndAuth(t *testing.T) {
 		"/api/v1/openapi.json",
 		"/api/v1/state",
 		"/api/v1/topology",
+		"/api/v1/vlans/flow",
 		"/api/v1/clients?online=true&q=nas",
 		"/api/v1/devices/mock:02:51:0a:00:00:01/links/lan1/samples?since=1h",
 	} {

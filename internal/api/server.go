@@ -22,6 +22,7 @@ import (
 	"github.com/andaru-project/netplane/internal/poller"
 	"github.com/andaru-project/netplane/internal/store"
 	"github.com/andaru-project/netplane/internal/topology"
+	"github.com/andaru-project/netplane/internal/vlanflow"
 	"github.com/andaru-project/netplane/schema"
 )
 
@@ -116,6 +117,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/devices/{id}", s.handleGetDevice)
 	s.mux.HandleFunc("GET /api/v1/devices/{id}/links/{ifName}/samples", s.handleLinkSamples)
 	s.mux.HandleFunc("GET /api/v1/topology", s.handleTopology)
+	s.mux.HandleFunc("GET /api/v1/vlans/flow", s.handleVLANFlow)
 	s.mux.HandleFunc("GET /api/v1/clients", s.handleClients)
 	s.mux.HandleFunc("GET /api/v1/targets", s.handleListTargets)
 	s.mux.HandleFunc("POST /api/v1/targets/{id}/poll", s.handlePollTarget)
@@ -272,6 +274,15 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, topology.Solve(state, time.Now().UTC()))
+}
+
+func (s *Server) handleVLANFlow(w http.ResponseWriter, r *http.Request) {
+	state, err := s.opts.Store.LoadState(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "STORE_ERROR", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, vlanflow.Analyze(state, topology.Solve(state, time.Now().UTC())))
 }
 
 func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
