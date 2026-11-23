@@ -336,22 +336,38 @@ export function VlanFlowCanvas({
 
                 if (lane.state === 'dead_end') {
                   const stopY = (y1 + y2) / 2;
+                  // The layout already swapped the modes into display order: style the half that lacks the VLAN.
+                  const fromCarries = lane.fromMode !== 'none';
+                  const carried = { stroke: col, strokeWidth: 2.4 };
+                  const missing = { stroke: C.amber, strokeWidth: 1.8, strokeDasharray: '4,3' };
                   return (
                     <g key={`${bundle.edgeId}-v${lane.vlanId}`} style={{ cursor: 'pointer' }} onClick={onLaneClick}>
-                      <path d={bezierPath(bundle.x1, y1, midX - 4, stopY)} fill="none" stroke={col} strokeWidth={2.4} />
-                      <path d={bezierPath(midX + 4, stopY, bundle.x2, y2)} fill="none" stroke={C.amber} strokeWidth={1.8} strokeDasharray="4,3" />
+                      <path d={bezierPath(bundle.x1, y1, midX - 4, stopY)} fill="none" {...(fromCarries ? carried : missing)} />
+                      <path d={bezierPath(midX + 4, stopY, bundle.x2, y2)} fill="none" {...(fromCarries ? missing : carried)} />
                       <line x1={midX} y1={stopY - 7} x2={midX} y2={stopY + 7} stroke={C.amber} strokeWidth={2.6} />
                     </g>
                   );
                 }
 
+                const laneD = bezierPath(bundle.x1, y1, bundle.x2, y2, bundle.sameColumn);
+                // Healthy LAG and untagged lanes use the legend's double rail, as in the single-VLAN view.
+                if (
+                  lane.state === 'carried' &&
+                  (bundle.linkKind === 'lag' || (lane.fromMode === 'untagged' && lane.toMode === 'untagged'))
+                ) {
+                  return (
+                    <g key={`${bundle.edgeId}-v${lane.vlanId}`} style={{ cursor: 'pointer' }} onClick={onLaneClick}>
+                      <Rail d={laneD} stroke={col} width={bundle.linkKind === 'lag' ? 4.4 : 3.8} innerWidth={1.4} canvas={C.canvas} />
+                    </g>
+                  );
+                }
                 const strokeColor = lane.state === 'leak' ? C.red : lane.state === 'unverified' ? C.gray : col;
                 const dash =
                   lane.state === 'unverified' ? '3,4' : bundle.linkKind === 'wireless_uplink' ? '5,4' : lane.state === 'mismatch' ? '6,3' : undefined;
                 return (
                   <path
                     key={`${bundle.edgeId}-v${lane.vlanId}`}
-                    d={bezierPath(bundle.x1, y1, bundle.x2, y2, bundle.sameColumn)}
+                    d={laneD}
                     fill="none" stroke={strokeColor} strokeWidth={lane.state === 'leak' ? 3.2 : 2.3} strokeDasharray={dash}
                     style={{ cursor: 'pointer' }}
                     onClick={onLaneClick}
@@ -495,13 +511,14 @@ export function VlanFlowCanvas({
 
   const vColor = getVlanColor(activeVlan.id, vlanColors, isDark);
 
-  const leakGradients = Array.from(
-    new Set(singleLayout.ribbons.filter((r) => r.state === 'leak' && r.foreignVlanId != null).map((r) => r.foreignVlanId!)),
-    (foreignVid) => ({
-      id: `np-grad-leak-${activeVlan.id}-${foreignVid}`,
-      foreignColor: getVlanColor(foreignVid, vlanColors, isDark),
-    }),
+  // One gradient per leak ribbon in user space: an objectBoundingBox gradient paints nothing on a
+  // horizontal ribbon, whose bounding box has zero height.
+  const leakGradients = singleLayout.ribbons.flatMap((r, idx) =>
+    r.state === 'leak' && r.foreignVlanId != null
+      ? [{ r, id: `np-grad-leak-${activeVlan.id}-${idx}`, foreignColor: getVlanColor(r.foreignVlanId, vlanColors, isDark) }]
+      : [],
   );
+  const leakGradientId = new Map(leakGradients.map((g) => [g.r, g.id]));
 
   const renderRibbonPaths = (r: FlowRibbon) => {
     const d = bezierPath(r.x1, r.y1, r.x2, r.y2, r.sameColumn);
@@ -530,7 +547,7 @@ export function VlanFlowCanvas({
     }
 
     if (r.state === 'leak') {
-      const gid = r.foreignVlanId != null ? `np-grad-leak-${activeVlan.id}-${r.foreignVlanId}` : undefined;
+      const gid = leakGradientId.get(r);
       return (
         <RibbonGroup key={`path-${r.id}`} d={d} selected={isSelFinding} onClick={handleClick} hitWidth={20} glowWidth={10} glowOpacity={0.45}>
           <Rail d={d} stroke={gid ? `url(#${gid})` : C.red} width={6.4} innerWidth={2} innerDash="5,5" canvas={C.canvas} />
@@ -654,7 +671,7 @@ export function VlanFlowCanvas({
           <line x1="0" y1="0" x2="0" y2="8" stroke={C.amber} strokeWidth="1.5" strokeOpacity="0.24" />
         </pattern>
         {leakGradients.map((g) => (
-          <linearGradient key={g.id} id={g.id} x1="0%" y1="0%" x2="100%" y2="0%">
+          <linearGradient key={g.id} id={g.id} gradientUnits="userSpaceOnUse" x1={g.r.x1} y1={g.r.y1} x2={g.r.x2} y2={g.r.y2}>
             <stop offset="0%" stopColor={vColor} />
             <stop offset="46%" stopColor={C.red} />
             <stop offset="54%" stopColor={C.red} />

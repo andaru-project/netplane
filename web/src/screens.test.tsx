@@ -4,13 +4,15 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
-import type { Device, Link, NetworkState, TopologyEdge, VLANFlowFinding } from './api';
+import type { Device, Link, NetworkState, TopologyEdge, VLANFlow, VLANFlowFinding, VLANFlowHop } from './api';
 import { PortFaceplate } from './components/PortFaceplate';
 import { TopologyView } from './components/TopologyView';
+import { VlanFlowCanvas } from './components/VlanFlowCanvas';
 import { FindingCallout } from './components/ui';
 import { OverviewScreen } from './screens/OverviewScreen';
 import { VlanFlowScreen } from './screens/VlanFlowScreen';
 import { vlanFlowPath } from './routing';
+import { computeAllVlansLayout } from './vlanFlowLayout';
 import { findingKey } from './vlanUtils';
 
 const testTheme = createTheme({ primaryColor: 'teal', defaultRadius: 'sm' });
@@ -301,5 +303,86 @@ describe('TopologyView', () => {
     const naturalW = Number(svg.getAttribute('viewBox')?.split(' ')[2]);
     expect(naturalW).toBeGreaterThan(760);
     expect(svg.style.minWidth).toBe(`${naturalW}px`);
+  });
+});
+
+describe('VlanFlowCanvas', () => {
+  const gateway = { device_id: 'fw', segment_id: 's', segment_name: 'seg', addresses: [] };
+  const hop = (over: Partial<VLANFlowHop>): VLANFlowHop => ({
+    edge_id: 'e1',
+    from_id: 'fw',
+    from_link: 'eth0',
+    to_id: 'sw1',
+    to_link: 'p1',
+    kind: 'wired',
+    from_mode: 'tagged',
+    to_mode: 'tagged',
+    state: 'carried',
+    from_tagged: [],
+    to_tagged: [],
+    ...over,
+  });
+  const vlan = (id: number, hops: VLANFlowHop[]) => ({
+    id,
+    gateways: [{ ...gateway, segment_id: `s${id}` }],
+    devices: ['fw', 'sw1'],
+    reached: ['fw'],
+    hops,
+    access_ports: [],
+    ssids: [],
+    clients: 0,
+  });
+  const draw = (mode: 'single' | 'all', flow: VLANFlow) =>
+    wrap(
+      <VlanFlowCanvas
+        mode={mode}
+        flow={flow}
+        selectedVlanId={flow.vlans[0].id}
+        selectedFindingKey={null}
+        devicesById={new Map()}
+        topology={null}
+        vlanColors={new Map()}
+        onSelectVlan={() => {}}
+        onSelectFinding={() => {}}
+        onOpenDevice={() => {}}
+      />,
+    );
+
+  it('dashes the half of an All-VLANs dead-end lane that lacks the VLAN', () => {
+    // The gateway side does not carry VLAN 10; the switch side tags it.
+    const flow: VLANFlow = {
+      generated_at: '2026-01-01T00:00:00Z',
+      vlans: [vlan(10, [hop({ from_mode: 'none', to_mode: 'tagged', state: 'dead_end' })])],
+      findings: [],
+    };
+    const { container } = draw('all', flow);
+    const { x1 } = computeAllVlansLayout(flow).edgeBundles[0];
+    const dashed = Array.from(container.querySelectorAll('path[stroke-dasharray="4,3"]'));
+    expect(dashed).toHaveLength(1);
+    expect(dashed[0].getAttribute('d')).toMatch(new RegExp(`^M ${x1} `));
+  });
+
+  it('paints leak ribbons with a user-space gradient so horizontal ribbons stay visible', () => {
+    const leak: VLANFlowFinding = {
+      kind: 'leak',
+      severity: 'crit',
+      vlans: [10, 20],
+      edge_id: 'e1',
+      device_id: 'fw',
+      link: 'eth0',
+      peer_id: 'sw1',
+      peer_link: 'p1',
+      message: 'leak',
+      stranded: [],
+    };
+    const flow: VLANFlow = {
+      generated_at: '2026-01-01T00:00:00Z',
+      vlans: [vlan(10, [hop({ from_mode: 'untagged', to_mode: 'untagged', state: 'leak' })]), vlan(20, [])],
+      findings: [leak],
+    };
+    const { container } = draw('single', flow);
+    const grad = container.querySelector('linearGradient');
+    expect(grad).toHaveAttribute('gradientUnits', 'userSpaceOnUse');
+    expect(container.querySelector(`path[stroke="url(#${grad?.id})"]`)).not.toBeNull();
   });
 });
