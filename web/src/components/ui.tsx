@@ -135,6 +135,13 @@ export function FindingCallout({
   const to = finding.vlans[0] != null
     ? vlanFlowPath({ mode: 'single', vlanId: finding.vlans[0], findingKey: findingKey(finding) })
     : null;
+  // Resolved before the layout: a caller's onAction wins, the trace link is the fallback.
+  const action = (variant?: 'subtle') =>
+    !actionLabel ? null : onAction ? (
+      <Button size="compact-xs" variant={variant} onClick={onAction}>{actionLabel}</Button>
+    ) : to ? (
+      <Button size="compact-xs" variant={variant} component={Link} to={to}>{actionLabel}</Button>
+    ) : null;
   if (title) {
     const icon = finding.kind === 'leak' ? '⚠' : finding.kind === 'tag_mismatch' ? '⇄' : '⊘';
     return (
@@ -144,11 +151,7 @@ export function FindingCallout({
             <Text size="xs" fw={700}>{icon} {title}</Text>
             <Text size="xs" mt={3}>{body ?? finding.message}</Text>
           </div>
-          {actionLabel && (onAction ? (
-            <Button size="compact-xs" onClick={onAction}>{actionLabel}</Button>
-          ) : to ? (
-            <Button size="compact-xs" component={Link} to={to}>{actionLabel}</Button>
-          ) : null)}
+          {action()}
         </Group>
       </div>
     );
@@ -157,11 +160,7 @@ export function FindingCallout({
     <div className={`np-callout ${finding.severity}`}>
       <Group justify="space-between" mb={4}>
         <FindingBadge finding={finding} />
-        {actionLabel && to && (
-          <Button size="compact-xs" variant="subtle" component={Link} to={to}>
-            {actionLabel}
-          </Button>
-        )}
+        {action('subtle')}
       </Group>
       <Text size="xs">{body ?? finding.message}</Text>
     </div>
