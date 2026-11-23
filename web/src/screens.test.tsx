@@ -301,7 +301,7 @@ describe('TopologyView', () => {
         onSelect={() => {}}
       />,
     );
-    const svg = screen.getByRole('img', { name: /topology graph/ });
+    const svg = screen.getByRole('group', { name: /topology graph/ });
     const naturalW = Number(svg.getAttribute('viewBox')?.split(' ')[2]);
     expect(naturalW).toBeGreaterThan(760);
     expect(svg.style.minWidth).toBe(`${naturalW}px`);
@@ -349,6 +349,43 @@ describe('VlanFlowCanvas', () => {
         onOpenDevice={() => {}}
       />,
     );
+
+  it('gives each All-VLANs lane with a finding its own keyboard stop, and no duplicate pill stop', () => {
+    const dead: VLANFlowFinding = { kind: 'dead_end', severity: 'warn', vlans: [10], edge_id: 'e1', device_id: 'sw1', link: 'p1', peer_id: 'fw', peer_link: 'eth0', message: 'VLAN 10 dead end', stranded: [] };
+    const mism: VLANFlowFinding = { ...dead, kind: 'tag_mismatch', vlans: [20], message: 'VLAN 20 mismatch' };
+    const flow: VLANFlow = {
+      generated_at: '2026-01-01T00:00:00Z',
+      vlans: [
+        vlan(10, [hop({ from_mode: 'none', to_mode: 'tagged', state: 'dead_end' })]),
+        vlan(20, [hop({ to_mode: 'untagged', state: 'mismatch' })]),
+        vlan(30, [hop({})]),
+      ],
+      findings: [dead, mism],
+    };
+    const onSelectFinding = vi.fn();
+    wrap(
+      <VlanFlowCanvas
+        mode="all" flow={flow} selectedVlanId={10} selectedFindingKey={null} devicesById={new Map()} topology={null}
+        vlanColors={new Map()} onSelectVlan={() => {}} onSelectFinding={onSelectFinding} onOpenDevice={() => {}}
+      />,
+    );
+    const lanes = screen.getAllByRole('button', { name: /VLAN (10 dead end|20 mismatch)/ });
+    expect(lanes).toHaveLength(2); // one stop per finding lane; the bundle pill is pointer-only
+    lanes.forEach((l) => expect(l).toHaveAttribute('tabindex', '0'));
+    fireEvent.keyDown(lanes[1], { key: 'Enter' });
+    expect(onSelectFinding).toHaveBeenCalledWith(expect.objectContaining({ message: lanes[1].getAttribute('aria-label') }));
+  });
+
+  it('gives a leak spanning two lanes a single keyboard stop', () => {
+    const leak: VLANFlowFinding = { kind: 'leak', severity: 'crit', vlans: [10, 20], edge_id: 'e1', device_id: 'fw', link: 'eth0', peer_id: 'sw1', peer_link: 'p1', message: 'VLAN 10 leaks into 20', stranded: [] };
+    const flow: VLANFlow = {
+      generated_at: '2026-01-01T00:00:00Z',
+      vlans: [vlan(10, [hop({ to_mode: 'none', state: 'leak' })]), vlan(20, [hop({ from_mode: 'none', state: 'leak' })])],
+      findings: [leak],
+    };
+    draw('all', flow);
+    expect(screen.getAllByRole('button', { name: 'VLAN 10 leaks into 20' })).toHaveLength(1);
+  });
 
   it('dashes the half of an All-VLANs dead-end lane that lacks the VLAN', () => {
     // The gateway side does not carry VLAN 10; the switch side tags it.

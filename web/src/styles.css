@@ -648,3 +648,25 @@ body {
     align-items: flex-start;
   }
 }
+
+/* VLAN Flow: a focused lane shows a halo along its own path; other SVG controls get an outline. */
+.np-lane-focus {
+  pointer-events: none; /* the halo must not take clicks meant for a neighbouring lane */
+  stroke: transparent;
+  stroke-width: 10px;
+  stroke-linecap: round;
+}
+
+.np-lane:focus-visible {
+  outline: none;
+}
+
+.np-lane:focus-visible .np-lane-focus {
+  stroke: var(--np-primary);
+  stroke-opacity: 0.55;
+}
+
+svg g[role='button']:not(.np-lane):focus-visible {
+  outline: 2px solid var(--np-primary);
+  outline-offset: 2px;
+}

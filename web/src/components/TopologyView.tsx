@@ -231,7 +231,7 @@ export function TopologyView({
         height: 'auto',
       }}
       viewBox={`0 0 ${layout.svgW} ${layout.svgH}`}
-      role="img"
+      role="group"
       aria-label="Network physical and logical topology graph"
     >
       {/* Edges */}
