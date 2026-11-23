@@ -65,7 +65,8 @@ export function VlanFlowScreen({ flow, state, topology, devicesById, vlansById, 
   const activeFinding: VLANFlowFinding | null = useMemo(() => {
     if (selectedFindingParam) {
       const exact = findings.find((f) => findingKey(f) === selectedFindingParam);
-      if (exact) return exact;
+      // In single mode the inspector stays on the diagram's VLAN.
+      if (exact && (mode === 'all' || (activeVlanId != null && exact.vlans.includes(activeVlanId)))) return exact;
     }
     if (mode === 'single' && activeVlanId != null) {
       return findings.find((f) => f.vlans.includes(activeVlanId)) ?? null;
