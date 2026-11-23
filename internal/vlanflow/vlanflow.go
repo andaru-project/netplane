@@ -352,6 +352,8 @@ func (a *analyzer) nativeVLANs() {
 	for i, s := range a.state.Segments {
 		if s.VLANID != nil {
 			a.segVLAN[i] = *s.VLANID
+		} else if m := a.port(s.DeviceID, s.ParentLink); m.pvid != nil && validVLAN(*m.pvid) {
+			a.segVLAN[i] = *m.pvid // the port reports its own PVID: the untagged segment is on it
 		}
 	}
 	for _, e := range a.edges {
@@ -531,12 +533,16 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 				}
 			}
 			if len(gateways) == 0 {
-				// An L2-only VLAN strands nobody; the link matters only if it splits the VLAN's users.
+				// An L2-only VLAN strands nobody; the link matters only if a user on one side cannot
+				// reach some user on the other (the sides may overlap around a ring).
 				users := func(start, far string) []string {
 					return slices.DeleteFunc(a.side(hopEdge[j], start, far), func(d string) bool { return !using[d] })
 				}
-				reached := reach(adj, users(h.FromID, h.ToID))
-				if slices.ContainsFunc(users(h.ToID, h.FromID), func(d string) bool { return reached[d] }) {
+				fromUsers, toUsers := users(h.FromID, h.ToID), users(h.ToID, h.FromID)
+				if !slices.ContainsFunc(fromUsers, func(u string) bool {
+					r := reach(adj, []string{u})
+					return slices.ContainsFunc(toUsers, func(w string) bool { return !r[w] })
+				}) {
 					continue
 				}
 				s = []string{}
@@ -549,8 +555,9 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 		hops, stranded = append(hops, h), append(stranded, s)
 	}
 	vl.Hops = hops
-	vl.Devices = slices.Sorted(maps.Keys(configured))
-	vl.Reached = slices.Sorted(maps.Keys(reached))
+	// Never nil: the schema requires arrays, and nil encodes as null.
+	vl.Devices = append([]string{}, slices.Sorted(maps.Keys(configured))...)
+	vl.Reached = append([]string{}, slices.Sorted(maps.Keys(reached))...)
 
 	seenPort := map[portKey]bool{}
 	for _, l := range a.state.Links {
@@ -620,7 +627,7 @@ func (a *analyzer) routes(s model.Segment) bool {
 }
 
 // taggedList returns the port's tagged VLANs, sorted.
-func (m membership) taggedList() []int { return slices.Sorted(maps.Keys(m.tagged)) }
+func (m membership) taggedList() []int { return append([]int{}, slices.Sorted(maps.Keys(m.tagged))...) }
 
 // otherPVID reports whether m classifies untagged frames into a VLAN other than v.
 func otherPVID(m membership, v int) bool { return m.pvid != nil && *m.pvid != v }

@@ -574,9 +574,11 @@ type ubusRadio struct {
 // ports it has; without one, many ports and no radios mean a switch.
 func guessRole(radios, ifaces, devs int, hasWAN bool) model.DeviceRole {
 	switch {
+	case hasWAN:
+		return model.RoleRouter
 	case radios > 0 && ifaces <= 2:
 		return model.RoleAP
-	case devs >= 6 && radios == 0 && !hasWAN:
+	case devs >= 6 && radios == 0:
 		return model.RoleSwitch
 	}
 	return model.RoleRouter

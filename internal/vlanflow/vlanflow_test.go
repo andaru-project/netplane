@@ -2,6 +2,8 @@
 package vlanflow
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
@@ -491,6 +493,46 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		}
 		if want := []string{"leak[10 20]afw", "leak[10 30]afw"}; !slices.Equal(got, want) {
 			t.Errorf("findings = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a triangle isolating one switch reports both of its links", func(t *testing.T) {
+		// a tags VLAN 60 toward b and c, which both drop it; b-c carries it. Every device has a user.
+		state, g := chain([]model.Link{
+			{DeviceID: "a", IfName: "down", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "a", IfName: "x", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "a", IfName: "p", PVID: ip(60)},
+			{DeviceID: "b", IfName: "up", PVID: ip(1)},
+			{DeviceID: "b", IfName: "down", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "b", IfName: "p", PVID: ip(60)},
+			{DeviceID: "c", IfName: "up", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "c", IfName: "x", PVID: ip(1)},
+			{DeviceID: "c", IfName: "p", PVID: ip(60)},
+		}, nil)
+		g.Edges = append(g.Edges[1:], topology.Edge{ID: "e4", FromID: "a", FromLink: "x", ToID: "c", ToLink: "x", Kind: topology.EdgeWired})
+		var edges []string
+		for _, x := range Analyze(state, g).Findings {
+			edges = append(edges, x.EdgeID)
+		}
+		if !slices.Equal(edges, []string{"e2", "e4"}) {
+			t.Errorf("dead ends on %v, want [e2 e4]", edges)
+		}
+	})
+
+	t.Run("an untagged segment on a port that reports its PVID is that VLAN's gateway", func(t *testing.T) {
+		f := Analyze(chain([]model.Link{
+			{DeviceID: "fw", IfName: "p0", PVID: ip(10)},
+			{DeviceID: "a", IfName: "up", PVID: ip(10)},
+		}, []model.Segment{{DeviceID: "fw", AdminUp: true, ID: "lan", Name: "LAN", ParentLink: "p0"}}))
+		if v := vlan(t, f, 10); len(v.Gateways) != 1 || !slices.Equal(v.Reached, []string{"a", "fw"}) {
+			t.Errorf("VLAN 10 = %+v", v)
+		}
+	})
+
+	t.Run("empty lists encode as arrays, not null", func(t *testing.T) {
+		b, err := json.Marshal(Analyze(chain([]model.Link{{DeviceID: "a", IfName: "down", PVID: ip(70)}, {DeviceID: "b", IfName: "up", PVID: ip(70)}}, nil)))
+		if err != nil || bytes.Contains(b, []byte("null")) {
+			t.Errorf("JSON = %s, err = %v", b, err)
 		}
 	})
 
