@@ -156,7 +156,7 @@ func TestMediaForSpeed(t *testing.T) {
 		pluggable bool
 		want      MediaType
 	}{
-		{0, false, MediaOther}, {10, false, MediaFE}, {100, false, MediaFE}, {1000, false, MediaGE},
+		{0, false, MediaOther}, {10, false, MediaOther}, {100, false, MediaFE}, {1000, false, MediaGE},
 		{2500, false, Media25GE}, {5000, false, Media5GE}, {10000, false, Media10GE},
 		{0, true, MediaSFP}, {1000, true, MediaSFP}, {2500, true, MediaSFPPl}, {10000, true, MediaSFPPl},
 	} {

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // NewHTTPClient returns a per-poll HTTP client honouring the insecure_skip_verify setting.
@@ -109,9 +110,24 @@ func DoJSON(ctx context.Context, client *http.Client, method, url string, auth f
 			ErrorMessage string `json:"errorMessage"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		return &StatusError{Code: resp.StatusCode, Message: cmp.Or(e.Message, e.ErrorMessage)}
+		return &StatusError{Code: resp.StatusCode, Message: cleanMessage(cmp.Or(e.Message, e.ErrorMessage))}
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
+}
+
+// cleanMessage makes a device's error text safe for logs and the UI: control characters
+// become spaces and the text is cut to 300 characters.
+func cleanMessage(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+	if r := []rune(s); len(r) > 300 {
+		s = string(r[:300]) + "…"
+	}
+	return strings.TrimSpace(s)
 }
 
 // StatusError is a non-2xx HTTP answer.

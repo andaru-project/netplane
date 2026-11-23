@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -129,7 +128,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 	}
 	get := func(url string, out any) error {
 		err := getJSON(ctx, client, url, apiKey, out)
-		if apiKey != "" || relogged || !errors.Is(err, errUnauthorized) {
+		if apiKey != "" || relogged || driver.HTTPStatus(err) != http.StatusUnauthorized {
 			return err
 		}
 		relogged = true
@@ -428,19 +427,12 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 }
 
 func getJSON(ctx context.Context, client *http.Client, url, apiKey string, out any) error {
-	err := driver.DoJSON(ctx, client, http.MethodGet, url, func(r *http.Request) {
+	return driver.DoJSON(ctx, client, http.MethodGet, url, func(r *http.Request) {
 		if apiKey != "" {
 			r.Header.Set("X-API-KEY", apiKey)
 		}
 	}, nil, out)
-	if driver.HTTPStatus(err) == http.StatusUnauthorized {
-		return errUnauthorized
-	}
-	return err
 }
-
-// errUnauthorized is the controller rejecting the login cookie (expired or revoked).
-var errUnauthorized = errors.New("HTTP 401")
 
 func mapRole(typ string) model.DeviceRole {
 	switch strings.ToLower(typ) {

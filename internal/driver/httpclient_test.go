@@ -2,9 +2,13 @@
 package driver
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -110,5 +114,76 @@ func TestCheckCredentialTransport(t *testing.T) {
 		if (err != nil) != tc.wantErr {
 			t.Errorf("%s %v: err = %v, wantErr %v", tc.endpoint, tc.settings, err, tc.wantErr)
 		}
+	}
+}
+
+func TestDoJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// OPNsense rejects an empty body sent as JSON: the header must follow the body.
+		if (r.Method == http.MethodPost) != (r.Header.Get("Content-Type") == "application/json") {
+			t.Errorf("%s %s: Content-Type %q", r.Method, r.URL.Path, r.Header.Get("Content-Type"))
+		}
+		if r.Header.Get("X-Key") != "k" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"bad\nkey"}`))
+			return
+		}
+		switch r.URL.Path {
+		case "/ok":
+			_, _ = w.Write([]byte(`{"v":1}`))
+		case "/app":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errorMessage":"invalid"}`))
+		case "/moved":
+			w.WriteHeader(http.StatusNotModified)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<html>oops</html>`))
+		}
+	}))
+	defer srv.Close()
+	auth := func(r *http.Request) { r.Header.Set("X-Key", "k") }
+	call := func(method, path string, auth func(*http.Request), body any) (int, error) {
+		var out struct{ V int }
+		err := DoJSON(context.Background(), srv.Client(), method, srv.URL+path, auth, body, &out)
+		return out.V, err
+	}
+	if v, err := call(http.MethodGet, "/ok", auth, nil); err != nil || v != 1 {
+		t.Fatalf("GET /ok = %d, %v", v, err)
+	}
+	if v, err := call(http.MethodPost, "/ok", auth, map[string]any{"a": 1}); err != nil || v != 1 {
+		t.Fatalf("POST /ok = %d, %v", v, err)
+	}
+	for _, tc := range []struct {
+		path string
+		auth func(*http.Request)
+		code int
+		text string
+	}{
+		{"/ok", nil, 401, "HTTP 401: bad key"},
+		{"/app", auth, 400, "HTTP 400: invalid"},
+		{"/moved", auth, 304, "HTTP 304"},
+		{"/html", auth, 500, "HTTP 500"},
+	} {
+		_, err := call(http.MethodGet, tc.path, tc.auth, nil)
+		wrapped := fmt.Errorf("poll: %w", err)
+		if HTTPStatus(wrapped) != tc.code || err == nil || err.Error() != tc.text {
+			t.Errorf("%s: err = %v, status %d", tc.path, err, HTTPStatus(wrapped))
+		}
+	}
+	if long := cleanMessage(strings.Repeat("x", 400)); len([]rune(long)) != 301 {
+		t.Errorf("cleanMessage kept %d runes", len([]rune(long)))
+	}
+	if HTTPStatus(errors.New("dial")) != 0 {
+		t.Error("HTTPStatus of a non-HTTP error is not 0")
+	}
+}
+
+func TestSleepCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := Sleep(ctx, time.Hour); !errors.Is(err, context.Canceled) || time.Since(start) > time.Second {
+		t.Fatalf("Sleep = %v after %v", err, time.Since(start))
 	}
 }

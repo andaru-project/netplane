@@ -126,6 +126,10 @@ func TestUniFiDriverPoll(t *testing.T) {
 
 func TestUniFiMarksClientsUnavailable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-KEY") != "k" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		if r.URL.Path == "/api/s/default/stat/device" {
 			_, _ = w.Write([]byte(`{"data":[{"mac":"3c:78:95:1f:71:0d","type":"usw","state":1}]}`))
 			return

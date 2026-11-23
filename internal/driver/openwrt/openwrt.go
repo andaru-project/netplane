@@ -2,13 +2,11 @@
 package openwrt
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"slices"
@@ -240,7 +238,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		}
 		idx++
 		speedMbps, duplex := parseOpenWrtSpeed(nd.Speed)
-		media := guessMedia(ifName, speedMbps)
+		media := model.MediaForSpeed(speedMbps, strings.Contains(strings.ToLower(ifName), "sfp"))
 		mtu := nd.MTU
 		oper := model.OperDown
 		if nd.Up && nd.Carrier {
@@ -435,25 +433,6 @@ var (
 )
 
 func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method string, params map[string]any, out any) error {
-	payload, _ := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "call",
-		"params":  []any{sid, object, method, params},
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
 	var rpcResp struct {
 		Result []json.RawMessage `json:"result"`
 		Error  *struct {
@@ -461,7 +440,8 @@ func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&rpcResp); err != nil {
+	envelope := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "call", "params": []any{sid, object, method, params}}
+	if err := driver.DoJSON(ctx, client, http.MethodPost, url, nil, envelope, &rpcResp); err != nil {
 		return err
 	}
 	if rpcResp.Error != nil {
@@ -528,10 +508,6 @@ func parseOpenWrtSpeed(raw string) (int, string) {
 	var speed int
 	_, _ = fmt.Sscanf(s, "%d", &speed)
 	return speed, duplex
-}
-
-func guessMedia(ifName string, speedMbps int) model.MediaType {
-	return model.MediaForSpeed(speedMbps, strings.Contains(strings.ToLower(ifName), "sfp"))
 }
 
 type ubusNetDev struct {
