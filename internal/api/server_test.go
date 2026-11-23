@@ -237,6 +237,16 @@ func TestAPIEndpointsAndIngressAndAuth(t *testing.T) {
 		}
 	}
 
+	// Outside Ingress, the base climbs from a nested route back to the app root; an encoded slash
+	// in a device ID is part of one path segment.
+	for path, want := range map[string]string{"/": "./", "/vlans/flow": "../", "/devices/a%2Fb": "../", "/devices/a%2fb|c": "../", "/devices/x/": "../../"} {
+		rec = httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if !strings.Contains(rec.Body.String(), `<base href="`+want+`">`) {
+			t.Fatalf("GET %s: want <base href=%q>, got %s", path, want, rec.Body.String())
+		}
+	}
+
 	// Trusted Home Assistant Supervisor peer (172.30.32.2) with valid X-Ingress-Path succeeds.
 	req = httptest.NewRequest("GET", "/api/hassio_ingress/abc123/api/v1/devices/mock:02:51:0a:00:00:01", nil)
 	req.RemoteAddr = "172.30.32.2:40000"
@@ -270,6 +280,7 @@ func TestAPIEndpointsAndIngressAndAuth(t *testing.T) {
 		"/api/v1/openapi.json",
 		"/api/v1/state",
 		"/api/v1/topology",
+		"/api/v1/vlans/flow",
 		"/api/v1/clients?online=true&q=nas",
 		"/api/v1/devices/mock:02:51:0a:00:00:01/links/lan1/samples?since=1h",
 	} {

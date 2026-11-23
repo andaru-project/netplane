@@ -44,10 +44,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Build web SPA
+      - name: Build and test web SPA
         working-directory: web
         run: |
           npm ci --no-audit --no-fund
+          npm test
           npm run build
       - name: Build Go binary with embedded UI
         run: |

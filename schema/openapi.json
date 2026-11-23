@@ -84,6 +84,15 @@
         }
       }
     },
+    "/api/v1/vlans/flow": {
+      "get": {
+        "operationId": "getVlanFlow",
+        "summary": "Every VLAN traced port by port across the topology, with dead-end and leak findings",
+        "responses": {
+          "200": { "description": "VlanFlow" }
+        }
+      }
+    },
     "/api/v1/clients": {
       "get": {
         "operationId": "listClients",

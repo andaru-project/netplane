@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://netplane.dev/schema/v1/vlanflow.schema.json",
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "title": "NetplaneVlanFlow",
+  "type": "object",
+  "required": ["generated_at", "vlans", "findings"],
+  "properties": {
+    "generated_at": { "type": "string", "format": "date-time" },
+    "vlans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "gateways", "devices", "reached", "hops", "access_ports", "ssids", "clients"],
+        "properties": {
+          "id": { "type": "integer", "minimum": 1, "maximum": 4094 },
+          "name": { "type": "string" },
+          "gateways": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["device_id", "segment_id", "segment_name", "addresses"],
+              "properties": {
+                "device_id": { "type": "string" },
+                "segment_id": { "type": "string" },
+                "segment_name": { "type": "string" },
+                "parent_link": { "type": "string" },
+                "zone_id": { "type": "string" },
+                "zone_name": { "type": "string" },
+                "addresses": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["family", "address", "prefix_length"],
+                    "properties": {
+                      "family": { "type": "string", "enum": ["ipv4", "ipv6"] },
+                      "address": { "type": "string" },
+                      "prefix_length": { "type": "integer" },
+                      "scope": { "type": "string" },
+                      "source": { "type": "string" }
+                    }
+                  }
+                },
+                "is_management": { "type": "boolean" }
+              }
+            }
+          },
+          "devices": { "type": "array", "items": { "type": "string" } },
+          "reached": { "type": "array", "items": { "type": "string" } },
+          "hops": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["edge_id", "from_id", "to_id", "kind", "from_mode", "to_mode", "state", "from_tagged", "to_tagged"],
+              "properties": {
+                "edge_id": { "type": "string" },
+                "from_id": { "type": "string" },
+                "from_link": { "type": "string" },
+                "to_id": { "type": "string" },
+                "to_link": { "type": "string" },
+                "kind": { "type": "string", "enum": ["wired", "lag", "wireless_uplink"] },
+                "from_mode": { "$ref": "#/$defs/mode" },
+                "to_mode": { "$ref": "#/$defs/mode" },
+                "state": { "type": "string", "enum": ["carried", "dead_end", "mismatch", "leak", "unverified"] },
+                "from_pvid": { "type": "integer" },
+                "from_tagged": { "type": "array", "items": { "type": "integer" } },
+                "to_pvid": { "type": "integer" },
+                "to_tagged": { "type": "array", "items": { "type": "integer" } }
+              }
+            }
+          },
+          "access_ports": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["device_id", "link", "oper_state", "reachable"],
+              "properties": {
+                "device_id": { "type": "string" },
+                "link": { "type": "string" },
+                "label": { "type": "string" },
+                "oper_state": { "type": "string" },
+                "reachable": { "type": "boolean" }
+              }
+            }
+          },
+          "ssids": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["device_id", "radio", "name", "client_count", "reachable"],
+              "properties": {
+                "device_id": { "type": "string" },
+                "radio": { "type": "string" },
+                "name": { "type": "string" },
+                "client_count": { "type": "integer" },
+                "reachable": { "type": "boolean" }
+              }
+            }
+          },
+          "clients": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "severity", "vlans", "edge_id", "device_id", "link", "peer_id", "peer_link", "message", "stranded"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["leak", "dead_end", "tag_mismatch"] },
+          "severity": { "type": "string", "enum": ["crit", "warn"] },
+          "vlans": { "type": "array", "items": { "type": "integer" }, "minItems": 1, "maxItems": 2 },
+          "edge_id": { "type": "string" },
+          "device_id": { "type": "string" },
+          "link": { "type": "string" },
+          "peer_id": { "type": "string" },
+          "peer_link": { "type": "string" },
+          "message": { "type": "string" },
+          "stranded": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "mode": { "type": "string", "enum": ["tagged", "untagged", "none", "unknown"] }
+  }
+}

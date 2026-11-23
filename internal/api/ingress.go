@@ -185,7 +185,18 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "UI bundle missing index.html")
 		return
 	}
+	// Outside Ingress, a relative base climbs from the route back to the app root, so nested routes
+	// such as /devices/<id> load their assets and the app also works under a reverse-proxy sub-path.
 	baseHref := "./"
+	// Count the path as the browser sent it: Go re-escapes a path it cannot keep verbatim (a raw
+	// "|", say), which turns an encoded "%2F" into a slash.
+	reqPath, _, _ := strings.Cut(r.RequestURI, "?")
+	if !strings.HasPrefix(reqPath, "/") {
+		reqPath = r.URL.EscapedPath()
+	}
+	if depth := strings.Count(reqPath, "/") - 1; depth > 0 {
+		baseHref = strings.Repeat("../", depth)
+	}
 	if s.isTrustedIngressPeer(r.RemoteAddr) {
 		if ingressPath := sanitizeIngressPath(r.Header.Get("X-Ingress-Path")); ingressPath != "" {
 			baseHref = html.EscapeString(ingressPath) + "/"
