@@ -51,7 +51,8 @@ export function TopologyScreen({ graph, state, flow, devicesById, vlansById, vla
   const [showEvidence, setShowEvidence] = useState(true);
   const [selection, setSelection] = useState<TopologySelection | null>(null);
 
-  const overlayVid = vlanOverlay ? Number(vlanOverlay) : null;
+  // A refresh can drop the overlaid VLAN: only trace VLANs the current report still has.
+  const overlayVid = vlanOverlay && vlansById.has(Number(vlanOverlay)) ? Number(vlanOverlay) : null;
 
   const selectedDevice = selection?.type === 'device' ? devicesById.get(selection.id) ?? null : null;
   const selectedEdge = selection?.type === 'edge'
@@ -86,7 +87,7 @@ export function TopologyScreen({ graph, state, flow, devicesById, vlansById, vla
             aria-label="VLAN overlay"
             placeholder="VLAN Overlay: None"
             clearable
-            value={vlanOverlay || null}
+            value={overlayVid != null ? String(overlayVid) : null}
             onChange={(v) => setVlanOverlay(v ?? '')}
             data={(flow?.vlans ?? []).map((v) => ({
               value: String(v.id),
@@ -166,7 +167,7 @@ export function TopologyScreen({ graph, state, flow, devicesById, vlansById, vla
 
         {/* Side Inspector */}
         <Card withBorder radius="md" p="md">
-          {!selection && (
+          {!selectedDevice && !selectedEdge && (
             <Stack gap="xs">
               <Title order={4} size="h5">Topology Inspector</Title>
               <Text size="sm" c="dimmed">
