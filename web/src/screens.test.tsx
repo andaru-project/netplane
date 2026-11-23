@@ -467,6 +467,22 @@ describe('VlanFlowCanvas', () => {
       expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(5);
     }
   });
+
+  it('keeps outer lane endpoints inside device cards even with 50 VLANs on one trunk', () => {
+    const vlans = Array.from({ length: 50 }, (_, i) => vlan(10 + i, [hop({})]));
+    const flow: VLANFlow = { generated_at: '2026-01-01T00:00:00Z', vlans, findings: [] };
+    const layout = computeAllVlansLayout(flow);
+    const card = layout.deviceCards[0];
+    const { container } = draw('all', flow);
+    const hitPaths = Array.from(container.querySelectorAll('path[stroke="transparent"]'));
+    expect(hitPaths).toHaveLength(50);
+    for (const p of hitPaths) {
+      expect(Number(p.getAttribute('stroke-width'))).toBeGreaterThanOrEqual(8);
+      const y1 = Number((p.getAttribute('d') ?? '').split(' ')[2]);
+      expect(y1).toBeGreaterThanOrEqual(card.y);
+      expect(y1).toBeLessThanOrEqual(card.y + card.height);
+    }
+  });
 });
 
 describe('App poll all', () => {

@@ -669,11 +669,19 @@ func hopState(from, to Mode) HopState {
 // leaks flags wired links whose two ends both report a PVID and disagree.
 func (a *analyzer) leaks() []Finding {
 	out := []Finding{}
+	pvidList := func(m membership) []int {
+		if m.pvid != nil && validVLAN(*m.pvid) {
+			return []int{*m.pvid}
+		}
+		return m.lagPVIDs
+	}
 	for _, e := range a.edges {
 		if e.Kind == topology.EdgeWirelessUplink {
 			continue
 		}
 		from, to := a.port(e.FromID, e.FromLink), a.port(e.ToID, e.ToLink)
+		type vlanPair struct{ lo, hi int }
+		seen := map[vlanPair]bool{}
 		for _, end := range []struct {
 			m                         membership
 			dev, link, peer, peerLink string
@@ -683,6 +691,7 @@ func (a *analyzer) leaks() []Finding {
 			}
 			// One finding per VLAN that mixes with the lowest PVID, so each names two VLANs.
 			for _, p := range end.m.lagPVIDs[1:] {
+				seen[vlanPair{end.m.lagPVIDs[0], p}] = true
 				out = append(out, Finding{
 					Kind: FindingLeak, Severity: SeverityCrit, VLANs: []int{end.m.lagPVIDs[0], p}, EdgeID: e.ID,
 					DeviceID: end.dev, Link: end.link, PeerID: end.peer, PeerLink: end.peerLink, Stranded: []string{},
@@ -691,15 +700,24 @@ func (a *analyzer) leaks() []Finding {
 				})
 			}
 		}
-		if from.pvid == nil || to.pvid == nil || *from.pvid == *to.pvid || !validVLAN(*from.pvid) || !validVLAN(*to.pvid) {
-			continue
+		for _, fp := range pvidList(from) {
+			for _, tp := range pvidList(to) {
+				if fp == tp {
+					continue
+				}
+				pair := vlanPair{min(fp, tp), max(fp, tp)}
+				if seen[pair] {
+					continue
+				}
+				seen[pair] = true
+				out = append(out, Finding{
+					Kind: FindingLeak, Severity: SeverityCrit, VLANs: []int{fp, tp}, EdgeID: e.ID,
+					DeviceID: e.FromID, Link: e.FromLink, PeerID: e.ToID, PeerLink: e.ToLink, Stranded: []string{},
+					Message: fmt.Sprintf("Untagged frames cross between VLAN %d on %s:%s and VLAN %d on %s:%s",
+						fp, a.name(e.FromID), e.FromLink, tp, a.name(e.ToID), e.ToLink),
+				})
+			}
 		}
-		out = append(out, Finding{
-			Kind: FindingLeak, Severity: SeverityCrit, VLANs: []int{*from.pvid, *to.pvid}, EdgeID: e.ID,
-			DeviceID: e.FromID, Link: e.FromLink, PeerID: e.ToID, PeerLink: e.ToLink, Stranded: []string{},
-			Message: fmt.Sprintf("Untagged frames cross between VLAN %d on %s:%s and VLAN %d on %s:%s",
-				*from.pvid, a.name(e.FromID), e.FromLink, *to.pvid, a.name(e.ToID), e.ToLink),
-		})
 	}
 	return out
 }

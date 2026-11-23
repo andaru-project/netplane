@@ -358,6 +358,22 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		if h := hop(t, vlan(t, f, 20), "e1"); h.State != HopLeak {
 			t.Errorf("VLAN 20 hop on split-PVID LAG = %+v, want leak", h)
 		}
+
+		// Peer with a third PVID (30) facing the split-PVID LAG [1, 20] emits cross-end leak findings too.
+		state.Links = append(state.Links, model.Link{DeviceID: "fw", IfName: "p0", PVID: ip(30), TaggedVLANs: []int{20}})
+		f = Analyze(state, g)
+		if h := hop(t, vlan(t, f, 30), "e1"); h.State != HopLeak {
+			t.Errorf("VLAN 30 hop facing split-PVID LAG = %+v, want leak", h)
+		}
+		var leaks []string
+		for _, x := range f.Findings {
+			if x.Kind == FindingLeak && x.EdgeID == "e1" {
+				leaks = append(leaks, fmt.Sprint(x.VLANs))
+			}
+		}
+		if want := []string{"[1 20]", "[30 1]", "[30 20]"}; !slices.Equal(leaks, want) {
+			t.Errorf("split-PVID LAG leaks = %v, want %v", leaks, want)
+		}
 	})
 
 	t.Run("a ring does not turn an unpruned trunk into a dead end", func(t *testing.T) {

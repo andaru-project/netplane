@@ -384,7 +384,9 @@ export function VlanFlowCanvas({
 
         {/* Multi-lane edge bundles */}
         {allLayout.edgeBundles.map((bundle) => {
-          const laneGap = Math.min(11, Math.max(5, 64 / Math.max(bundle.lanes.length, 1)));
+          const laneCount = bundle.lanes.length;
+          const targetSpread = Math.min(bundle.maxSpread, Math.max(64, Math.max(laneCount - 1, 0) * 5));
+          const laneGap = laneCount <= 1 ? 0 : Math.min(11, targetSpread / (laneCount - 1));
           const hitWidth = Math.max(laneGap, 8);
           const midX = ribbonMidX(bundle);
           const midY = (bundle.y1 + bundle.y2) / 2;
