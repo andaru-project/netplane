@@ -82,6 +82,8 @@ export function PortFaceplate({
     }
     return Array.from(ids).sort((a, b) => a - b);
   }, [sortedLinks]);
+  // A refresh can remove the highlighted VLAN; drop the highlight with it (React re-renders at once).
+  if (hlVlan != null && !deviceVlans.includes(hlVlan)) setHlVlan(null);
 
   const findings = flow?.findings ?? [];
 
@@ -186,6 +188,7 @@ export function PortFaceplate({
             <Button
               size="compact-xs"
               variant={hlVlan === null ? 'light' : 'default'}
+              aria-pressed={hlVlan === null}
               onClick={() => setHlVlan(null)}
             >
               None
@@ -195,6 +198,7 @@ export function PortFaceplate({
                 key={vid}
                 size="compact-xs"
                 variant={hlVlan === vid ? 'light' : 'default'}
+                aria-pressed={hlVlan === vid}
                 className="np-mono"
                 onClick={() => setHlVlan(hlVlan === vid ? null : vid)}
                 leftSection={
@@ -318,7 +322,7 @@ export function PortFaceplate({
                       ? `Err: ${selected.counters.rx_errors + selected.counters.tx_errors} · Drop: ${selected.counters.rx_dropped + selected.counters.tx_dropped}`
                       : 'Counters: —'}
                     {selected.poe?.supported
-                      ? ` · PoE ${selected.poe.enabled ? `${(selected.poe.watts ?? 0).toFixed(1)}W` : 'OFF'}${selected.poe.class ? ` (${selected.poe.class})` : ''}`
+                      ? ` · PoE ${selected.poe.enabled ? (selected.poe.watts != null ? `${selected.poe.watts.toFixed(1)}W` : '—') : 'OFF'}${selected.poe.class ? ` (${selected.poe.class})` : ''}`
                       : ''}
                   </Text>
                 </Stat>

@@ -4,7 +4,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
-import type { NetworkState, VLANFlowFinding } from './api';
+import type { Device, Link, NetworkState, VLANFlowFinding } from './api';
+import { PortFaceplate } from './components/PortFaceplate';
 import { FindingCallout } from './components/ui';
 import { OverviewScreen } from './screens/OverviewScreen';
 import { VlanFlowScreen } from './screens/VlanFlowScreen';
@@ -134,5 +135,74 @@ describe('VlanFlowScreen', () => {
   it('shows the finding when it belongs to the selected VLAN', () => {
     renderAt(20);
     expect(screen.getByText('Consequence')).toBeInTheDocument();
+  });
+});
+
+describe('PortFaceplate', () => {
+  const device: Device = {
+    id: 'sw1',
+    driver: 'openwrt',
+    target_id: 't1',
+    name: 'Switch',
+    role: 'switch',
+    macs: [],
+    firmware: {},
+    uptime_sec: 1,
+    online: true,
+    last_seen: '2026-01-01T00:00:00Z',
+    capabilities: [],
+    system_stats: {},
+    sensors: [],
+  };
+  const port = (pvid: number, extra: Partial<Link> = {}): Link => ({
+    device_id: 'sw1',
+    index: 1,
+    if_name: 'lan1',
+    admin_up: true,
+    link_up: true,
+    oper_state: 'up',
+    speed_mbps: 1000,
+    media: 'copper',
+    is_fiber: false,
+    pvid,
+    tagged_vlans: [],
+    ...extra,
+  });
+  const faceplate = (links: Link[]) => (
+    <PortFaceplate
+      device={device}
+      links={links}
+      lagGroups={[]}
+      flow={null}
+      state={null}
+      topology={null}
+      devicesById={new Map()}
+      vlansById={new Map()}
+      vlanColors={new Map()}
+      selectedPort={null}
+      onSelectPort={() => {}}
+      onOpenDevice={() => {}}
+      onOpenVlanFlow={() => {}}
+    />
+  );
+
+  it('clears the VLAN highlight when a refresh removes that VLAN', () => {
+    const { rerender } = wrap(faceplate([port(20)]));
+    fireEvent.click(screen.getByRole('button', { name: '20' }));
+    expect(screen.getByRole('button', { name: '20' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'None' })).toHaveAttribute('aria-pressed', 'false');
+
+    rerender(
+      <MantineProvider theme={testTheme}>
+        <MemoryRouter>{faceplate([port(10)])}</MemoryRouter>
+      </MantineProvider>,
+    );
+    expect(screen.getByRole('button', { name: 'None' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('shows a missing PoE draw as unknown, not 0 W', () => {
+    wrap(faceplate([port(10, { poe: { supported: true, enabled: true } })]));
+    expect(screen.getByText(/PoE —/)).toBeInTheDocument();
+    expect(screen.queryByText(/PoE 0\.0W/)).not.toBeInTheDocument();
   });
 });
