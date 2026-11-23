@@ -44,7 +44,7 @@ func TestIsFiberMedia(t *testing.T) {
 			t.Errorf("IsFiberMedia(%q) = false, want true", m)
 		}
 	}
-	copper := []MediaType{MediaFE, MediaGE, Media25GE, Media5GE, Media10GE, MediaOther, ""}
+	copper := []MediaType{MediaFE, MediaGE, Media25GE, Media5GE, Media10GE, Media25G, Media40G, Media100G, MediaOther, ""}
 	for _, m := range copper {
 		if IsFiberMedia(m) {
 			t.Errorf("IsFiberMedia(%q) = true, want false", m)
@@ -159,8 +159,9 @@ func TestMediaForSpeed(t *testing.T) {
 		{0, false, MediaOther}, {10, false, MediaFE}, {100, false, MediaFE}, {1000, false, MediaGE},
 		{2500, false, Media25GE}, {5000, false, Media5GE}, {10000, false, Media10GE},
 		{0, true, MediaSFP}, {1000, true, MediaSFP}, {2500, true, MediaSFPPl}, {10000, true, MediaSFPPl},
-		{25000, true, MediaSFP28}, {40000, true, MediaQSFPPl}, {50000, true, MediaQSFPPl}, {100000, true, MediaQSFP28}, {400000, true, MediaQSFP28},
-		{25000, false, Media25G}, {40000, false, Media40G}, {100000, false, Media100G},
+		{25000, true, MediaSFP28}, {40000, true, MediaQSFPPl}, {50000, true, MediaQSFP28}, {100000, true, MediaQSFP28}, {400000, true, MediaQSFP28},
+		{25000, false, MediaSFP28}, {40000, false, MediaQSFPPl}, {100000, false, MediaQSFP28},
+		{20000, false, MediaOther}, {30000, true, MediaOther}, // sums of aggregated links
 	} {
 		if got := MediaForSpeed(tc.speed, tc.pluggable); got != tc.want {
 			t.Errorf("MediaForSpeed(%d, %v) = %s, want %s", tc.speed, tc.pluggable, got, tc.want)

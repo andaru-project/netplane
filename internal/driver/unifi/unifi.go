@@ -463,8 +463,16 @@ func mapMedia(m string) model.MediaType {
 		return model.MediaSFP
 	case "SFP+":
 		return model.MediaSFPPl
+	case "25GE":
+		return model.Media25G
+	case "40GE":
+		return model.Media40G
+	case "100GE":
+		return model.Media100G
 	case "SFP28":
 		return model.MediaSFP28
+	case "QSFP+":
+		return model.MediaQSFPPl
 	case "QSFP28":
 		return model.MediaQSFP28
 	default:

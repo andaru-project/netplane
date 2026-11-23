@@ -714,14 +714,29 @@ func pduUint64(p gosnmp.SnmpPDU) uint64 {
 	return gosnmp.ToBigInt(p.Value).Uint64()
 }
 
-// cageName matches Cisco-style names of ports that are always cages: TenGigabitEthernet and
-// Ten-GigabitEthernet, and TwentyFiveGigE, FortyGigabitEthernet and HundredGigE with their short
-// forms (Twe, Fo, Hu). The short form Te also names copper mGig ports, so it is left to the speed.
-var cageName = regexp.MustCompile(`^(ten-?gig|twentyfivegig|fortygig|hundredgig|(twe|fo|hu)\d)`)
+// cageNames maps Cisco names of ports that are always a given cage to it, whatever the module
+// or a down port reports as its speed.
+var cageNames = []struct {
+	re    *regexp.Regexp
+	media model.MediaType
+}{
+	{regexp.MustCompile(`^(fiftygig|hundredgig|twohundredgig|fourhundredgig|hu\d)`), model.MediaQSFP28},
+	{regexp.MustCompile(`^(fortygig|fo\d)`), model.MediaQSFPPl},
+	{regexp.MustCompile(`^(twentyfivegig|twe\d)`), model.MediaSFP28},
+}
+
+// tenGigName matches TenGigabitEthernet and Ten-GigabitEthernet. The short form Te also names
+// copper mGig ports, so it is left to the speed.
+var tenGigName = regexp.MustCompile(`^ten-?gig`)
 
 func guessSnmpMedia(ifName string, speedMbps int) model.MediaType {
 	lower := strings.ToLower(ifName)
-	pluggable := strings.Contains(lower, "sfp") || strings.Contains(lower, "fiber") || cageName.MatchString(lower)
+	for _, c := range cageNames {
+		if c.re.MatchString(lower) {
+			return c.media
+		}
+	}
+	pluggable := strings.Contains(lower, "sfp") || strings.Contains(lower, "fiber") || tenGigName.MatchString(lower)
 	// Agents report 10 Mb/s for virtual interfaces of unknown speed (net-snmp's default).
 	if !pluggable && speedMbps < 100 {
 		return model.MediaOther

@@ -7,7 +7,7 @@ type MediaType string
 const (
 	MediaFE     MediaType = "FE"
 	MediaGE     MediaType = "GE"
-	Media25GE   MediaType = "2.5GE"
+	Media25GE   MediaType = "2.5GE" // 2.5 Gb/s; Media25G is 25 Gb/s
 	Media5GE    MediaType = "5GE"
 	Media10GE   MediaType = "10GE"
 	Media25G    MediaType = "25GE"
@@ -21,29 +21,30 @@ const (
 	MediaOther  MediaType = "other"
 )
 
-// MediaForSpeed classifies a port from its link speed. A pluggable cage is QSFP28 from 100 Gb/s,
-// QSFP+ from 40 Gb/s, SFP28 from 25 Gb/s, SFP+ above 1 Gb/s (2.5G and 5G modules sit in SFP+
-// cages) and SFP otherwise. Any other port is the Ethernet class of its speed (FE for 10/100, as
-// UniFi reports it), and other with no speed.
+// MediaForSpeed classifies a port from its link speed. Above 10 Gb/s every port is a cage
+// (25GBASE-T and 40GBASE-T hardware is all but absent): SFP28 at 25 Gb/s, QSFP+ at 40 Gb/s and
+// QSFP28 at 50 or 100 Gb/s; any other speed there is the sum of an aggregate, so other. Up to
+// 10 Gb/s a pluggable cage is SFP+ above 1 Gb/s (2.5G and 5G modules sit in SFP+ cages) and SFP
+// otherwise, and any other port is the Ethernet class of its speed (FE for 10/100, as UniFi
+// reports it), or other with no speed.
 // shortcut: 200G and 400G cages (QSFP56, QSFP-DD) read as QSFP28; add types when a driver sees one.
 func MediaForSpeed(speedMbps int, pluggable bool) MediaType {
+	if speedMbps > 10000 {
+		switch speedMbps {
+		case 25000:
+			return MediaSFP28
+		case 40000:
+			return MediaQSFPPl
+		case 50000, 100000, 200000, 400000:
+			return MediaQSFP28
+		}
+		return MediaOther
+	}
 	switch {
-	case pluggable && speedMbps >= 100000:
-		return MediaQSFP28
-	case pluggable && speedMbps >= 40000:
-		return MediaQSFPPl
-	case pluggable && speedMbps >= 25000:
-		return MediaSFP28
 	case pluggable && speedMbps > 1000:
 		return MediaSFPPl
 	case pluggable:
 		return MediaSFP
-	case speedMbps >= 100000:
-		return Media100G
-	case speedMbps >= 40000:
-		return Media40G
-	case speedMbps >= 25000:
-		return Media25G
 	case speedMbps >= 10000:
 		return Media10GE
 	case speedMbps >= 5000:
