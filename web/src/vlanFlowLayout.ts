@@ -522,9 +522,15 @@ export function computeSingleVlanLayout(
     }
     const foreignVlan = vlansById.get(otherVid);
     if (!foreignVlan) continue;
-    const targetDev = lf.vlans[0] === vlan.id ? lf.peer_id : lf.device_id;
-    const fAps = foreignVlan.access_ports.filter((ap) => ap.device_id === targetDev);
-    const fSsids = foreignVlan.ssids.filter((s) => s.device_id === targetDev);
+    // A link leak's foreign VLAN lives on the far end; a LAG leak (members with different PVIDs) has
+    // both VLANs on the LAG's own device, so fall back to the other end when the first has none.
+    const ends = lf.vlans[0] === vlan.id ? [lf.peer_id, lf.device_id] : [lf.device_id, lf.peer_id];
+    const onDev = (d: string) => ({
+      aps: foreignVlan.access_ports.filter((ap) => ap.device_id === d),
+      ssids: foreignVlan.ssids.filter((s) => s.device_id === d),
+    });
+    const targetDev = ends.find((d) => { const e = onDev(d); return e.aps.length + e.ssids.length > 0; }) ?? ends[0];
+    const { aps: fAps, ssids: fSsids } = onDev(targetDev);
     if (fAps.length > 0 || fSsids.length > 0) {
       foreignEndpointSpecs.push({
         id: `ep-leak:${targetDev}:v${otherVid}:${findingKey(lf)}`,

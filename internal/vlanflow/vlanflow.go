@@ -131,7 +131,8 @@ const (
 type Finding struct {
 	Kind     FindingKind `json:"kind"`
 	Severity Severity    `json:"severity"`
-	// VLANs holds the affected VLAN; a leak holds the VLANs that mix, the sender's first.
+	// VLANs holds the affected VLAN; a leak holds the two VLANs that mix (for a link, the sending
+	// end's PVID first; for a LAG whose members disagree, its lowest member PVID first).
 	VLANs    []int  `json:"vlans"`
 	EdgeID   string `json:"edge_id"`
 	DeviceID string `json:"device_id"`
@@ -187,6 +188,8 @@ type analyzer struct {
 	names    map[string]string
 	// routers holds the devices that route: gateway capability or a router/gateway/firewall role.
 	routers map[string]bool
+	// peerOf maps each wired infrastructure port (LAG members included) to the far end of its link.
+	peerOf map[portKey]portKey
 	// adj is the infrastructure graph: each device's peers with the index of the edge into edges.
 	adj map[string][]peerEdge
 	// native maps a routed port with an untagged segment to the VLAN its peer's PVID puts it in.
@@ -215,6 +218,7 @@ func Analyze(state *store.NetworkState, g topology.Graph) Flow {
 		zoneName: map[portKey]string{},
 		names:    map[string]string{},
 		routers:  map[string]bool{},
+		peerOf:   map[portKey]portKey{},
 		adj:      map[string][]peerEdge{},
 		native:   map[portKey]int{},
 		segVLAN:  map[int]int{},
@@ -245,10 +249,14 @@ func Analyze(state *store.NetworkState, g topology.Graph) Flow {
 		a.adj[e.FromID] = append(a.adj[e.FromID], peerEdge{e.ToID, len(a.edges)})
 		a.adj[e.ToID] = append(a.adj[e.ToID], peerEdge{e.FromID, len(a.edges)})
 		a.edges = append(a.edges, e)
-		for _, p := range []portKey{{e.FromID, e.FromLink}, {e.ToID, e.ToLink}} {
+		ends := []portKey{{e.FromID, e.FromLink}, {e.ToID, e.ToLink}}
+		for k, p := range ends {
 			a.infra[p] = true
-			for _, m := range a.lags[p].MemberLinks {
+			for _, m := range a.portNames(p.dev, p.link) {
 				a.infra[portKey{p.dev, m}] = true
+				if e.Kind != topology.EdgeWirelessUplink {
+					a.peerOf[portKey{p.dev, m}] = ends[1-k]
+				}
 			}
 		}
 	}
@@ -451,7 +459,10 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 	for _, l := range a.state.Links {
 		if l.PVID != nil && *l.PVID == v || slices.Contains(l.TaggedVLANs, v) {
 			configured[l.DeviceID] = true
-			if !a.infra[portKey{l.DeviceID, l.IfName}] {
+			// A trunk toward a device that reports no VLAN membership stands in for the use behind it.
+			k := portKey{l.DeviceID, l.IfName}
+			peer, toOpaque := a.peerOf[k]
+			if !a.infra[k] || toOpaque && a.port(peer.dev, peer.link).mode(v) == ModeUnknown {
 				using[l.DeviceID] = true
 			}
 		}
@@ -520,8 +531,12 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 				}
 			}
 			if len(gateways) == 0 {
-				// An L2-only VLAN strands nobody; the link matters only if it splits the VLAN.
-				if reach(adj, []string{h.FromID})[h.ToID] {
+				// An L2-only VLAN strands nobody; the link matters only if it splits the VLAN's users.
+				users := func(start, far string) []string {
+					return slices.DeleteFunc(a.side(hopEdge[j], start, far), func(d string) bool { return !using[d] })
+				}
+				reached := reach(adj, users(h.FromID, h.ToID))
+				if slices.ContainsFunc(users(h.ToID, h.FromID), func(d string) bool { return reached[d] }) {
 					continue
 				}
 				s = []string{}
@@ -643,9 +658,13 @@ func (a *analyzer) leaks() []Finding {
 			m                         membership
 			dev, link, peer, peerLink string
 		}{{from, e.FromID, e.FromLink, e.ToID, e.ToLink}, {to, e.ToID, e.ToLink, e.FromID, e.FromLink}} {
-			if len(end.m.lagPVIDs) > 1 {
+			if len(end.m.lagPVIDs) < 2 {
+				continue
+			}
+			// One finding per VLAN that mixes with the lowest PVID, so each names two VLANs.
+			for _, p := range end.m.lagPVIDs[1:] {
 				out = append(out, Finding{
-					Kind: FindingLeak, Severity: SeverityCrit, VLANs: end.m.lagPVIDs, EdgeID: e.ID,
+					Kind: FindingLeak, Severity: SeverityCrit, VLANs: []int{end.m.lagPVIDs[0], p}, EdgeID: e.ID,
 					DeviceID: end.dev, Link: end.link, PeerID: end.peer, PeerLink: end.peerLink, Stranded: []string{},
 					Message: fmt.Sprintf("The members of LAG %s:%s have different PVIDs %v: untagged frames land in a different VLAN depending on the member",
 						a.name(end.dev), end.link, end.m.lagPVIDs),

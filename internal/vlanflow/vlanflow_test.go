@@ -443,6 +443,57 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		}
 	})
 
+	t.Run("a VLAN trunked toward a device without VLAN data counts as used", func(t *testing.T) {
+		// c reports nothing; b trunks VLAN 30 to it, but a drops VLAN 30 on the way.
+		f := Analyze(chain([]model.Link{
+			{DeviceID: "a", IfName: "up", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "a", IfName: "down", PVID: ip(1)},
+			{DeviceID: "b", IfName: "up", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "b", IfName: "down", PVID: ip(1), TaggedVLANs: []int{30}},
+		}, []model.Segment{{DeviceID: "fw", AdminUp: true, ID: "s", ParentLink: "p0", VLANID: ip(30)}}))
+		if len(f.Findings) != 1 || f.Findings[0].EdgeID != "e2" || !slices.Equal(f.Findings[0].Stranded, []string{"b"}) {
+			t.Errorf("findings = %+v", f.Findings)
+		}
+	})
+
+	t.Run("an L2-only VLAN whose users connect around a ring is not split", func(t *testing.T) {
+		// Ring a-b-c-fw-a (fw only switches here): a carries VLAN 60 nowhere, but b and fw still tag
+		// it toward a; b and fw have users and connect through c.
+		state, g := chain([]model.Link{
+			{DeviceID: "fw", IfName: "p0", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "fw", IfName: "p9", PVID: ip(60)},
+			{DeviceID: "fw", IfName: "x", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "a", IfName: "up", PVID: ip(1)},
+			{DeviceID: "a", IfName: "down", PVID: ip(1)},
+			{DeviceID: "b", IfName: "up", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "b", IfName: "down", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "b", IfName: "p9", PVID: ip(60)},
+			{DeviceID: "c", IfName: "up", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "c", IfName: "x", PVID: ip(1), TaggedVLANs: []int{60}},
+		}, nil)
+		g.Edges = append(g.Edges, topology.Edge{ID: "e4", FromID: "c", FromLink: "x", ToID: "fw", ToLink: "x", Kind: topology.EdgeWired})
+		if f := Analyze(state, g); len(f.Findings) != 0 {
+			t.Errorf("findings = %+v", f.Findings)
+		}
+	})
+
+	t.Run("a LAG with three member PVIDs raises one leak per pair with the lowest", func(t *testing.T) {
+		state, g := chain([]model.Link{
+			{DeviceID: "a", IfName: "m1", PVID: ip(10)},
+			{DeviceID: "a", IfName: "m2", PVID: ip(20)},
+			{DeviceID: "a", IfName: "m3", PVID: ip(30)},
+		}, nil)
+		state.LagGroups = []model.LagGroup{{DeviceID: "a", ID: "bond", Name: "bond", MemberLinks: []string{"m1", "m2", "m3"}}}
+		g.Edges[0].ToLink = "bond"
+		var got []string
+		for _, x := range Analyze(state, g).Findings {
+			got = append(got, fmt.Sprint(x.Kind, x.VLANs, x.DeviceID, x.PeerID))
+		}
+		if want := []string{"leak[10 20]afw", "leak[10 30]afw"}; !slices.Equal(got, want) {
+			t.Errorf("findings = %v, want %v", got, want)
+		}
+	})
+
 	t.Run("reserved VLAN IDs are ignored", func(t *testing.T) {
 		f := Analyze(chain([]model.Link{
 			{DeviceID: "a", IfName: "down", PVID: ip(4095), TaggedVLANs: []int{0}},

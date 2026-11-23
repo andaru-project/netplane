@@ -109,7 +109,7 @@
         "properties": {
           "kind": { "type": "string", "enum": ["leak", "dead_end", "tag_mismatch"] },
           "severity": { "type": "string", "enum": ["crit", "warn"] },
-          "vlans": { "type": "array", "items": { "type": "integer" }, "minItems": 1 },
+          "vlans": { "type": "array", "items": { "type": "integer" }, "minItems": 1, "maxItems": 2 },
           "edge_id": { "type": "string" },
           "device_id": { "type": "string" },
           "link": { "type": "string" },
