@@ -48,10 +48,10 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
   const findings = flow?.findings ?? [];
   const links = state?.links ?? [];
   const devices = state?.devices ?? [];
-  // Untagged segments the API resolved to a VLAN (as its gateway) are listed with that VLAN instead.
+  // Segments the API lists as a VLAN's gateway appear with that VLAN; every other one is listed here.
   const vlanGateways = new Set(vlans.flatMap((v) => v.gateways.map((g) => `${g.device_id}\u0000${g.segment_id}`)));
   const nonVlanSegments = (state?.segments ?? []).filter(
-    (s) => s.vlan_id == null && !vlanGateways.has(`${s.device_id}\u0000${s.id}`),
+    (s) => !vlanGateways.has(`${s.device_id}\u0000${s.id}`),
   );
 
   // Build lookup of unreachable access ports reported by /api/v1/vlans/flow.
@@ -386,7 +386,7 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
       {nonVlanSegments.length > 0 && (
         <Card withBorder radius="md" p={0}>
           <CardHeader>
-            <Title order={4} size="h5">Other L3 Segments ({nonVlanSegments.length})</Title>
+            <Title order={4} size="h5">Other Segments ({nonVlanSegments.length})</Title>
           </CardHeader>
           <Table.ScrollContainer minWidth={0} type="native">
             <Table highlightOnHover className="data-table">
@@ -394,6 +394,7 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
                 <Table.Tr>
                   <Table.Th>Device</Table.Th>
                   <Table.Th>Segment</Table.Th>
+                  <Table.Th>VLAN</Table.Th>
                   <Table.Th>Kind</Table.Th>
                   <Table.Th>Parent Link</Table.Th>
                   <Table.Th>Addresses</Table.Th>
@@ -409,6 +410,7 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
                       </Anchor>
                     </Table.Td>
                     <Table.Td ff="monospace" fw={600} fz="xs">{s.name}</Table.Td>
+                    <Table.Td ff="monospace" fz="xs">{s.vlan_id ?? '—'}</Table.Td>
                     <Table.Td><Badge size="xs" variant="light" color="gray">{s.kind}</Badge></Table.Td>
                     <Table.Td ff="monospace" fz="xs">{s.parent_link || '—'}</Table.Td>
                     <Table.Td ff="monospace" fz="xs">

@@ -32,7 +32,7 @@ export function pinAppRoot(doc: Pick<Document, 'baseURI' | 'querySelector'> = do
 }
 
 export function apiBasePath(doc: Pick<Document, 'baseURI' | 'querySelector'> = document): string {
-  const base = pinnedRoot ?? getRouterBasename(doc);
+  const base = doc === document && pinnedRoot ? pinnedRoot : getRouterBasename(doc);
   return base === '/' ? '/' : `${base}/`;
 }
 

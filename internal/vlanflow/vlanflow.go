@@ -131,7 +131,7 @@ const (
 type Finding struct {
 	Kind     FindingKind `json:"kind"`
 	Severity Severity    `json:"severity"`
-	// VLANs holds the affected VLAN; a leak holds both, the sender's first.
+	// VLANs holds the affected VLAN; a leak holds the VLANs that mix, the sender's first.
 	VLANs    []int  `json:"vlans"`
 	EdgeID   string `json:"edge_id"`
 	DeviceID string `json:"device_id"`
@@ -168,7 +168,7 @@ func (m membership) mode(v int) Mode {
 	switch {
 	case m.tagged[v]:
 		return ModeTagged
-	case m.pvid != nil && *m.pvid == v:
+	case m.pvid != nil && *m.pvid == v, slices.Contains(m.lagPVIDs, v):
 		return ModeUntagged
 	case !m.known || m.nativeUnknown:
 		return ModeUnknown
@@ -301,7 +301,7 @@ func (a *analyzer) port(dev, name string) membership {
 		m.known = true
 		pvids := map[int]bool{}
 		for i, l := range reported {
-			if l.PVID != nil {
+			if l.PVID != nil && validVLAN(*l.PVID) {
 				pvids[*l.PVID] = true
 			}
 			if i == 0 {
@@ -419,14 +419,18 @@ func (a *analyzer) vlanIDs() []int {
 
 func (a *analyzer) trace(v int) (VLAN, []Finding) {
 	vl := VLAN{ID: v, Gateways: []Gateway{}, Devices: []string{}, Reached: []string{}, Hops: []Hop{}, AccessPorts: []AccessPort{}, SSIDs: []SSID{}}
-	using := map[string]bool{}
+	// using: devices with an endpoint on the VLAN (an enabled segment, a non-infrastructure port, an
+	// SSID); configured adds devices that only carry it on infrastructure ports.
+	using, configured := map[string]bool{}, map[string]bool{}
 	gateways := map[string]bool{}
+	segName := ""
 
 	for i, s := range a.state.Segments {
-		if sv, ok := a.segVLAN[i]; !ok || sv != v {
+		if sv, ok := a.segVLAN[i]; !ok || sv != v || !s.AdminUp || s.OperState == model.OperDisabled {
 			continue
 		}
-		using[s.DeviceID] = true
+		using[s.DeviceID], configured[s.DeviceID] = true, true
+		segName = cmp.Or(segName, s.Name)
 		if !a.routes(s) {
 			continue
 		}
@@ -443,18 +447,20 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 			vl.Name = s.Name
 		}
 	}
+	vl.Name = cmp.Or(vl.Name, segName)
 	for _, l := range a.state.Links {
 		if l.PVID != nil && *l.PVID == v || slices.Contains(l.TaggedVLANs, v) {
-			using[l.DeviceID] = true
+			configured[l.DeviceID] = true
+			if !a.infra[portKey{l.DeviceID, l.IfName}] {
+				using[l.DeviceID] = true
+			}
 		}
 	}
 	for _, r := range a.state.Radios {
 		for _, s := range r.SSIDs {
 			if s.VLANID != nil && *s.VLANID == v {
-				using[r.DeviceID] = true
-				if vl.Name == "" {
-					vl.Name = s.Name
-				}
+				using[r.DeviceID], configured[r.DeviceID] = true, true
+				vl.Name = cmp.Or(vl.Name, s.Name)
 			}
 		}
 	}
@@ -477,9 +483,9 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 		h.State = cmp.Or(h.State, hopState(h.FromMode, h.ToMode))
 		switch h.State {
 		case HopDeadEnd:
-			// Missing on an end whose side of the network has no use for the VLAN is an unpruned
-			// trunk, not a break: the hop is left out.
-			if h.FromMode == ModeNone && !a.sideUses(i, e.FromID, e.ToID, using) || h.ToMode == ModeNone && !a.sideUses(i, e.ToID, e.FromID, using) {
+			// A link missing the VLAN breaks something only when both of its sides use it; otherwise
+			// it is an unpruned trunk, and the hop is left out.
+			if !a.sideUses(i, e.FromID, e.ToID, using) || !a.sideUses(i, e.ToID, e.FromID, using) {
 				h.State = ""
 			}
 		case HopUnverified:
@@ -513,18 +519,22 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 					s = append(s, d)
 				}
 			}
-			if len(gateways) > 0 && len(s) == 0 {
-				continue
-			}
 			if len(gateways) == 0 {
-				s = []string{} // an L2-only VLAN reaches no gateway anywhere: nothing is stranded by this link
+				// An L2-only VLAN strands nobody; the link matters only if it splits the VLAN.
+				if reach(adj, []string{h.FromID})[h.ToID] {
+					continue
+				}
+				s = []string{}
+			} else if len(s) == 0 {
+				continue // every user reaches a gateway another way: the link is redundant
 			}
 			slices.Sort(s)
+			s = slices.Compact(s)
 		}
 		hops, stranded = append(hops, h), append(stranded, s)
 	}
 	vl.Hops = hops
-	vl.Devices = slices.Sorted(maps.Keys(using))
+	vl.Devices = slices.Sorted(maps.Keys(configured))
 	vl.Reached = slices.Sorted(maps.Keys(reached))
 
 	seenPort := map[portKey]bool{}
@@ -630,13 +640,13 @@ func (a *analyzer) leaks() []Finding {
 		}
 		from, to := a.port(e.FromID, e.FromLink), a.port(e.ToID, e.ToLink)
 		for _, end := range []struct {
-			m         membership
-			dev, link string
-		}{{from, e.FromID, e.FromLink}, {to, e.ToID, e.ToLink}} {
+			m                         membership
+			dev, link, peer, peerLink string
+		}{{from, e.FromID, e.FromLink, e.ToID, e.ToLink}, {to, e.ToID, e.ToLink, e.FromID, e.FromLink}} {
 			if len(end.m.lagPVIDs) > 1 {
 				out = append(out, Finding{
-					Kind: FindingLeak, Severity: SeverityCrit, VLANs: end.m.lagPVIDs[:2], EdgeID: e.ID,
-					DeviceID: end.dev, Link: end.link, PeerID: end.dev, PeerLink: end.link, Stranded: []string{},
+					Kind: FindingLeak, Severity: SeverityCrit, VLANs: end.m.lagPVIDs, EdgeID: e.ID,
+					DeviceID: end.dev, Link: end.link, PeerID: end.peer, PeerLink: end.peerLink, Stranded: []string{},
 					Message: fmt.Sprintf("The members of LAG %s:%s have different PVIDs %v: untagged frames land in a different VLAN depending on the member",
 						a.name(end.dev), end.link, end.m.lagPVIDs),
 				})

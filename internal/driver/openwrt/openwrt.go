@@ -195,12 +195,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		name = cfg.ID
 	}
 
-	role := model.RoleRouter
-	if len(wirelessStatus) > 0 && len(ifDump.Interface) <= 2 {
-		role = model.RoleAP
-	} else if len(devNames) >= 6 && len(wirelessStatus) == 0 {
-		role = model.RoleSwitch
-	}
+	hasWAN := slices.ContainsFunc(ifDump.Interface, func(i ubusInterface) bool { return i.Interface == "wan" || i.Interface == "wan6" })
+	role := guessRole(len(wirelessStatus), len(ifDump.Interface), len(devNames), hasWAN)
 
 	caps := []model.Capability{model.CapLinks, model.CapSegments, model.CapFirmwareInfo, model.CapDiagPing, model.CapDiagTraceroute}
 	if len(wirelessStatus) > 0 {
@@ -572,4 +568,16 @@ type ubusRadio struct {
 			Encryption string `json:"encryption"`
 		} `json:"config"`
 	} `json:"interfaces"`
+}
+
+// guessRole classifies an OpenWrt device. A device with a wan interface routes, however many
+// ports it has; without one, many ports and no radios mean a switch.
+func guessRole(radios, ifaces, devs int, hasWAN bool) model.DeviceRole {
+	switch {
+	case radios > 0 && ifaces <= 2:
+		return model.RoleAP
+	case devs >= 6 && radios == 0 && !hasWAN:
+		return model.RoleSwitch
+	}
+	return model.RoleRouter
 }

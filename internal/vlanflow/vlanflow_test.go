@@ -220,6 +220,7 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 			{DeviceID: "b", IfName: "up", PVID: ip(1), TaggedVLANs: []int{10}},
 			{DeviceID: "b", IfName: "down", PVID: ip(1), TaggedVLANs: []int{20}},
 			{DeviceID: "c", IfName: "up", PVID: ip(1), TaggedVLANs: []int{20}},
+			{DeviceID: "c", IfName: "p", PVID: ip(20)},
 		}, seg))
 		v := vlan(t, f, 20)
 		if h := hop(t, v, "e2"); h.FromMode != ModeUnknown || h.ToMode != ModeNone || h.State != HopDeadEnd {
@@ -228,7 +229,7 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		if !slices.Equal(v.Reached, []string{"a", "fw"}) {
 			t.Errorf("reached = %v: a known none end must block the VLAN", v.Reached)
 		}
-		if len(f.Findings) != 1 || !slices.Equal(f.Findings[0].Stranded, []string{"b", "c"}) ||
+		if len(f.Findings) != 1 || !slices.Equal(f.Findings[0].Stranded, []string{"c"}) ||
 			f.Findings[0].Message != "VLAN 20 is missing on b:up, and a:down reports no VLAN membership" {
 			t.Errorf("findings = %+v", f.Findings)
 		}
@@ -242,11 +243,13 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 			{DeviceID: "b", IfName: "up", PVID: ip(1), TaggedVLANs: []int{20}},
 			{DeviceID: "b", IfName: "down", PVID: ip(1), TaggedVLANs: []int{20}},
 			{DeviceID: "c", IfName: "up", PVID: ip(1), TaggedVLANs: []int{20}},
+			{DeviceID: "c", IfName: "p", PVID: ip(20)},
 		}, seg))
 		if v := vlan(t, f, 20); len(v.Gateways) != 1 || !slices.Equal(v.Reached, []string{"a", "fw"}) {
 			t.Fatalf("VLAN 20 gateways = %+v reached = %v", v.Gateways, v.Reached)
 		}
-		if len(f.Findings) != 1 || f.Findings[0].EdgeID != "e2" || !slices.Equal(f.Findings[0].Stranded, []string{"b", "c"}) {
+		// b only carries the VLAN on trunks, so c, the device with an endpoint, is the one stranded.
+		if len(f.Findings) != 1 || f.Findings[0].EdgeID != "e2" || !slices.Equal(f.Findings[0].Stranded, []string{"c"}) {
 			t.Errorf("findings = %+v", f.Findings)
 		}
 	})
@@ -317,6 +320,7 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 			{DeviceID: "a", IfName: "m2", PVID: ip(1), TaggedVLANs: []int{20}},
 			{DeviceID: "a", IfName: "down", PVID: ip(20), TaggedVLANs: []int{20, 30}},
 			{DeviceID: "b", IfName: "up", PVID: ip(20), TaggedVLANs: []int{30}},
+			{DeviceID: "b", IfName: "p", PVID: ip(30)},
 		}, []model.Segment{
 			{DeviceID: "fw", AdminUp: true, ID: "s20", ParentLink: "p0", VLANID: ip(20)},
 			{DeviceID: "fw", AdminUp: true, ID: "s30", ParentLink: "p0", VLANID: ip(30)},
@@ -380,13 +384,62 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 	t.Run("an L2-only VLAN split by a link is a dead end with nothing stranded", func(t *testing.T) {
 		f := Analyze(chain([]model.Link{
 			{DeviceID: "a", IfName: "down", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "a", IfName: "q", PVID: ip(60)},
 			{DeviceID: "b", IfName: "up", PVID: ip(1)},
 			{DeviceID: "b", IfName: "p", PVID: ip(60)},
 			{DeviceID: "b", IfName: "p", PVID: ip(60)}, // a duplicate row lists the port once
 		}, nil))
 		v := vlan(t, f, 60)
-		if len(f.Findings) != 1 || f.Findings[0].EdgeID != "e2" || len(f.Findings[0].Stranded) != 0 || len(v.AccessPorts) != 1 {
+		if len(f.Findings) != 1 || f.Findings[0].EdgeID != "e2" || len(f.Findings[0].Stranded) != 0 || len(v.AccessPorts) != 2 {
 			t.Errorf("findings = %+v, access ports = %+v", f.Findings, v.AccessPorts)
+		}
+	})
+
+	t.Run("an end without VLAN data facing a VLAN its side never uses is no dead end", func(t *testing.T) {
+		// a reports nothing; VLAN 60 lives only on b and c, so the a-b link does not need it.
+		f := Analyze(chain([]model.Link{
+			{DeviceID: "b", IfName: "up", PVID: ip(1)},
+			{DeviceID: "b", IfName: "down", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "b", IfName: "p", PVID: ip(60)},
+			{DeviceID: "c", IfName: "up", PVID: ip(1), TaggedVLANs: []int{60}},
+			{DeviceID: "c", IfName: "p", PVID: ip(60)},
+		}, nil))
+		if v := vlan(t, f, 60); len(f.Findings) != 0 || hasHop(v, "e2") {
+			t.Errorf("findings = %+v", f.Findings)
+		}
+	})
+
+	t.Run("a ring lists each stranded device once, and an L2-only ring has no dead end", func(t *testing.T) {
+		// Ring fw-a-b-c-fw: VLAN 30 is missing on b's side of a-b and on fw's side of c-fw.
+		links := []model.Link{
+			{DeviceID: "a", IfName: "up", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "a", IfName: "down", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "a", IfName: "p", PVID: ip(30)},
+			{DeviceID: "b", IfName: "up", PVID: ip(1)},
+			{DeviceID: "b", IfName: "down", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "b", IfName: "p", PVID: ip(30)},
+			{DeviceID: "c", IfName: "up", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "c", IfName: "x", PVID: ip(1), TaggedVLANs: []int{30}},
+			{DeviceID: "c", IfName: "p", PVID: ip(30)},
+			{DeviceID: "fw", IfName: "x", PVID: ip(1)},
+		}
+		state, g := chain(links, []model.Segment{{DeviceID: "fw", AdminUp: true, ID: "s", ParentLink: "p0", VLANID: ip(30)}})
+		g.Edges = append(g.Edges, topology.Edge{ID: "e4", FromID: "c", FromLink: "x", ToID: "fw", ToLink: "x", Kind: topology.EdgeWired})
+		f := Analyze(state, g)
+		for _, x := range f.Findings {
+			if !slices.Equal(x.Stranded, []string{"b", "c"}) {
+				t.Errorf("finding %s stranded = %v, want [b c]", x.EdgeID, x.Stranded)
+			}
+		}
+		if len(f.Findings) != 2 {
+			t.Errorf("findings = %+v", f.Findings)
+		}
+
+		// Without a gateway, b still reaches a through c: the missing a-b link splits nothing.
+		state.Segments = nil
+		links[9].TaggedVLANs = []int{30}
+		if f := Analyze(state, g); len(f.Findings) != 0 {
+			t.Errorf("L2-only findings = %+v", f.Findings)
 		}
 	})
 

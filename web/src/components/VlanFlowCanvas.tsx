@@ -404,7 +404,7 @@ export function VlanFlowCanvas({
         {allLayout.vlanCards.map((vc) => {
           const col = getVlanColor(vc.vlan.id, vlanColors, isDark);
           const gw = vc.vlan.gateways[0];
-          const addr = !gw ? 'L2 only' : gw.addresses[0] ? `${gw.addresses[0].address}/${gw.addresses[0].prefix_length}` : gw.segment_name;
+          const addr = !gw ? 'L2 only' : gw.addresses[0] ? `${gw.addresses[0].address}/${gw.addresses[0].prefix_length}` : gw.segment_name || gw.segment_id;
           const zone = gw?.zone_name || gw?.zone_id;
           const status = vlanStatusMeta(vlanHealth(vc.vlan, vc.findings), C);
 
