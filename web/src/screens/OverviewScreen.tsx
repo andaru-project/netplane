@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {
+  Anchor,
   Badge,
   Button,
   Card,
@@ -55,6 +56,8 @@ export function OverviewScreen({
   const gateways = state?.gateways ?? [];
   const firewalls = state?.firewalls ?? [];
   const findings = flow?.findings ?? [];
+  // No report yet (first load, or it has never loaded): VLAN health is unknown, not clean.
+  const flowLoaded = flow != null;
 
   const onlineDevices = devices.filter((d) => d.online).length;
   const offlineDevices = devices.filter((d) => !d.online);
@@ -77,6 +80,9 @@ export function OverviewScreen({
   const poeLinks = links.filter((l) => l.poe?.supported && l.poe.enabled && l.poe.watts != null);
   const poeLinksWatts = poeLinks.reduce((s, l) => s + (l.poe?.watts ?? 0), 0);
   const hasPoeData = poeDevices.length > 0 || poeLinks.length > 0;
+  // The KPI shows budget usage when any device reports a budget, else the port draw sum.
+  const poeCoverage = poeTotalBudget > 0 ? poeDevices.length : new Set(poeLinks.map((l) => l.device_id)).size;
+  const poeCoverageText = `across ${poeCoverage} PoE device${poeCoverage === 1 ? '' : 's'}`;
   const hasWanOrPoe = primaryGw != null || hasPoeData;
 
   const generatedAt = flow?.generated_at || topology?.generated_at;
@@ -122,14 +128,22 @@ export function OverviewScreen({
           <Text
             size="xl"
             fw={700}
-            c={leakCount > 0 ? 'red' : findings.length > 0 ? 'orange' : 'green'}
+            c={!flowLoaded ? 'dimmed' : leakCount > 0 ? 'red' : findings.length > 0 ? 'orange' : 'green'}
           >
-            {findings.length === 0 ? 'Clean' : `${findings.length} Issue${findings.length === 1 ? '' : 's'}`}
+            {!flowLoaded
+              ? 'Unavailable'
+              : findings.length === 0
+                ? 'Clean'
+                : `${findings.length} Issue${findings.length === 1 ? '' : 's'}`}
           </Text>
           <FindingCounts
             findings={findings}
             gap={4}
-            empty={<Text size="xs" c="dimmed">{flow?.vlans.length ?? 0} VLANs traced</Text>}
+            empty={
+              <Text size="xs" c="dimmed">
+                {flowLoaded ? `${flow.vlans.length} VLANs traced` : 'No VLAN flow report yet'}
+              </Text>
+            }
           />
         </button>
 
@@ -170,6 +184,7 @@ export function OverviewScreen({
                   : `${poeLinksWatts.toFixed(1)} W`}
             </Text>
             <Group gap={6} wrap="wrap">
+              {!primaryGw && <Text size="xs" c="dimmed">{poeCoverageText}</Text>}
               {primaryGw && (
                 <Badge size="xs" variant="light" color={primaryGw.online ? 'green' : 'red'}>
                   {primaryGw.loss_pct != null ? `${primaryGw.loss_pct.toFixed(1)}% loss` : primaryGw.name}
@@ -177,7 +192,8 @@ export function OverviewScreen({
               )}
               {primaryGw && hasPoeData && (
                 <Text size="xs" c="dimmed" ff="monospace">
-                  PoE {poeTotalBudget > 0 ? `${poeUsedBudget.toFixed(1)}/${poeTotalBudget.toFixed(0)}W` : `${poeLinksWatts.toFixed(1)}W`}
+                  PoE {poeTotalBudget > 0 ? `${poeUsedBudget.toFixed(1)}/${poeTotalBudget.toFixed(0)}W` : `${poeLinksWatts.toFixed(1)}W`}{' '}
+                  {poeCoverageText}
                 </Text>
               )}
             </Group>
@@ -198,8 +214,18 @@ export function OverviewScreen({
         <CardHeader>
           <Group gap="xs">
             <Title order={4} size="h5">Attention Required</Title>
-            <Badge size="sm" variant="light" color={totalAttention > 0 ? (leakCount > 0 || offlineDevices.length > 0 ? 'red' : 'yellow') : 'green'}>
-              {totalAttention > 0 ? `${totalAttention} Active Finding${totalAttention === 1 ? '' : 's'}` : 'All Clear'}
+            <Badge
+              size="sm"
+              variant="light"
+              color={
+                totalAttention > 0
+                  ? leakCount > 0 || offlineDevices.length > 0 ? 'red' : 'yellow'
+                  : flowLoaded ? 'green' : 'gray'
+              }
+            >
+              {totalAttention > 0
+                ? `${totalAttention} Active Finding${totalAttention === 1 ? '' : 's'}`
+                : flowLoaded ? 'All Clear' : 'VLAN report pending'}
             </Badge>
           </Group>
           <Text size="xs" c="dimmed">Reported by VLAN flow analysis, device polling, and SFP DOM</Text>
@@ -284,7 +310,9 @@ export function OverviewScreen({
           {totalAttention === 0 && (
             <AlertRow>
               <Text size="sm" c="dimmed">
-                No VLAN leaks, dead-ends, offline devices, or optical alarms detected.
+                {flowLoaded
+                  ? 'No VLAN leaks, dead-ends, offline devices, or optical alarms detected.'
+                  : 'No offline devices or optical alarms detected. VLAN flow analysis is not available yet.'}
               </Text>
             </AlertRow>
           )}
@@ -326,7 +354,11 @@ export function OverviewScreen({
                       style={{ cursor: 'pointer' }}
                       onClick={() => void navigate(devicePath(dev.id))}
                     >
-                      <Table.Td fw={600}>{dev.name}</Table.Td>
+                      <Table.Td fw={600}>
+                        <Anchor component={Link} to={devicePath(dev.id)} inherit c="inherit" onClick={(e) => e.stopPropagation()}>
+                          {dev.name}
+                        </Anchor>
+                      </Table.Td>
                       <Table.Td><DriverBadge driver={dev.driver} /></Table.Td>
                       <Table.Td><Text size="xs" c="dimmed">{dev.role}</Text></Table.Td>
                       <Table.Td ff="monospace" fz="xs">{dev.mgmt_ip || '—'}</Table.Td>
