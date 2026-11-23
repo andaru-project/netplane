@@ -301,7 +301,7 @@ describe('TopologyView', () => {
         onSelect={() => {}}
       />,
     );
-    const svg = screen.getByRole('img', { name: /topology graph/ });
+    const svg = screen.getByRole('group', { name: /topology graph/ });
     const naturalW = Number(svg.getAttribute('viewBox')?.split(' ')[2]);
     expect(naturalW).toBeGreaterThan(760);
     expect(svg.style.minWidth).toBe(`${naturalW}px`);
