@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createTheme, MantineProvider } from '@mantine/core';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
+import { api } from './api';
 import type { Device, Link, NetworkState, TopologyEdge, VLANFlow, VLANFlowFinding, VLANFlowHop } from './api';
+import { App } from './App';
 import { PortFaceplate } from './components/PortFaceplate';
 import { TopologyView } from './components/TopologyView';
 import { VlanFlowCanvas } from './components/VlanFlowCanvas';
@@ -384,5 +386,25 @@ describe('VlanFlowCanvas', () => {
     const grad = container.querySelector('linearGradient');
     expect(grad).toHaveAttribute('gradientUnits', 'userSpaceOnUse');
     expect(container.querySelector(`path[stroke="url(#${grad?.id})"]`)).not.toBeNull();
+  });
+});
+
+describe('App poll all', () => {
+  it('names the targets that failed to poll apart from refresh errors', async () => {
+    const target = (id: string, name: string) => ({ id, name, driver: 'openwrt', endpoint: 'x', enabled: true, poll_interval: 60 });
+    vi.spyOn(api, 'getState').mockResolvedValue(emptyState);
+    vi.spyOn(api, 'getTopology').mockResolvedValue({ generated_at: '2026-01-01T00:00:00Z', root_ids: [], nodes: [], edges: [] });
+    vi.spyOn(api, 'getVLANFlow').mockResolvedValue({ generated_at: '2026-01-01T00:00:00Z', vlans: [], findings: [] });
+    vi.spyOn(api, 'listTargets').mockResolvedValue([target('t1', 'Core'), target('t2', 'Attic')]);
+    vi.spyOn(api, 'listDiagnostics').mockResolvedValue([]);
+    vi.spyOn(api, 'pollTarget').mockImplementation(async (id) => {
+      if (id === 't2') throw new Error('HTTP 502: POLL_FAILED');
+      return {};
+    });
+
+    wrap(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Poll all' }));
+    await waitFor(() => expect(screen.getByText('Poll failed for: Attic')).toBeInTheDocument());
+    expect(screen.queryByText('API error')).not.toBeInTheDocument();
   });
 });
