@@ -593,11 +593,12 @@ export function DeviceDetailScreen({
                       <Table.Td>
                         {issue ? (
                           <Badge
+                            component={Link}
+                            to={vlanFlowPath({ mode: 'single', vlanId: issue.vlanId })}
                             size="xs"
                             variant="light"
                             color="yellow"
                             style={{ cursor: 'pointer' }}
-                            onClick={() => void navigate(vlanFlowPath({ mode: 'single', vlanId: issue.vlanId }))}
                           >
                             ⊘ VLAN Unreachable
                           </Badge>

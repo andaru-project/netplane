@@ -14,7 +14,7 @@ import {
   Title,
 } from '@mantine/core';
 import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link } from 'react-router';
 import {
   type Client,
   type Device,
@@ -39,7 +39,6 @@ interface Props {
 }
 
 export function ClientsScreen({ clients, flow, devicesById, vlansById, vlanColors }: Props) {
-  const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [connType, setConnType] = useState<string>('all');
   const [vlanFilter, setVlanFilter] = useState<string>('all');
@@ -183,11 +182,12 @@ export function ClientsScreen({ clients, flow, devicesById, vlansById, vlanColor
                     <Table.Td>
                       {issue ? (
                         <Badge
+                          component={Link}
+                          to={vlanFlowPath({ mode: 'single', vlanId: issue.vlanId })}
                           size="xs"
                           variant="light"
                           color="yellow"
                           style={{ cursor: 'pointer' }}
-                          onClick={() => void navigate(vlanFlowPath({ mode: 'single', vlanId: issue.vlanId }))}
                         >
                           ⊘ VLAN {issue.vlanId} Unreachable
                         </Badge>

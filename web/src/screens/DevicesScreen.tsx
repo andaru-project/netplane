@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {
+  Anchor,
   Badge,
   Card,
   Group,
@@ -10,7 +11,7 @@ import {
   Title,
 } from '@mantine/core';
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import {
   formatUptime,
   type NetworkState,
@@ -94,7 +95,11 @@ export function DevicesScreen({ state, flow }: Props) {
                     style={{ cursor: 'pointer' }}
                     onClick={() => void navigate(devicePath(d.id))}
                   >
-                    <Table.Td fw={700}>{d.name}</Table.Td>
+                    <Table.Td fw={700}>
+                      <Anchor component={Link} to={devicePath(d.id)} inherit c="inherit" onClick={(e) => e.stopPropagation()}>
+                        {d.name}
+                      </Anchor>
+                    </Table.Td>
                     <Table.Td><DriverBadge driver={d.driver} /></Table.Td>
                     <Table.Td>{d.role}</Table.Td>
                     <Table.Td fz="xs">{d.model || '—'}</Table.Td>
