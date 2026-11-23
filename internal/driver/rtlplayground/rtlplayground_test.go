@@ -583,3 +583,19 @@ func TestNonFiniteReadingsDropped(t *testing.T) {
 		t.Fatalf("non-finite readings kept: temp=%v sfp=%+v", m.socTemp, m.ports[9].sfp)
 	}
 }
+
+func TestMediaFor(t *testing.T) {
+	// The speed is recorded whether or not a port has carrier, so a down copper port is other.
+	for _, tc := range []struct {
+		speed      int
+		up, hasSFP bool
+		want       model.MediaType
+	}{
+		{1000, true, false, model.MediaGE}, {1000, false, false, model.MediaOther}, {0, true, false, model.MediaOther},
+		{10000, false, true, model.MediaSFPPl}, {1000, false, true, model.MediaSFP},
+	} {
+		if got := mediaFor(tc.speed, tc.up, tc.hasSFP); got != tc.want {
+			t.Errorf("mediaFor(%d, %v, %v) = %s, want %s", tc.speed, tc.up, tc.hasSFP, got, tc.want)
+		}
+	}
+}

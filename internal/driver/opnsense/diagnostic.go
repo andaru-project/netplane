@@ -93,7 +93,7 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 	deadline := time.Now().Add(time.Duration(n+10) * time.Second)
 	var job pingJob
 	for {
-		if err := sleep(ctx, pingPoll); err != nil {
+		if err := driver.Sleep(ctx, pingPoll); err != nil {
 			return nil, err
 		}
 		var jobs struct {
@@ -161,22 +161,11 @@ func removeJob(ctx context.Context, a *api, id string) error {
 
 // pingError explains a refused ping call: a 400 is a bad request, a 403 a missing privilege.
 func pingError(step string, err error) error {
-	switch httpStatus(err) {
+	switch driver.HTTPStatus(err) {
 	case http.StatusBadRequest:
 		return fmt.Errorf("%w: opnsense ping %s: %v", driver.ErrDiagnosticRequest, step, err)
 	case http.StatusForbidden, http.StatusNotFound:
 		return fmt.Errorf("opnsense ping %s: %w (the API user needs the page-diagnostics-ping privilege)", step, err)
 	}
 	return fmt.Errorf("opnsense ping %s: %w", step, err)
-}
-
-func sleep(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
 }

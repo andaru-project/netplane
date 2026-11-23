@@ -2,13 +2,11 @@
 package openwrt
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"slices"
@@ -435,25 +433,6 @@ var (
 )
 
 func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method string, params map[string]any, out any) error {
-	payload, _ := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "call",
-		"params":  []any{sid, object, method, params},
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
 	var rpcResp struct {
 		Result []json.RawMessage `json:"result"`
 		Error  *struct {
@@ -461,7 +440,8 @@ func ubusCall(ctx context.Context, client *http.Client, url, sid, object, method
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&rpcResp); err != nil {
+	envelope := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "call", "params": []any{sid, object, method, params}}
+	if err := driver.DoJSON(ctx, client, http.MethodPost, url, nil, envelope, &rpcResp); err != nil {
 		return err
 	}
 	if rpcResp.Error != nil {
@@ -530,28 +510,14 @@ func parseOpenWrtSpeed(raw string) (int, string) {
 	return speed, duplex
 }
 
+// guessMedia classifies a device by name and speed. Every non-bridge device is listed, and tun
+// devices report 10 Mb/s, so copper below 100 Mb/s is other.
 func guessMedia(ifName string, speedMbps int) model.MediaType {
-	lower := strings.ToLower(ifName)
-	if strings.Contains(lower, "sfp") {
-		if speedMbps >= 10000 {
-			return model.MediaSFPPl
-		}
-		return model.MediaSFP
-	}
-	switch {
-	case speedMbps >= 10000:
-		return model.Media10GE
-	case speedMbps >= 5000:
-		return model.Media5GE
-	case speedMbps >= 2500:
-		return model.Media25GE
-	case speedMbps >= 1000:
-		return model.MediaGE
-	case speedMbps >= 100:
-		return model.MediaFE
-	default:
+	pluggable := strings.Contains(strings.ToLower(ifName), "sfp")
+	if !pluggable && speedMbps < 100 {
 		return model.MediaOther
 	}
+	return model.MediaForSpeed(speedMbps, pluggable)
 }
 
 type ubusNetDev struct {

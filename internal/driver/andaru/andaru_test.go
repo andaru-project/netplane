@@ -89,6 +89,10 @@ func TestAndaruUnixSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tok" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		if r.URL.Path == "/api/v1/status/links" {
 			_, _ = w.Write([]byte(`{"items":[{"ifIndex":2,"name":"eth0","linkType":"ether","operState":"UP"}]}`))
 			return

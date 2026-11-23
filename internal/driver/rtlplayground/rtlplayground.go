@@ -245,7 +245,7 @@ func newClient(cfg driver.TargetConfig) *client {
 // do sends req after the pacing gap and returns the body, limited to limit bytes.
 func (c *client) do(ctx context.Context, req *http.Request, limit int64) (*http.Response, []byte, error) {
 	if c.sent {
-		if err := sleep(ctx, requestGap); err != nil {
+		if err := driver.Sleep(ctx, requestGap); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -269,22 +269,13 @@ type transportError struct{ err error }
 func (e transportError) Error() string { return e.err.Error() }
 func (e transportError) Unwrap() error { return e.err }
 
-func sleep(ctx context.Context, d time.Duration) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(d):
-		return nil
-	}
-}
-
 // scrape reads /metrics, retrying a fast failure once: a busy exporter slot (a Prometheus
 // scrape) drops the connection, and two failed polls would mark a healthy switch offline.
 func (c *client) scrape(ctx context.Context, u string) ([]sample, error) {
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {
 		if attempt > 0 {
-			if serr := sleep(ctx, scrapeRetryGap); serr != nil {
+			if serr := driver.Sleep(ctx, scrapeRetryGap); serr != nil {
 				return nil, serr
 			}
 		}
@@ -792,25 +783,8 @@ func dbm(w float64) *float64 {
 
 // mediaFor infers the port media: the exporter reports no PHY type, only SFP modules and speed.
 func mediaFor(speedMbps int, up, hasSFP bool) model.MediaType {
-	if hasSFP {
-		if speedMbps > 1000 {
-			return model.MediaSFPPl
-		}
-		return model.MediaSFP
-	}
-	if !up {
+	if !hasSFP && !up {
 		return model.MediaOther
 	}
-	switch {
-	case speedMbps >= 10000:
-		return model.Media10GE
-	case speedMbps >= 5000:
-		return model.Media5GE
-	case speedMbps >= 2500:
-		return model.Media25GE
-	case speedMbps >= 1000:
-		return model.MediaGE
-	default:
-		return model.MediaFE
-	}
+	return model.MediaForSpeed(speedMbps, hasSFP)
 }

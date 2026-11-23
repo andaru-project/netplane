@@ -2,11 +2,8 @@
 package pfsense
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
 	"strconv"
@@ -423,49 +420,9 @@ func getJSON(ctx context.Context, client *http.Client, url, apiKey string, out a
 
 // doJSON sends body (when not nil) as JSON and decodes the response into out.
 func doJSON(ctx context.Context, client *http.Client, method, url, apiKey string, body, out any) error {
-	var reqBody io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
+	return driver.DoJSON(ctx, client, method, url, func(r *http.Request) {
+		if apiKey != "" {
+			r.Header.Set("X-API-Key", apiKey)
 		}
-		reqBody = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
-	if err != nil {
-		return err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if apiKey != "" {
-		req.Header.Set("X-API-Key", apiKey)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// The REST API explains a refusal (validation, privilege) in its message field.
-		var e struct {
-			Message string `json:"message"`
-		}
-		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		return &statusError{code: resp.StatusCode, message: e.Message}
-	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out)
-}
-
-// statusError is a non-2xx answer from the REST API.
-type statusError struct {
-	code    int
-	message string
-}
-
-func (e *statusError) Error() string {
-	if e.message == "" {
-		return fmt.Sprintf("HTTP %d", e.code)
-	}
-	return fmt.Sprintf("HTTP %d: %s", e.code, e.message)
+	}, body, out)
 }
