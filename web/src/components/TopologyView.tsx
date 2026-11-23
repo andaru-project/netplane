@@ -38,6 +38,9 @@ interface Props {
   onSelect: (sel: TopologySelection) => void;
 }
 
+// Narrowest layout width; graphs this small still shrink to fit a narrow panel.
+const MIN_SVG_W = 760;
+
 export function TopologyView({
   graph,
   state,
@@ -155,7 +158,7 @@ export function TopologyView({
       showClients ? Math.min(clientGroups.length, 4) : 1,
       1,
     );
-    let svgW = Math.max(760, maxCols * nodeW + (maxCols - 1) * gapX + padX * 2);
+    let svgW = Math.max(MIN_SVG_W, maxCols * nodeW + (maxCols - 1) * gapX + padX * 2);
     const devRowsH = levels.length * nodeH + Math.max(0, levels.length - 1) * gapY;
     const clientRowY = padY + devRowsH + 68;
     const svgH = padY * 2 + devRowsH + (showClients && clientGroups.length > 0 ? 124 : 10);
@@ -220,7 +223,13 @@ export function TopologyView({
 
   return (
     <svg
-      style={{ width: '100%', minWidth: Math.min(layout.svgW, 680), height: 'auto' }}
+      // A graph wider than the minimum layout keeps its natural size and scrolls in the stage;
+      // shrinking it to the panel would scale its labels below readable size.
+      style={{
+        width: '100%',
+        minWidth: layout.svgW > MIN_SVG_W ? layout.svgW : Math.min(layout.svgW, 680),
+        height: 'auto',
+      }}
       viewBox={`0 0 ${layout.svgW} ${layout.svgH}`}
       role="img"
       aria-label="Network physical and logical topology graph"
@@ -259,7 +268,9 @@ export function TopologyView({
           const archY = Math.min(y1, y2) - 24 - Math.abs(offset);
           pathD = `M ${x1} ${y1} Q ${(x1 + x2) / 2} ${archY}, ${x2} ${y2}`;
           midX = (x1 + x2) / 2;
-          midY = (y1 + archY) / 2 + 4;
+          // Labels stack apart from the curves: one 22-unit lane per sibling clears the 20-unit pill.
+          const yc = Math.min(left.y, right.y) + layout.nodeH / 2;
+          midY = yc - 8 + (sibIdx - (siblings.length - 1) / 2) * 22;
         } else {
           const x1 = p1.x + layout.nodeW / 2 + offset * 0.5;
           const y1 = p1.y + layout.nodeH;
@@ -335,7 +346,7 @@ export function TopologyView({
         const evTag = showEvidence && !stpBlocked
           ? ` · ${e.evidence === 'wireless_uplink' ? 'MESH' : e.evidence.toUpperCase()}`
           : '';
-        const pillText = overlayBadge ? `${overlayBadge} · ${mainCap}` : `${mainCap}${evTag}`;
+        const pillText = `${overlayBadge ? `${overlayBadge} · ` : ''}${mainCap}${evTag}`;
         const pillW = Math.max(82, pillText.length * 5.8 + 14);
         const pillBg = overlayBadge.startsWith('⚠')
           ? C.red

@@ -4,8 +4,9 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
-import type { Device, Link, NetworkState, VLANFlowFinding } from './api';
+import type { Device, Link, NetworkState, TopologyEdge, VLANFlowFinding } from './api';
 import { PortFaceplate } from './components/PortFaceplate';
+import { TopologyView } from './components/TopologyView';
 import { FindingCallout } from './components/ui';
 import { OverviewScreen } from './screens/OverviewScreen';
 import { VlanFlowScreen } from './screens/VlanFlowScreen';
@@ -204,5 +205,101 @@ describe('PortFaceplate', () => {
     wrap(faceplate([port(10, { poe: { supported: true, enabled: true } })]));
     expect(screen.getByText(/PoE —/)).toBeInTheDocument();
     expect(screen.queryByText(/PoE 0\.0W/)).not.toBeInTheDocument();
+  });
+});
+
+describe('TopologyView', () => {
+  const node = (id: string) => ({ id, kind: 'device' as const, label: id, online: true });
+  const edge = (id: string, from: string, to: string): TopologyEdge => ({
+    id,
+    from_id: from,
+    from_link: `${id}a`,
+    to_id: to,
+    to_link: `${id}b`,
+    kind: 'ethernet',
+    evidence: 'lldp',
+    confidence: 1,
+    member_links: [],
+  });
+  const hop = (edgeId: string, from: string, to: string) => ({
+    edge_id: edgeId,
+    from_id: from,
+    to_id: to,
+    kind: 'ethernet',
+    from_mode: 'tagged' as const,
+    to_mode: 'tagged' as const,
+    state: 'carried' as const,
+    from_tagged: [10],
+    to_tagged: [10],
+  });
+  // Two roots put both devices on one layer, so their parallel links arch side by side.
+  const graph = {
+    generated_at: '2026-01-01T00:00:00Z',
+    root_ids: ['a', 'b'],
+    nodes: [node('a'), node('b')],
+    edges: [edge('e1', 'a', 'b'), edge('e2', 'a', 'b')],
+  };
+  const flow = {
+    generated_at: '2026-01-01T00:00:00Z',
+    vlans: [
+      {
+        id: 10,
+        gateways: [],
+        devices: ['a', 'b'],
+        reached: [],
+        hops: [hop('e1', 'a', 'b'), hop('e2', 'a', 'b')],
+        access_ports: [],
+        ssids: [],
+        clients: 0,
+      },
+    ],
+    findings: [],
+  };
+  const renderView = () =>
+    wrap(
+      <TopologyView
+        graph={graph}
+        state={null}
+        flow={flow}
+        devicesById={new Map()}
+        vlanOverlay={10}
+        showClients={false}
+        showEvidence
+        selection={null}
+        onSelect={() => {}}
+      />,
+    );
+
+  it('keeps discovery evidence on links with a VLAN overlay badge', () => {
+    renderView();
+    expect(screen.getByText(/✓ T · e1a↔e1b · LLDP/)).toBeInTheDocument();
+  });
+
+  it('separates the labels of parallel links on one layer by a full label height', () => {
+    renderView();
+    const labelY = (id: string) =>
+      Number(screen.getByText(new RegExp(`${id}a↔${id}b`)).previousElementSibling?.getAttribute('y'));
+    expect(Math.abs(labelY('e1') - labelY('e2'))).toBeGreaterThanOrEqual(20);
+  });
+
+  it('renders a graph wider than the minimum layout at its natural width', () => {
+    const ids = Array.from({ length: 10 }, (_, i) => `d${i}`);
+    wrap(
+      <TopologyView
+        graph={{ ...graph, root_ids: ids, nodes: ids.map(node), edges: [] }}
+        state={null}
+        flow={null}
+        devicesById={new Map()}
+        vlanOverlay={null}
+        showClients={false}
+        showEvidence
+        selection={null}
+        onSelect={() => {}}
+      />,
+    );
+    const svg = screen.getByRole('img', { name: /topology graph/ });
+    const naturalW = Number(svg.getAttribute('viewBox')?.split(' ')[2]);
+    expect(naturalW).toBeGreaterThan(760);
+    expect(svg.style.minWidth).toBe(`${naturalW}px`);
   });
 });
