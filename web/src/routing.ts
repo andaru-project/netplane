@@ -16,10 +16,6 @@ export function getRouterBasename(doc: Pick<Document, 'baseURI' | 'querySelector
   }
 }
 
-/**
- * Returns the app's URL prefix with a trailing slash (`"/"` or `"/api/hassio_ingress/<token>/"`)
- * for API fetches, EventSource streams, and auth cookie scoping across nested routes.
- */
 let pinnedRoot: string | undefined;
 
 /**
@@ -31,6 +27,15 @@ export function pinAppRoot(doc: Pick<Document, 'baseURI' | 'querySelector'> = do
   return pinnedRoot;
 }
 
+/** Test-only: forgets the root pinned by pinAppRoot. */
+export function resetPinnedRoot(): void {
+  pinnedRoot = undefined;
+}
+
+/**
+ * Returns the app's URL prefix with a trailing slash (`"/"` or `"/api/hassio_ingress/<token>/"`)
+ * for API fetches, EventSource streams, and auth cookie scoping across nested routes.
+ */
 export function apiBasePath(doc: Pick<Document, 'baseURI' | 'querySelector'> = document): string {
   const base = doc === document && pinnedRoot ? pinnedRoot : getRouterBasename(doc);
   return base === '/' ? '/' : `${base}/`;
@@ -42,6 +47,20 @@ export function devicePath(deviceId: string, portName?: string | null): string {
     return `${base}?port=${encodeURIComponent(portName)}`;
   }
   return base;
+}
+
+/**
+ * Reads the device ID from a `/devices/<id>` pathname, decoding its raw segment exactly once.
+ * React Router's `:id` param turns an encoded `%2F` into `/`, so IDs `rack%2F1` and `rack/1`
+ * would both resolve to `rack/1`.
+ */
+export function deviceIdFromPath(pathname: string): string {
+  const seg = /^\/devices\/([^/]+)/.exec(pathname)?.[1] ?? '';
+  try {
+    return decodeURIComponent(seg);
+  } catch {
+    return seg;
+  }
 }
 
 export function vlanFlowPath(opts?: {

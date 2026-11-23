@@ -15,7 +15,7 @@ import {
   Title,
 } from '@mantine/core';
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   api,
   type Device,
@@ -32,7 +32,7 @@ import {
 import { DriverBadge, VlanChip } from '../components/Badges';
 import { PortFaceplate } from '../components/PortFaceplate';
 import { CardHeader, Stat } from '../components/ui';
-import { devicePath, vlanFlowPath } from '../routing';
+import { deviceIdFromPath, devicePath, vlanFlowPath } from '../routing';
 import {
   type ColorPair,
   getClientVlanIssue,
@@ -60,8 +60,7 @@ export function DeviceDetailScreen({
   vlanColors,
   refreshNonce,
 }: Props) {
-  const { id } = useParams<{ id: string }>();
-  const deviceId = id ?? '';
+  const deviceId = deviceIdFromPath(useLocation().pathname);
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 

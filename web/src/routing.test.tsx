@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, apiUrl } from './api';
-import { apiBasePath, devicePath, getRouterBasename, pinAppRoot } from './routing';
+import { apiBasePath, devicePath, getRouterBasename, pinAppRoot, resetPinnedRoot } from './routing';
 import { Shell } from './Shell';
 
 const testTheme = createTheme({ primaryColor: 'teal', defaultRadius: 'sm' });
@@ -19,10 +19,66 @@ function setBaseHref(href: string | null) {
 }
 
 afterEach(() => {
+  resetPinnedRoot();
   vi.restoreAllMocks();
   setBaseHref(null);
   window.history.replaceState({}, '', '/');
 });
+
+function mockDevice() {
+  return vi.spyOn(api, 'getDevice').mockImplementation(async (id) => ({
+    device: {
+      id,
+      driver: 'openwrt',
+      target_id: 't1',
+      name: 'Rack Switch',
+      role: 'switch',
+      macs: [],
+      firmware: {},
+      uptime_sec: 10,
+      online: true,
+      last_seen: '2026-01-01T00:00:00Z',
+      capabilities: [],
+      system_stats: {},
+      sensors: [],
+    },
+    links: [],
+    lag_groups: [],
+    segments: [],
+    zones: [],
+    gateways: [],
+    routes: [],
+    vpns: [],
+    radios: [],
+    wireless_uplinks: [],
+    clients: [],
+    recent_diagnostics: [],
+  }));
+}
+
+function renderDeviceDetail(rawId: string) {
+  window.history.replaceState({}, '', devicePath(rawId));
+  render(
+    <MantineProvider theme={testTheme}>
+      <BrowserRouter>
+        <Shell
+          state={null}
+          topology={null}
+          flow={null}
+          targets={[]}
+          diagRuns={[]}
+          events={[]}
+          sseConnected={true}
+          errMsg={null}
+          pollBusy={false}
+          refreshNonce={0}
+          onPollAll={() => {}}
+          onDiagnosticCompleted={() => {}}
+        />
+      </BrowserRouter>
+    </MantineProvider>,
+  );
+}
 
 describe('Ingress base href routing', () => {
   it('resolves basename and API paths from Home Assistant Ingress <base href>', () => {
@@ -111,64 +167,23 @@ describe('Ingress base href routing', () => {
 
   it('does not double-decode device IDs containing % in DeviceDetailScreen', async () => {
     const rawId = 'sw%100-rack';
-    window.history.replaceState({}, '', devicePath(rawId));
-    const spy = vi.spyOn(api, 'getDevice').mockResolvedValue({
-      device: {
-        id: rawId,
-        driver: 'openwrt',
-        target_id: 't1',
-        name: 'Rack Switch',
-        role: 'switch',
-        macs: [],
-        firmware: {},
-        uptime_sec: 10,
-        online: true,
-        last_seen: '2026-01-01T00:00:00Z',
-        capabilities: [],
-        system_stats: {},
-        sensors: [],
-      },
-      links: [],
-      lag_groups: [],
-      segments: [],
-      zones: [],
-      gateways: [],
-      routes: [],
-      vpns: [],
-      radios: [],
-      wireless_uplinks: [],
-      clients: [],
-      recent_diagnostics: [],
-    });
-
-    render(
-      <MantineProvider theme={testTheme}>
-        <BrowserRouter>
-          <Shell
-            state={null}
-            topology={null}
-            flow={null}
-            targets={[]}
-            diagRuns={[]}
-            events={[]}
-            sseConnected={true}
-            errMsg={null}
-            pollBusy={false}
-            refreshNonce={0}
-            onPollAll={() => {}}
-            onDiagnosticCompleted={() => {}}
-          />
-        </BrowserRouter>
-      </MantineProvider>,
-    );
-
+    const spy = mockDevice();
+    renderDeviceDetail(rawId);
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Rack Switch' })).toBeInTheDocument();
     });
     expect(spy).toHaveBeenCalledWith(rawId);
   });
 
-  // Runs last: the pinned root is module state for the rest of the file.
+  it.each(['rack%2F1', 'rack/1'])('keeps device ID %s distinct from its encoded twin', async (rawId) => {
+    const spy = mockDevice();
+    renderDeviceDetail(rawId);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Rack Switch' })).toBeInTheDocument();
+    });
+    expect(spy).toHaveBeenCalledWith(rawId);
+  });
+
   it('keeps API paths on the root pinned at startup after the route changes', () => {
     setBaseHref('./');
     window.history.replaceState({}, '', '/netplane/');
